@@ -1,0 +1,40 @@
+# systemd unit for the content feed. See README.md ("Run as a service") for installation.
+#
+# Assumes the repository is at /opt/contentfeed, owned by the "contentfeed" user. The server
+# stores links.txt, feeds.txt and its caches next to server.py, so that directory must be
+# writable by the service user.
+
+[Unit]
+Description=Content feed (links and subscriptions served on the LAN)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=contentfeed
+Group=contentfeed
+WorkingDirectory=/opt/contentfeed
+ExecStart=/usr/bin/python3 /opt/contentfeed/server.py --host 0.0.0.0 --port 8090
+# Show print() output in the journal immediately instead of buffering it
+Environment=PYTHONUNBUFFERED=1
+Restart=on-failure
+RestartSec=5
+
+# Sandboxing: the service can only write to its own directory.
+# In some unprivileged containers (e.g. LXC without nesting) these fail with
+# "status=226/NAMESPACE"; if so, comment out this block.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/opt/contentfeed
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictSUIDSGID=yes
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target
