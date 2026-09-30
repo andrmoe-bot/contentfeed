@@ -1,0 +1,4 @@
+cache.json
+cache.tmp
+__pycache__/
+feed.log

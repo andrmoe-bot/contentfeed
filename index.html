@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Content Feed</title>
+<style>
+  :root {
+    --bg: #f5f5f4; --card: #ffffff; --text: #1c1917; --muted: #78716c;
+    --border: #e7e5e4; --accent: #2563eb; --accent-text: #fff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0c0a09; --card: #1c1917; --text: #f5f5f4; --muted: #a8a29e;
+      --border: #292524; --accent: #3b82f6;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  header {
+    position: sticky; top: 0; z-index: 10; background: var(--bg);
+    border-bottom: 1px solid var(--border);
+  }
+  .bar { max-width: 720px; margin: 0 auto; padding: 12px 16px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  h1 { font-size: 18px; margin: 0 auto 0 0; }
+  input {
+    flex: 1 1 240px; min-width: 0; padding: 8px 10px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--card); color: var(--text); font: inherit;
+  }
+  button {
+    padding: 8px 12px; border-radius: 8px; border: 1px solid var(--border);
+    background: var(--card); color: var(--text); font: inherit; cursor: pointer;
+  }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+  #status { color: var(--muted); font-size: 13px; }
+  main { max-width: 720px; margin: 0 auto; padding: 16px; display: grid; gap: 16px; }
+  article {
+    background: var(--card); border: 1px solid var(--border); border-radius: 12px; overflow: hidden;
+  }
+  article a.link { color: inherit; text-decoration: none; display: block; }
+  .media { aspect-ratio: 16 / 9; background: var(--border); width: 100%; display: block; object-fit: cover; }
+  iframe.media { border: 0; }
+  .body { padding: 12px 16px 14px; }
+  .source { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; }
+  .source img { width: 16px; height: 16px; border-radius: 3px; }
+  h2 { font-size: 17px; margin: 4px 0; line-height: 1.3; overflow-wrap: anywhere; }
+  p { margin: 0; color: var(--muted); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+  .loading h2 { color: var(--muted); }
+  .empty { text-align: center; color: var(--muted); padding: 48px 0; }
+  code { background: var(--card); padding: 1px 5px; border-radius: 4px; border: 1px solid var(--border); }
+</style>
+</head>
+<body>
+<header>
+  <div class="bar">
+    <h1>Content Feed</h1>
+    <span id="status"></span>
+  </div>
+  <form class="bar" id="add">
+    <input id="url" type="url" placeholder="Paste a link to add it to the feed" required>
+    <button class="primary" type="submit">Add</button>
+    <button type="button" id="refresh" title="Re-fetch metadata for every link">Refresh all</button>
+  </form>
+</header>
+<main id="feed"></main>
+
+<script>
+const feedEl = document.getElementById("feed");
+const statusEl = document.getElementById("status");
+let lastJson = "";
+let pollTimer;
+
+function el(tag, attrs = {}, ...children) {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === "class") node.className = v;
+    else node.setAttribute(k, v);
+  }
+  for (const c of children) if (c != null) node.append(c);
+  return node;
+}
+
+function card(item) {
+  const title = item.loading ? "Loading…" : item.title;
+  const domain = item.domain || new URL(item.url).hostname;
+  let media = null;
+  if (item.youtube) {
+    media = el("iframe", {
+      class: "media", loading: "lazy", allowfullscreen: "",
+      allow: "accelerometer; encrypted-media; gyroscope; picture-in-picture",
+      src: `https://www.youtube-nocookie.com/embed/${encodeURIComponent(item.youtube)}`,
+    });
+  } else if (item.image) {
+    media = el("img", { class: "media", loading: "lazy", alt: "", src: item.image });
+    media.onerror = () => media.remove();
+  }
+  const icon = item.icon ? el("img", { src: item.icon, alt: "" }) : null;
+  if (icon) icon.onerror = () => icon.remove();
+
+  const body = el("div", { class: "body" },
+    el("div", { class: "source" }, icon, item.site || domain),
+    el("h2", {}, title),
+    item.description ? el("p", {}, item.description) : null,
+  );
+  const link = el("a", { class: "link", href: item.url, target: "_blank", rel: "noopener noreferrer" }, body);
+  const art = el("article", item.loading ? { class: "loading" } : {});
+  if (media && !item.youtube) link.prepend(media);
+  else if (media) art.append(media);
+  art.append(link);
+  return art;
+}
+
+async function load() {
+  clearTimeout(pollTimer);
+  try {
+    const res = await fetch("/api/feed");
+    const data = await res.json();
+    const json = JSON.stringify(data.items);
+    if (json !== lastJson) {  // avoid re-rendering (and reloading embeds) when nothing changed
+      lastJson = json;
+      feedEl.replaceChildren(...data.items.map(card));
+      if (!data.items.length) {
+        feedEl.innerHTML = '<div class="empty">No links yet. Add one above, or put URLs in <code>links.txt</code>.</div>';
+      }
+    }
+    statusEl.textContent = `${data.items.length} links` + (data.pending ? ` · fetching ${data.pending}…` : "");
+    pollTimer = setTimeout(load, data.pending ? 1500 : 30000);
+  } catch {
+    statusEl.textContent = "Server unreachable";
+    pollTimer = setTimeout(load, 5000);
+  }
+}
+
+document.getElementById("add").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const input = document.getElementById("url");
+  const res = await fetch("/api/links", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url: input.value }),
+  });
+  if (res.ok) input.value = "";
+  else statusEl.textContent = "Couldn't add that link (invalid or already in the feed)";
+  load();
+});
+
+document.getElementById("refresh").addEventListener("click", async () => {
+  await fetch("/api/refresh", { method: "POST", body: "{}" });
+  load();
+});
+
+load();
+</script>
+</body>
+</html>
