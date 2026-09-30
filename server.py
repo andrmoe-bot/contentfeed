@@ -1,35 +1,49 @@
 #!/usr/bin/env python3
-"""Content feed: turns a plain list of links into a browsable feed, served on the LAN.
+"""Content feed: turns a plain list of links and subscriptions into a browsable feed, served on the LAN.
 
-Links live in links.txt (one URL per line, lines starting with "#" are comments). For each link the
-server fetches the page once and extracts title, description, image and site name
-from OpenGraph / HTML metadata. Results are cached in cache.json.
+links.txt holds single links and feeds.txt holds subscriptions (RSS/Atom feeds, or pages that have
+one, such as YouTube channels). Both have one URL per line, optionally followed by tags; lines
+starting with "#" are comments.
+
+For each link the server fetches the page once and extracts title, description, image and site
+name from OpenGraph / HTML metadata (cached in cache.json). Subscriptions are re-checked on a timer
+and their posts are cached in feeds.json.
 """
 
 import argparse
-import html
 import json
-import re
 import threading
 import time
-import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from html.parser import HTMLParser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urljoin, urlparse
 
+import feeds
+import ranking
+
 ROOT = Path(__file__).resolve().parent
 LINKS_FILE = ROOT / "links.txt"
+FEEDS_FILE = ROOT / "feeds.txt"
 CACHE_FILE = ROOT / "cache.json"
-INDEX_FILE = ROOT / "index.html"
-USER_AGENT = "Mozilla/5.0 (compatible; ContentFeed/1.0)"
-FETCH_TIMEOUT = 10
+ADDED_FILE = ROOT / "added.json"
+FEED_CACHE_FILE = ROOT / "feeds.json"
+PAGES = {  # request path -> (file, content type)
+    "/": ("index.html", "text/html; charset=utf-8"),
+    "/subscriptions": ("subscriptions.html", "text/html; charset=utf-8"),
+    "/style.css": ("style.css", "text/css; charset=utf-8"),
+    "/common.js": ("common.js", "text/javascript; charset=utf-8"),
+}
 MAX_BYTES = 1_000_000
+MAX_ITEMS_SHOWN = 300
 
 lock = threading.Lock()
 cache: dict[str, dict] = {}
+added: dict[str, float] = {}  # url -> unix time the server first saw the link
+subscriptions: dict[str, dict] = {}  # feeds.txt url -> resolved feed, its posts and fetch status
 pending: set[str] = set()
+feed_interval = 30 * 60  # seconds between checks of each subscription; set by --feed-interval
 executor = ThreadPoolExecutor(max_workers=8)
 
 
@@ -61,40 +75,41 @@ class MetaParser(HTMLParser):
             self.title += data
 
 
+def read_entries(path: Path = LINKS_FILE) -> dict[str, list[str]]:
+    """url -> tags, in file order. A line is a URL followed by optional whitespace-separated tags."""
+    if not path.exists():
+        return {}
+    entries: dict[str, list[str]] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        url, *tags = line.split() or [""]
+        if url.startswith("#") or urlparse(url).scheme not in ("http", "https") or url in entries:
+            continue
+        entries[url] = clean_tags(tags)
+    return entries
+
+
+def clean_tags(words: list[str]) -> list[str]:
+    """Tags are lowercase words without a leading '#'; commas also separate them."""
+    tags = []
+    for word in " ".join(words).replace(",", " ").split():
+        tag = word.lstrip("#").lower()
+        if tag and tag not in tags:
+            tags.append(tag)
+    return tags
+
+
 def read_links() -> list[str]:
-    if not LINKS_FILE.exists():
-        return []
-    links = []
-    for line in LINKS_FILE.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if line and not line.startswith("#") and urlparse(line).scheme in ("http", "https") and line not in links:
-            links.append(line)
-    return links
-
-
-def youtube_id(url: str) -> str | None:
-    p = urlparse(url)
-    host = p.netloc.lower().removeprefix("www.").removeprefix("m.")
-    if host == "youtu.be":
-        return p.path.lstrip("/").split("/")[0] or None
-    if host == "youtube.com":
-        if p.path == "/watch":
-            return parse_qs(p.query).get("v", [None])[0]
-        m = re.match(r"^/(shorts|embed|live)/([\w-]+)", p.path)
-        if m:
-            return m.group(2)
-    return None
+    return list(read_entries())
 
 
 def fetch_metadata(url: str) -> dict:
     item = {"url": url, "domain": urlparse(url).netloc.removeprefix("www."), "fetched": time.time()}
-    yt = youtube_id(url)
+    yt = feeds.youtube_id(url)
     if yt:
         item["youtube"] = yt
         item["image"] = f"https://i.ytimg.com/vi/{yt}/hqdefault.jpg"
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "text/html,*/*"})
-        with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT) as resp:
+        with feeds.open_url(url, "text/html,*/*") as resp:
             ctype = resp.headers.get_content_type()
             final_url = resp.geturl()
             if ctype.startswith("image/"):
@@ -120,12 +135,19 @@ def fetch_metadata(url: str) -> dict:
     return item
 
 
-def save_cache():
+def save_json(path: Path, obj: dict):
     with lock:
-        data = json.dumps(cache, indent=1)
-    tmp = CACHE_FILE.with_suffix(".tmp")
+        data = json.dumps(obj, indent=1)
+    tmp = path.with_suffix(".tmp")
     tmp.write_text(data, encoding="utf-8")
-    tmp.replace(CACHE_FILE)
+    tmp.replace(path)
+
+
+def load_json(path: Path) -> dict:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
 
 
 def refresh(url: str):
@@ -133,7 +155,7 @@ def refresh(url: str):
         item = fetch_metadata(url)
         with lock:
             cache[url] = item
-        save_cache()
+        save_json(CACHE_FILE, cache)
     finally:
         with lock:
             pending.discard(url)
@@ -147,25 +169,183 @@ def schedule(url: str, force: bool = False):
     executor.submit(refresh, url)
 
 
-def feed() -> dict:
-    links = read_links()
-    for url in links:
-        schedule(url)
+def refresh_subscription(url: str, force: bool = False):
+    """Check one subscription and merge its posts, keeping when each post was first seen."""
+    try:
+        with lock:
+            old = dict(subscriptions.get(url, {}))
+        try:
+            feed_url = old.get("feed_url") or feeds.discover(url)
+            fresh = feeds.fetch(feed_url, *(() if force else (old.get("etag"), old.get("modified"))))
+        except Exception as e:  # keep the old posts; show the error in the subscriptions list
+            with lock:
+                subscriptions[url] = {**old, "error": str(e)[:300], "fetched": time.time()}
+            save_json(FEED_CACHE_FILE, subscriptions)
+            return
+        now = time.time()
+        if fresh is None:  # not modified since last check
+            entry = {**old, "fetched": now}
+        else:
+            first_seen = {it["url"]: it.get("first_seen", now) for it in old.get("items", [])}
+            for it in fresh["items"]:
+                it["first_seen"] = first_seen.get(it["url"], now)
+            entry = fresh
+        entry.pop("error", None)
+        with lock:
+            subscriptions[url] = entry
+        save_json(FEED_CACHE_FILE, subscriptions)
+    finally:
+        with lock:
+            pending.discard("feed:" + url)
+
+
+def schedule_subscription(url: str, force: bool = False):
+    key = "feed:" + url
     with lock:
-        items = [cache.get(url, {"url": url, "loading": True}) for url in links]
-        # newest-first: last line of links.txt is the newest entry
-        return {"items": list(reversed(items)), "pending": len(pending)}
+        last = subscriptions.get(url, {}).get("fetched", 0)
+        if key in pending or (not force and time.time() - last < feed_interval):
+            return
+        pending.add(key)
+    executor.submit(refresh_subscription, url, force)
 
 
-def add_link(url: str) -> bool:
-    url = url.strip()
-    if urlparse(url).scheme not in ("http", "https") or url in read_links():
+def subscribe(line: str) -> str | None:
+    """Add a feeds.txt line (a URL optionally followed by tags). Returns an error message, or None."""
+    url, *tags = line.split() or [""]
+    if urlparse(url).scheme not in ("http", "https"):
+        return "That isn't a web address."
+    if url in read_entries(FEEDS_FILE):
+        return "Already subscribed."
+    with lock:
+        pending.add("feed:" + url)
+    refresh_subscription(url, force=True)
+    with lock:
+        error = subscriptions.get(url, {}).get("error")
+        if error:
+            subscriptions.pop(url, None)
+    if error:
+        save_json(FEED_CACHE_FILE, subscriptions)
+        return error
+    append_line(FEEDS_FILE, url, clean_tags(tags))
+    return None
+
+
+def subscription_status() -> list[dict]:
+    status = []
+    with lock:
+        for url, tags in read_entries(FEEDS_FILE).items():
+            s = subscriptions.get(url, {})
+            dates = [it["published"] or it["first_seen"] for it in s.get("items", [])]
+            status.append({
+                "url": url,
+                "tags": tags,
+                "title": s.get("title") or url,
+                "site": s.get("site"),
+                "icon": s.get("icon"),
+                "feed_url": s.get("feed_url"),
+                "posts": len(s.get("items", [])),
+                "latest": max(dates, default=None),
+                "fetched": s.get("fetched"),
+                "error": s.get("error"),
+                "checking": "feed:" + url in pending,
+            })
+    return status
+
+
+def replace_line(path: Path, url: str, new_line: str | None) -> bool:
+    """Replace (or with None, delete) the line for url, leaving comments and other lines as they are."""
+    with lock:
+        lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+        for i, line in enumerate(lines):
+            if (line.split() or [""])[0] == url:
+                if new_line is None:
+                    del lines[i]
+                else:
+                    lines[i] = new_line
+                path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+                return True
+    return False
+
+
+def set_subscription_tags(url: str, tags: list[str]) -> bool:
+    return replace_line(FEEDS_FILE, url, " ".join([url, *clean_tags(tags)]))
+
+
+def unsubscribe(url: str) -> bool:
+    if not replace_line(FEEDS_FILE, url, None):
         return False
     with lock:
-        text = LINKS_FILE.read_text(encoding="utf-8") if LINKS_FILE.exists() else ""
+        subscriptions.pop(url, None)
+    save_json(FEED_CACHE_FILE, subscriptions)
+    return True
+
+
+def check_subscription(url: str) -> bool:
+    """Check one subscription now and wait for the result."""
+    if url not in read_entries(FEEDS_FILE):
+        return False
+    with lock:
+        pending.add("feed:" + url)
+    refresh_subscription(url, force=True)
+    return True
+
+
+def poll_subscriptions():
+    while True:
+        for url in read_entries(FEEDS_FILE):
+            schedule_subscription(url)
+        time.sleep(60)
+
+
+def feed(ranker: str) -> dict:
+    entries = read_entries()
+    subs = read_entries(FEEDS_FILE)
+    for url in entries:
+        schedule(url)
+    for url in subs:
+        schedule_subscription(url)
+    now = time.time()
+    with lock:
+        new = [url for url in entries if url not in added]
+        added.update({url: now for url in new})
+        items = [
+            {**cache.get(url, {"url": url, "loading": True}), "kind": "link", "tags": tags,
+             "added": added[url], "date": added[url], "position": i}
+            for i, (url, tags) in enumerate(entries.items())
+        ]
+        seen = set(entries)
+        for sub_url, tags in subs.items():
+            s = subscriptions.get(sub_url, {})
+            for post in s.get("items", []):
+                if post["url"] in seen:
+                    continue
+                seen.add(post["url"])
+                items.append({
+                    **post, "kind": "subscription", "tags": tags, "feed": s["title"], "icon": s.get("icon"),
+                    "domain": urlparse(post["url"]).netloc.removeprefix("www."),
+                    "added": post["first_seen"], "date": post["published"] or post["first_seen"], "position": -1,
+                })
+        n_pending = len(pending)
+    if new:
+        save_json(ADDED_FILE, added)
+    ranked = ranking.rank(ranker, items, now)
+    return {"items": ranked[:MAX_ITEMS_SHOWN], "total": len(ranked), "pending": n_pending, "ranker": ranker}
+
+
+def append_line(path: Path, url: str, tags: list[str]):
+    with lock:
+        text = path.read_text(encoding="utf-8") if path.exists() else ""
         if text and not text.endswith("\n"):
             text += "\n"
-        LINKS_FILE.write_text(text + url + "\n", encoding="utf-8")
+        path.write_text(text + " ".join([url, *tags]) + "\n", encoding="utf-8")
+
+
+def add_link(line: str) -> bool:
+    """Append a links.txt line: a URL optionally followed by tags."""
+    url, *tags = line.split() or [""]
+    if urlparse(url).scheme not in ("http", "https") or url in read_links():
+        return False
+    append_line(LINKS_FILE, url, clean_tags(tags))
     schedule(url)
     return True
 
@@ -183,11 +363,18 @@ class Handler(BaseHTTPRequestHandler):
         self._send(code, json.dumps(obj).encode(), "application/json")
 
     def do_GET(self):
-        path = urlparse(self.path).path
-        if path in ("/", "/index.html"):
-            self._send(200, INDEX_FILE.read_bytes(), "text/html; charset=utf-8")
+        parsed = urlparse(self.path)
+        path = parsed.path
+        if path in PAGES:
+            name, ctype = PAGES[path]
+            self._send(200, (ROOT / name).read_bytes(), ctype)
         elif path == "/api/feed":
-            self._json(feed())
+            name = parse_qs(parsed.query).get("ranker", [self.server.ranker])[0]
+            if name not in ranking.RANKERS:
+                return self._json({"error": f"unknown ranker; available: {sorted(ranking.RANKERS)}"}, 400)
+            self._json(feed(name))
+        elif path == "/api/subscriptions":
+            self._json({"subscriptions": subscription_status(), "interval_minutes": feed_interval / 60})
         else:
             self._send(404, b"Not found", "text/plain")
 
@@ -201,10 +388,24 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/links":
             ok = add_link(str(body.get("url", "")))
             self._json({"ok": ok}, 200 if ok else 400)
+        elif path == "/api/subscriptions":
+            error = subscribe(str(body.get("url", "")))
+            self._json({"ok": not error, "error": error}, 400 if error else 200)
+        elif path in ("/api/subscriptions/tags", "/api/subscriptions/remove", "/api/subscriptions/check"):
+            url = str(body.get("url", ""))
+            if path.endswith("/tags"):
+                tags = body.get("tags", [])
+                ok = set_subscription_tags(url, [str(t) for t in tags] if isinstance(tags, list) else [str(tags)])
+            elif path.endswith("/remove"):
+                ok = unsubscribe(url)
+            else:
+                ok = check_subscription(url)
+            self._json({"ok": ok, "subscriptions": subscription_status()}, 200 if ok else 404)
         elif path == "/api/refresh":
-            url = body.get("url")
-            for u in [url] if url else read_links():
+            for u in read_links():
                 schedule(u, force=True)
+            for u in read_entries(FEEDS_FILE):
+                schedule_subscription(u, force=True)
             self._json({"ok": True})
         else:
             self._json({"error": "not found"}, 404)
@@ -231,17 +432,21 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--host", default="0.0.0.0", help="bind address (default: all interfaces)")
     ap.add_argument("--port", type=int, default=8090)
+    ap.add_argument("--ranker", default=ranking.DEFAULT, choices=sorted(ranking.RANKERS))
+    ap.add_argument("--feed-interval", type=float, default=30, help="minutes between subscription checks")
     args = ap.parse_args()
 
-    if CACHE_FILE.exists():
-        try:
-            cache.update(json.loads(CACHE_FILE.read_text(encoding="utf-8")))
-        except json.JSONDecodeError:
-            pass
-    feed()  # warm the cache in the background
+    global feed_interval
+    feed_interval = max(args.feed_interval, 1) * 60
+    cache.update(load_json(CACHE_FILE))
+    added.update(load_json(ADDED_FILE))
+    subscriptions.update(load_json(FEED_CACHE_FILE))
+    feed(args.ranker)  # warm the caches in the background
+    threading.Thread(target=poll_subscriptions, daemon=True).start()
 
     server = ThreadingHTTPServer((args.host, args.port), Handler)
-    print(f"Content feed serving {LINKS_FILE.name} on:")
+    server.ranker = args.ranker
+    print(f"Content feed serving {LINKS_FILE.name} and {FEEDS_FILE.name} on:")
     print(f"  http://localhost:{args.port}")
     for ip in lan_addresses():
         print(f"  http://{ip}:{args.port}")
