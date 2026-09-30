@@ -10,6 +10,31 @@ inline YouTube embeds), served to your local network. Python 3 standard library 
 
 Open the printed `http://<lan-ip>:8090` address from any device on the network.
 
+## Run as a service
+
+`deploy/contentfeed.service` runs the feed with systemd, for example in its own LXC container or VM.
+It expects the repository at `/opt/contentfeed`, owned by a `contentfeed` user. As root in the
+container (Debian/Ubuntu shown):
+
+    apt install python3 git
+    useradd --system --home-dir /opt/contentfeed --shell /usr/sbin/nologin contentfeed
+    git clone https://github.com/andrmoe/contentfeed.git /opt/contentfeed
+    chown -R contentfeed:contentfeed /opt/contentfeed
+    cp /opt/contentfeed/deploy/contentfeed.service /etc/systemd/system/
+    systemctl daemon-reload
+    systemctl enable --now contentfeed
+
+To bring your existing lists and history along, stop the service, copy `links.txt`, `feeds.txt`,
+`added.json`, `cache.json` and `feeds.json` into `/opt/contentfeed` (owned by `contentfeed`),
+then start it again.
+
+The container needs an address on your LAN (e.g. a bridged network) for other devices to reach
+port 8090. Logs: `journalctl -u contentfeed -f`. To update:
+`sudo -u contentfeed git -C /opt/contentfeed pull && systemctl restart contentfeed`.
+
+If the service fails to start with `status=226/NAMESPACE`, the container doesn't allow systemd's
+sandboxing; comment out the sandboxing block in the unit file.
+
 ## Links and subscriptions
 
 `links.txt` holds single links and `feeds.txt` holds subscriptions. In both, each line is a URL
