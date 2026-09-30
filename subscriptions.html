@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Subscriptions</title>
+<link rel="stylesheet" href="/style.css">
+<style>
+  .tools { max-width: 720px; margin: 0 auto; padding: 0 16px 12px; display: flex; gap: 8px; flex-wrap: wrap; }
+  .tools input { flex: 1 1 200px; }
+  select {
+    padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border);
+    background: var(--card); color: var(--text); font: inherit;
+  }
+  main { gap: 12px; }
+  .sub {
+    background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+    padding: 12px 16px; display: grid; gap: 8px; min-width: 0;
+  }
+  .sub.failed { border-color: var(--error); }
+  .title { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .title img { width: 20px; height: 20px; border-radius: 4px; flex: none; }
+  .title a { color: inherit; font-weight: 600; font-size: 16px; text-decoration: none; overflow-wrap: anywhere; }
+  .title a:hover { text-decoration: underline; }
+  .addr, .stats { font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+  .addr a { color: inherit; }
+  .error { font-size: 13px; color: var(--error); overflow-wrap: anywhere; }
+  .tag-edit { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .tag-edit label { font-size: 13px; color: var(--muted); }
+  .tag-edit input { flex: 1 1 180px; padding: 6px 8px; }
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  .actions button, .tag-edit button { padding: 6px 10px; font-size: 14px; }
+  button:disabled { opacity: .5; cursor: default; }
+  button.danger { color: var(--error); }
+  .empty { text-align: center; color: var(--muted); padding: 48px 0; }
+</style>
+</head>
+<body>
+<header>
+  <div class="bar">
+    <h1>Subscriptions</h1>
+    <nav><a href="/">← Back to feed</a></nav>
+  </div>
+  <form class="bar" id="add">
+    <input id="url" type="text" autocomplete="off" placeholder="Feed, YouTube channel, subreddit, blog… optionally followed by tags" required>
+    <button class="primary" type="submit">Subscribe</button>
+    <p id="message" role="status"></p>
+  </form>
+  <div class="tools">
+    <input id="filter" type="search" placeholder="Filter by name, address or tag" aria-label="Filter subscriptions">
+    <select id="sort" aria-label="Sort subscriptions">
+      <option value="file">Order in feeds.txt</option>
+      <option value="name">Name</option>
+      <option value="latest">Latest post</option>
+      <option value="problems">Problems first</option>
+    </select>
+  </div>
+</header>
+<main id="list"></main>
+
+<script src="/common.js"></script>
+<script>
+const listEl = document.getElementById("list");
+const filterEl = document.getElementById("filter");
+const sortEl = document.getElementById("sort");
+let subs = [];
+let pollTimer;
+
+async function api(path, body) {
+  const res = await fetch(path, body ? {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+  } : undefined);
+  const data = await res.json().catch(() => ({}));
+  return { ok: res.ok, data };
+}
+
+function show(list) {
+  subs = list;
+  render();
+  // While a check is running, look again shortly so its result appears.
+  clearTimeout(pollTimer);
+  if (subs.some((s) => s.checking)) pollTimer = setTimeout(load, 2000);
+}
+
+async function load() {
+  const { data } = await api("/api/subscriptions");
+  show(data.subscriptions || []);
+}
+
+function sorted(list) {
+  const by = {
+    file: () => 0,
+    name: (a, b) => a.title.localeCompare(b.title),
+    latest: (a, b) => (b.latest || 0) - (a.latest || 0),
+    problems: (a, b) => !!b.error - !!a.error,
+  }[sortEl.value];
+  return [...list].sort(by);
+}
+
+function render() {
+  const q = filterEl.value.trim().toLowerCase();
+  const shown = sorted(subs).filter((s) => !q || [s.title, s.url, s.feed_url || "", ...s.tags].some((v) => v.toLowerCase().includes(q)));
+  const failing = subs.filter((s) => s.error).length;
+  document.title = `Subscriptions (${subs.length})`;
+  document.querySelector("h1").textContent = `Subscriptions (${subs.length})` + (failing ? ` · ${failing} failing` : "");
+  if (!subs.length) {
+    listEl.replaceChildren(el("div", { class: "empty" }, "No subscriptions yet. Paste a feed or channel above."));
+  } else if (!shown.length) {
+    listEl.replaceChildren(el("div", { class: "empty" }, "No subscriptions match that filter."));
+  } else {
+    listEl.replaceChildren(...shown.map(row));
+  }
+}
+
+function row(s) {
+  const icon = s.icon ? el("img", { src: s.icon, alt: "" }) : null;
+  if (icon) icon.onerror = () => icon.remove();
+
+  const stats = s.checking ? "Checking…" : s.fetched
+    ? [`${s.posts} post${s.posts === 1 ? "" : "s"}`, s.latest ? `latest ${ago(s.latest)}` : null, `checked ${ago(s.fetched)}`].filter(Boolean).join(" · ")
+    : "Not checked yet";
+
+  const addr = el("div", { class: "addr" }, el("a", { href: s.url, target: "_blank", rel: "noopener noreferrer" }, s.url));
+  if (s.feed_url && s.feed_url !== s.url) {
+    addr.append(el("br"), "Feed: ", el("a", { href: s.feed_url, target: "_blank", rel: "noopener noreferrer" }, s.feed_url));
+  }
+
+  // Tags: saved when you press Save or Enter.
+  const tagInput = el("input", { type: "text", value: s.tags.join(" "), placeholder: "no tags", "aria-label": `Tags for ${s.title}` });
+  const saveBtn = el("button", { type: "submit", disabled: "" }, "Save");
+  tagInput.addEventListener("input", () => { saveBtn.disabled = tagInput.value.trim() === s.tags.join(" "); });
+  const tagForm = el("form", { class: "tag-edit" }, el("label", {}, "Tags"), tagInput, saveBtn);
+  tagForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const { ok, data } = await api("/api/subscriptions/tags", { url: s.url, tags: tagInput.value.split(/[\s,]+/) });
+    say(ok ? `Saved tags for ${s.title}.` : "Couldn't save tags; is it still in feeds.txt?", !ok);
+    if (data.subscriptions) show(data.subscriptions);
+  });
+
+  const checkBtn = el("button", { type: "button" }, s.checking ? "Checking…" : "Check now");
+  if (s.checking) checkBtn.disabled = true;
+  checkBtn.addEventListener("click", async () => {
+    checkBtn.disabled = true;
+    checkBtn.textContent = "Checking…";
+    const { ok, data } = await api("/api/subscriptions/check", { url: s.url });
+    if (!ok) say("That subscription is no longer in feeds.txt.", true);
+    if (data.subscriptions) show(data.subscriptions);
+  });
+
+  const removeBtn = el("button", { type: "button", class: "danger" }, "Unsubscribe");
+  removeBtn.addEventListener("click", async () => {
+    if (!confirm(`Unsubscribe from ${s.title}? Its posts will disappear from the feed.`)) return;
+    const { ok, data } = await api("/api/subscriptions/remove", { url: s.url });
+    say(ok ? `Unsubscribed from ${s.title}.` : "Couldn't unsubscribe; it may already be gone.", !ok);
+    if (data.subscriptions) show(data.subscriptions);
+  });
+
+  return el("section", { class: s.error ? "sub failed" : "sub" },
+    el("div", { class: "title" }, icon, el("a", { href: s.site || s.url, target: "_blank", rel: "noopener noreferrer" }, s.title)),
+    addr,
+    el("div", { class: "stats" }, stats),
+    s.error ? el("div", { class: "error" }, `Last check failed: ${s.error}`) : null,
+    tagForm,
+    el("div", { class: "actions" }, checkBtn, removeBtn),
+  );
+}
+
+document.getElementById("add").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const input = document.getElementById("url");
+  const button = e.submitter;
+  button.disabled = true;
+  say("Looking for a feed…");
+  const { ok, data } = await api("/api/subscriptions", { url: input.value });
+  button.disabled = false;
+  if (ok) {
+    input.value = "";
+    say("Subscribed.");
+  } else {
+    say(`Couldn't subscribe: ${data.error || "unknown error"}`, true);
+  }
+  load();
+});
+
+filterEl.addEventListener("input", render);
+sortEl.addEventListener("change", render);
+load();
+</script>
+</body>
+</html>

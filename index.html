@@ -4,39 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Content Feed</title>
+<link rel="stylesheet" href="/style.css">
 <style>
-  :root {
-    --bg: #f5f5f4; --card: #ffffff; --text: #1c1917; --muted: #78716c;
-    --border: #e7e5e4; --accent: #2563eb; --accent-text: #fff;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --bg: #0c0a09; --card: #1c1917; --text: #f5f5f4; --muted: #a8a29e;
-      --border: #292524; --accent: #3b82f6;
-    }
-  }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0; background: var(--bg); color: var(--text);
-    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  }
-  header {
-    position: sticky; top: 0; z-index: 10; background: var(--bg);
-    border-bottom: 1px solid var(--border);
-  }
-  .bar { max-width: 720px; margin: 0 auto; padding: 12px 16px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-  h1 { font-size: 18px; margin: 0 auto 0 0; }
-  input {
-    flex: 1 1 240px; min-width: 0; padding: 8px 10px; border-radius: 8px;
-    border: 1px solid var(--border); background: var(--card); color: var(--text); font: inherit;
-  }
-  button {
-    padding: 8px 12px; border-radius: 8px; border: 1px solid var(--border);
-    background: var(--card); color: var(--text); font: inherit; cursor: pointer;
-  }
-  button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
-  #status { color: var(--muted); font-size: 13px; }
-  main { max-width: 720px; margin: 0 auto; padding: 16px; display: grid; gap: 16px; }
   article {
     background: var(--card); border: 1px solid var(--border); border-radius: 12px; overflow: hidden;
   }
@@ -50,67 +19,98 @@
   p { margin: 0; color: var(--muted); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
   .loading h2 { color: var(--muted); }
   .empty { text-align: center; color: var(--muted); padding: 48px 0; }
-  code { background: var(--card); padding: 1px 5px; border-radius: 4px; border: 1px solid var(--border); }
+  .tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .tags span { font-size: 12px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); }
+  .why { padding: 0 16px 10px; color: var(--muted); font-size: 13px; }
+  .why summary { cursor: pointer; width: max-content; }
+  .why table { border-collapse: collapse; margin-top: 4px; }
+  .why td { padding: 1px 12px 1px 0; }
+  .why td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+  .play { position: relative; display: block; width: 100%; padding: 0; border: 0; border-radius: 0; background: #000; }
+  .play img { opacity: .9; }
+  .play::after {
+    content: ""; position: absolute; inset: 50% auto auto 50%; width: 64px; height: 44px; transform: translate(-50%, -50%);
+    border-radius: 12px; background: #e00 url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M9 7l8 5-8 5z' fill='white'/%3E%3C/svg%3E") center / 28px no-repeat;
+  }
 </style>
 </head>
 <body>
 <header>
   <div class="bar">
     <h1>Content Feed</h1>
+    <nav><a href="/subscriptions" id="subs-link">Subscriptions</a></nav>
     <span id="status"></span>
   </div>
   <form class="bar" id="add">
-    <input id="url" type="url" placeholder="Paste a link to add it to the feed" required>
-    <button class="primary" type="submit">Add</button>
-    <button type="button" id="refresh" title="Re-fetch metadata for every link">Refresh all</button>
+    <input id="url" type="text" autocomplete="off" placeholder="Paste a link or feed, optionally followed by tags" required>
+    <button class="primary" type="submit" value="link" title="Add this page to links.txt">Add link</button>
+    <button type="submit" value="subscribe" title="Follow a feed, YouTube channel, subreddit, blog… (feeds.txt)">Subscribe</button>
+    <button type="button" id="refresh" title="Re-fetch every link and check every subscription now">Refresh all</button>
+    <p id="message" role="status"></p>
   </form>
 </header>
 <main id="feed"></main>
 
+<script src="/common.js"></script>
 <script>
 const feedEl = document.getElementById("feed");
 const statusEl = document.getElementById("status");
 let lastJson = "";
 let pollTimer;
 
-function el(tag, attrs = {}, ...children) {
-  const node = document.createElement(tag);
-  for (const [k, v] of Object.entries(attrs)) {
-    if (k === "class") node.className = v;
-    else node.setAttribute(k, v);
-  }
-  for (const c of children) if (c != null) node.append(c);
-  return node;
+// YouTube: show the thumbnail and only load the player when clicked, so a feed full of videos stays fast.
+function youtube(item) {
+  const btn = el("button", { class: "play", type: "button", "aria-label": `Play ${item.title}` },
+    el("img", { class: "media", loading: "lazy", alt: "", src: `https://i.ytimg.com/vi/${encodeURIComponent(item.youtube)}/hqdefault.jpg` }));
+  btn.addEventListener("click", () => btn.replaceWith(el("iframe", {
+    class: "media", allowfullscreen: "", allow: "autoplay; encrypted-media; picture-in-picture",
+    src: `https://www.youtube-nocookie.com/embed/${encodeURIComponent(item.youtube)}?autoplay=1`,
+  })));
+  return btn;
 }
 
 function card(item) {
   const title = item.loading ? "Loading…" : item.title;
   const domain = item.domain || new URL(item.url).hostname;
   let media = null;
-  if (item.youtube) {
-    media = el("iframe", {
-      class: "media", loading: "lazy", allowfullscreen: "",
-      allow: "accelerometer; encrypted-media; gyroscope; picture-in-picture",
-      src: `https://www.youtube-nocookie.com/embed/${encodeURIComponent(item.youtube)}`,
-    });
-  } else if (item.image) {
+  if (item.youtube) media = youtube(item);
+  else if (item.image) {
     media = el("img", { class: "media", loading: "lazy", alt: "", src: item.image });
     media.onerror = () => media.remove();
   }
   const icon = item.icon ? el("img", { src: item.icon, alt: "" }) : null;
   if (icon) icon.onerror = () => icon.remove();
+  const source = item.kind === "subscription" ? item.feed : item.site || domain;
+  const when = item.kind === "subscription" ? ago(item.date) : `added ${ago(item.date)}`;
 
   const body = el("div", { class: "body" },
-    el("div", { class: "source" }, icon, item.site || domain),
+    el("div", { class: "source" }, icon, `${source} · ${when}`),
     el("h2", {}, title),
     item.description ? el("p", {}, item.description) : null,
+    item.tags.length ? el("div", { class: "tags" }, ...item.tags.map((t) => el("span", {}, t))) : null,
   );
   const link = el("a", { class: "link", href: item.url, target: "_blank", rel: "noopener noreferrer" }, body);
   const art = el("article", item.loading ? { class: "loading" } : {});
   if (media && !item.youtube) link.prepend(media);
   else if (media) art.append(media);
-  art.append(link);
+  art.append(link, why(item));
   return art;
+}
+
+const fmtPoints = (n) => (n > 0 ? "+" : n < 0 ? "−" : "±") + Math.round(Math.abs(n) * 100) / 100;
+
+// Shows why the card is where it is: the ranker's reasons and the points each one added.
+function why(item) {
+  const rows = item.reasons.map((r) => el("tr", {}, el("td", {}, r.label), el("td", {}, fmtPoints(r.points))));
+  const origin = item.kind === "subscription" ? `from subscription “${item.feed}”` : "from links.txt";
+  const note = el("div", {}, item.reasons.length
+    ? `Equal scores are ordered newest first. This item is ${origin}.`
+    : `No ranking rules apply, so it is ordered by date, newest first. This item is ${origin}.`);
+  return el("details", { class: "why" },
+    el("summary", {}, `Score ${fmtPoints(item.score).replace(/^\+/, "")}`),
+    rows.length ? el("table", {}, ...rows) : null,
+    note,
+  );
 }
 
 async function load() {
@@ -119,14 +119,15 @@ async function load() {
     const res = await fetch("/api/feed");
     const data = await res.json();
     const json = JSON.stringify(data.items);
-    if (json !== lastJson) {  // avoid re-rendering (and reloading embeds) when nothing changed
+    if (json !== lastJson) {  // avoid re-rendering (and stopping videos) when nothing changed
       lastJson = json;
       feedEl.replaceChildren(...data.items.map(card));
       if (!data.items.length) {
-        feedEl.innerHTML = '<div class="empty">No links yet. Add one above, or put URLs in <code>links.txt</code>.</div>';
+        feedEl.innerHTML = '<div class="empty">Nothing here yet. Add a link or subscribe to a feed above.</div>';
       }
     }
-    statusEl.textContent = `${data.items.length} links` + (data.pending ? ` · fetching ${data.pending}…` : "");
+    const shown = data.total > data.items.length ? `newest ${data.items.length} of ${data.total}` : `${data.total}`;
+    statusEl.textContent = `${shown} items · ranked by ${data.ranker}` + (data.pending ? ` · fetching ${data.pending}…` : "");
     pollTimer = setTimeout(load, data.pending ? 1500 : 30000);
   } catch {
     statusEl.textContent = "Server unreachable";
@@ -137,12 +138,20 @@ async function load() {
 document.getElementById("add").addEventListener("submit", async (e) => {
   e.preventDefault();
   const input = document.getElementById("url");
-  const res = await fetch("/api/links", {
+  const subscribing = e.submitter?.value === "subscribe";
+  say(subscribing ? "Looking for a feed…" : "");
+  const res = await fetch(subscribing ? "/api/subscriptions" : "/api/links", {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ url: input.value }),
   });
-  if (res.ok) input.value = "";
-  else statusEl.textContent = "Couldn't add that link (invalid or already in the feed)";
+  const data = await res.json().catch(() => ({}));
+  if (res.ok) {
+    input.value = "";
+    say(subscribing ? "Subscribed." : "");
+  } else {
+    say(subscribing ? `Couldn't subscribe: ${data.error || "unknown error"}` : "Couldn't add that link (invalid or already in the feed).", true);
+  }
+  if (subscribing) loadSubscriptionCount();
   load();
 });
 
@@ -151,6 +160,12 @@ document.getElementById("refresh").addEventListener("click", async () => {
   load();
 });
 
+async function loadSubscriptionCount() {
+  const { subscriptions } = await (await fetch("/api/subscriptions")).json();
+  document.getElementById("subs-link").textContent = `Subscriptions (${subscriptions.length})`;
+}
+
+loadSubscriptionCount();
 load();
 </script>
 </body>

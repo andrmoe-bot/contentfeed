@@ -1,0 +1,7 @@
+# Subscriptions: one per line, optionally followed by tags, like links.txt.
+# A line can be an RSS/Atom feed, or a page that has one: a YouTube channel (@handle, /channel/…)
+# or playlist, a subreddit, a blog, a Mastodon profile, and so on. Lines starting with # are ignored.
+#
+# https://www.youtube.com/@veritasium science video
+# https://www.reddit.com/r/python programming
+# https://xkcd.com comics

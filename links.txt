@@ -1,4 +1,5 @@
-# One link per line. Lines starting with # are ignored.
+# One link per line, optionally followed by tags: https://example.com music longread
+# Lines starting with # are ignored.
 # Newest links go at the bottom; they show up first in the feed.
 https://en.wikipedia.org/wiki/RSS
 https://github.com/python/cpython
