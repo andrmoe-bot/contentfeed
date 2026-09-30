@@ -5,39 +5,54 @@ inline YouTube embeds), served to your local network. Python 3 standard library 
 
 ## Run
 
-    python3 server.py            # binds 0.0.0.0:8090
-    python3 server.py --port 9000
+    python3 server.py --port 8090         # development; keeps data in ./data
+    python3 server.py --port 8090 --data-dir /some/other/dir
 
-Open the printed `http://<lan-ip>:8090` address from any device on the network.
+The default port is 80, so the service is reachable at plain `http://<lan-ip>`. Ports below
+1024 need root or `CAP_NET_BIND_SERVICE`; the systemd service grants just that permission, so it
+doesn't run as root. For development, pick a port of 1024 or above as shown, and open the
+printed address from any device on the network.
+
+## Your data
+
+Everything personal is kept in the data directory (`--data-dir`, default `data/` next to
+`server.py`), never in the code, and `data/` is git-ignored:
+
+- `links.txt` and `feeds.txt`: your links and subscriptions (created with instructions on first run)
+- `added.json`: when each link or post was first seen
+- `cache.json` and `feeds.json`: fetched page details and subscription posts
+
+To back up or move your feed, copy this directory.
 
 ## Run as a service
 
-`deploy/contentfeed.service` runs the feed with systemd, for example in its own LXC container or VM.
-It expects the repository at `/opt/contentfeed`, owned by a `contentfeed` user. As root in the
-container (Debian/Ubuntu shown):
+`deploy/contentfeed.service` runs the feed with systemd, for example in its own LXC container or
+VM. The code is a git checkout at `/opt/contentfeed` owned by root, which the service can only
+read. The data lives in `/var/lib/contentfeed`, which systemd creates and which only the
+`contentfeed` user can read. As root in the container (Debian/Ubuntu shown):
 
     apt install python3 git
-    useradd --system --home-dir /opt/contentfeed --shell /usr/sbin/nologin contentfeed
+    useradd --system --no-create-home --home-dir /var/lib/contentfeed --shell /usr/sbin/nologin contentfeed
     git clone https://github.com/andrmoe/contentfeed.git /opt/contentfeed
-    chown -R contentfeed:contentfeed /opt/contentfeed
     cp /opt/contentfeed/deploy/contentfeed.service /etc/systemd/system/
     systemctl daemon-reload
     systemctl enable --now contentfeed
 
-To bring your existing lists and history along, stop the service, copy `links.txt`, `feeds.txt`,
-`added.json`, `cache.json` and `feeds.json` into `/opt/contentfeed` (owned by `contentfeed`),
-then start it again.
-
 The container needs an address on your LAN (e.g. a bridged network) for other devices to reach
-port 8090. Logs: `journalctl -u contentfeed -f`. To update:
-`sudo -u contentfeed git -C /opt/contentfeed pull && systemctl restart contentfeed`.
+port 80. Logs: `journalctl -u contentfeed -f`; they include the addresses the server fetches.
+
+To update: `git -C /opt/contentfeed pull && systemctl restart contentfeed`. If the service
+file changed, copy it to `/etc/systemd/system/` again and run `systemctl daemon-reload` first.
+
+To edit your lists by hand, edit `/var/lib/contentfeed/links.txt` or `feeds.txt` as root; the
+running server picks up changes within about 30 seconds.
 
 If the service fails to start with `status=226/NAMESPACE`, the container doesn't allow systemd's
 sandboxing; comment out the sandboxing block in the unit file.
 
 ## Links and subscriptions
 
-`links.txt` holds single links and `feeds.txt` holds subscriptions. In both, each line is a URL
+In the data directory, `links.txt` holds single links and `feeds.txt` holds subscriptions. In both, each line is a URL
 optionally followed by space-separated tags (`https://example.com music longread`), and lines
 starting with `#` are comments.
 
@@ -55,14 +70,14 @@ You can also add links and subscriptions (with tags) from the box at the top of 
 are appended to the files. To remove a link, edit `links.txt`. Changes to either file show up
 within about 30 seconds.
 
-Page details for links are fetched once and cached in `cache.json`; subscription posts are cached
-in `feeds.json`. "Refresh all" re-fetches links and checks every subscription now.
+Page details for links are fetched once; subscription posts are kept between checks. "Refresh all"
+re-fetches links and checks every subscription now.
 
 ## Ranking
 
 Feed order comes from a ranker in `ranking.py`. Rankers never learn from how you use the
 feed; they only use what you wrote (tags, which file or subscription an item came from, the site)
-and dates (when a post was published, or when a link was added, stored in `added.json`). A ranker returns reasons with points, such as
+and dates (when a post was published, or when a link was added). A ranker returns reasons with points, such as
 `("tagged music", 2)`; the score is their sum. Click "Score" on any card to see its reasons.
 
 The default, `chronological`, has no rules: everything scores 0 and the newest item is first. To add another ranker, register a

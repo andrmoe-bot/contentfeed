@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Content feed: turns a plain list of links and subscriptions into a browsable feed, served on the LAN.
 
+All personal data lives in the data directory (--data-dir, default ./data), never in the code:
 links.txt holds single links and feeds.txt holds subscriptions (RSS/Atom feeds, or pages that have
 one, such as YouTube channels). Both have one URL per line, optionally followed by tags; lines
-starting with "#" are comments.
+starting with "#" are comments. They are created with instructions on first run.
 
 For each link the server fetches the page once and extracts title, description, image and site
 name from OpenGraph / HTML metadata (cached in cache.json). Subscriptions are re-checked on a timer
@@ -23,12 +24,26 @@ from urllib.parse import parse_qs, urljoin, urlparse
 import feeds
 import ranking
 
-ROOT = Path(__file__).resolve().parent
-LINKS_FILE = ROOT / "links.txt"
-FEEDS_FILE = ROOT / "feeds.txt"
-CACHE_FILE = ROOT / "cache.json"
-ADDED_FILE = ROOT / "added.json"
-FEED_CACHE_FILE = ROOT / "feeds.json"
+ROOT = Path(__file__).resolve().parent  # code and pages; the server never writes here
+DEFAULT_DATA_DIR = ROOT / "data"
+# Data files; set_data_dir() points these into the data directory at startup.
+LINKS_FILE = FEEDS_FILE = CACHE_FILE = ADDED_FILE = FEED_CACHE_FILE = Path()
+TEMPLATES = {
+    "links.txt": """\
+# One link per line, optionally followed by tags: https://example.com music longread
+# Lines starting with # are ignored.
+# Newest links go at the bottom; they show up first in the feed.
+""",
+    "feeds.txt": """\
+# Subscriptions: one per line, optionally followed by tags, like links.txt.
+# A line can be an RSS/Atom feed, or a page that has one: a YouTube channel (@handle, /channel/…)
+# or playlist, a subreddit, a blog, a Mastodon profile, and so on. Lines starting with # are ignored.
+#
+# https://www.youtube.com/@veritasium science video
+# https://www.reddit.com/r/python programming
+# https://xkcd.com comics
+""",
+}
 PAGES = {  # request path -> (file, content type)
     "/": ("index.html", "text/html; charset=utf-8"),
     "/subscriptions": ("subscriptions.html", "text/html; charset=utf-8"),
@@ -75,8 +90,20 @@ class MetaParser(HTMLParser):
             self.title += data
 
 
-def read_entries(path: Path = LINKS_FILE) -> dict[str, list[str]]:
-    """url -> tags, in file order. A line is a URL followed by optional whitespace-separated tags."""
+def set_data_dir(path: Path):
+    """Use path for all data files, creating it and the starter lists if they don't exist yet."""
+    global LINKS_FILE, FEEDS_FILE, CACHE_FILE, ADDED_FILE, FEED_CACHE_FILE
+    path.mkdir(parents=True, exist_ok=True)
+    LINKS_FILE, FEEDS_FILE = path / "links.txt", path / "feeds.txt"
+    CACHE_FILE, ADDED_FILE, FEED_CACHE_FILE = path / "cache.json", path / "added.json", path / "feeds.json"
+    for name, text in TEMPLATES.items():
+        if not (path / name).exists():
+            (path / name).write_text(text, encoding="utf-8")
+
+
+def read_entries(path: Path | None = None) -> dict[str, list[str]]:
+    """url -> tags, in file order (links.txt by default). A line is a URL followed by optional tags."""
+    path = path or LINKS_FILE
     if not path.exists():
         return {}
     entries: dict[str, list[str]] = {}
@@ -431,25 +458,37 @@ def lan_addresses() -> list[str]:
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--host", default="0.0.0.0", help="bind address (default: all interfaces)")
-    ap.add_argument("--port", type=int, default=8090)
+    ap.add_argument("--port", type=int, default=80, help="default 80; ports below 1024 need extra permission")
     ap.add_argument("--ranker", default=ranking.DEFAULT, choices=sorted(ranking.RANKERS))
     ap.add_argument("--feed-interval", type=float, default=30, help="minutes between subscription checks")
+    ap.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR,
+                    help="where links.txt, feeds.txt and the caches are kept (default: ./data)")
     args = ap.parse_args()
 
     global feed_interval
     feed_interval = max(args.feed_interval, 1) * 60
+    set_data_dir(args.data_dir.resolve())
     cache.update(load_json(CACHE_FILE))
     added.update(load_json(ADDED_FILE))
     subscriptions.update(load_json(FEED_CACHE_FILE))
+    try:
+        server = ThreadingHTTPServer((args.host, args.port), Handler)
+    except PermissionError:
+        raise SystemExit(
+            f"Not allowed to use port {args.port}: ports below 1024 need root or CAP_NET_BIND_SERVICE "
+            f"(the systemd service grants this). For development, use e.g. --port 8090."
+        )
+    except OSError as e:
+        raise SystemExit(f"Can't use port {args.port}: {e.strerror}. Choose another with --port.")
+    server.ranker = args.ranker
     feed(args.ranker)  # warm the caches in the background
     threading.Thread(target=poll_subscriptions, daemon=True).start()
 
-    server = ThreadingHTTPServer((args.host, args.port), Handler)
-    server.ranker = args.ranker
-    print(f"Content feed serving {LINKS_FILE.name} and {FEEDS_FILE.name} on:")
-    print(f"  http://localhost:{args.port}")
+    suffix = "" if args.port == 80 else f":{args.port}"
+    print(f"Content feed using data in {LINKS_FILE.parent}, serving on:")
+    print(f"  http://localhost{suffix}")
     for ip in lan_addresses():
-        print(f"  http://{ip}:{args.port}")
+        print(f"  http://{ip}{suffix}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

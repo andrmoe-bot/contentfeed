@@ -1,7 +1,0 @@
-# One link per line, optionally followed by tags: https://example.com music longread
-# Lines starting with # are ignored.
-# Newest links go at the bottom; they show up first in the feed.
-https://en.wikipedia.org/wiki/RSS
-https://github.com/python/cpython
-https://www.youtube.com/watch?v=dQw4w9WgXcQ
-https://news.ycombinator.com/
