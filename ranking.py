@@ -7,12 +7,16 @@ A ranker looks at one item and returns its reasons, each a (label, points) pair,
 
 Each item has its page metadata (url, title, description, domain, ...) plus these inputs:
 
-    kind      "link" (from links.txt) or "subscription" (a post from a feed in feeds.txt)
-    date      unix time: when a link was added, or when a post was published
-    added     unix time the server first saw the link or post
-    tags      words written after the URL on its line in links.txt or feeds.txt, lowercased
-    feed      the subscription's title (posts only)
-    position  index in links.txt (0 = first line); -1 for posts
+    kind         "link" (from links.txt) or "subscription" (a post from a feed in feeds.txt)
+    date         unix time: when a link was added, or when a post was published
+    added        unix time the server first saw the link or post
+    tags         words written after the URL on its line in links.txt or feeds.txt, lowercased
+    feed         the subscription's title (posts only)
+    position     index in links.txt (0 = first line); -1 for posts
+    last_viewed  unix time you last opened it, or None
+
+Hiding items you opened recently (server.py --hide-viewed) is separate from ranking: hidden
+items are ranked like the rest but only shown with "Show viewed" turned on.
 
 Register a ranker with @ranker("name") and select it with `server.py --ranker name`, or try it
 without restarting via /api/feed?ranker=name.

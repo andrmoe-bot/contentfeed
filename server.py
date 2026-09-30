@@ -13,6 +13,8 @@ and their posts are cached in feeds.json.
 
 import argparse
 import json
+import math
+import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -27,7 +29,7 @@ import ranking
 ROOT = Path(__file__).resolve().parent  # code and pages; the server never writes here
 DEFAULT_DATA_DIR = ROOT / "data"
 # Data files; set_data_dir() points these into the data directory at startup.
-LINKS_FILE = FEEDS_FILE = CACHE_FILE = ADDED_FILE = FEED_CACHE_FILE = Path()
+LINKS_FILE = FEEDS_FILE = CACHE_FILE = ADDED_FILE = FEED_CACHE_FILE = VIEWED_FILE = Path()
 TEMPLATES = {
     "links.txt": """\
 # One link per line, optionally followed by tags: https://example.com music longread
@@ -56,9 +58,11 @@ MAX_ITEMS_SHOWN = 300
 lock = threading.Lock()
 cache: dict[str, dict] = {}
 added: dict[str, float] = {}  # url -> unix time the server first saw the link
+viewed: dict[str, float] = {}  # url -> unix time you last opened it
 subscriptions: dict[str, dict] = {}  # feeds.txt url -> resolved feed, its posts and fetch status
 pending: set[str] = set()
 feed_interval = 30 * 60  # seconds between checks of each subscription; set by --feed-interval
+hide_viewed = 30 * 86400  # seconds an opened item stays hidden (math.inf = until unmarked); --hide-viewed
 executor = ThreadPoolExecutor(max_workers=8)
 
 
@@ -92,10 +96,11 @@ class MetaParser(HTMLParser):
 
 def set_data_dir(path: Path):
     """Use path for all data files, creating it and the starter lists if they don't exist yet."""
-    global LINKS_FILE, FEEDS_FILE, CACHE_FILE, ADDED_FILE, FEED_CACHE_FILE
+    global LINKS_FILE, FEEDS_FILE, CACHE_FILE, ADDED_FILE, FEED_CACHE_FILE, VIEWED_FILE
     path.mkdir(parents=True, exist_ok=True)
     LINKS_FILE, FEEDS_FILE = path / "links.txt", path / "feeds.txt"
     CACHE_FILE, ADDED_FILE, FEED_CACHE_FILE = path / "cache.json", path / "added.json", path / "feeds.json"
+    VIEWED_FILE = path / "viewed.json"
     for name, text in TEMPLATES.items():
         if not (path / name).exists():
             (path / name).write_text(text, encoding="utf-8")
@@ -324,6 +329,64 @@ def poll_subscriptions():
         time.sleep(60)
 
 
+DURATION_UNITS = {"m": 60, "h": 3600, "d": 86400, "w": 7 * 86400}
+
+
+def parse_duration(text: str) -> float:
+    """'30d', '12h', '2w', '90m', 'never' (hide until unmarked) or '0' (don't hide) -> seconds."""
+    text = text.strip().lower()
+    if text == "never":
+        return math.inf
+    m = re.fullmatch(r"(\d+(?:\.\d+)?)\s*([mhdw]?)", text)
+    if not m:
+        raise argparse.ArgumentTypeError(f"invalid duration {text!r}; use e.g. 30d, 12h, 2w, 90m, never or 0")
+    return float(m.group(1)) * DURATION_UNITS[m.group(2) or "d"]
+
+
+def describe_duration(seconds: float) -> str:
+    """How long opened items stay hidden, as a phrase: 'for 30 days', 'until unmarked'."""
+    if seconds == math.inf:
+        return "until unmarked"
+    for unit, size in (("week", 7 * 86400), ("day", 86400), ("hour", 3600), ("minute", 60)):
+        if seconds >= size and seconds % size == 0:
+            n = int(seconds // size)
+            return f"for {n} {unit}{'s' if n != 1 else ''}"
+    return f"for {seconds / 86400:g} days"
+
+
+def view_state(url: str, now: float) -> dict:
+    """Last-viewed time, and whether that hides the item right now. Call with lock held."""
+    last = viewed.get(url)
+    if last is None or hide_viewed <= 0:
+        return {"last_viewed": last, "hidden": False, "returns": None}
+    returns = last + hide_viewed
+    if returns <= now:
+        return {"last_viewed": last, "hidden": False, "returns": None}
+    return {"last_viewed": last, "hidden": True, "returns": None if returns == math.inf else returns}
+
+
+def known_urls() -> set[str]:
+    urls = set(read_entries())
+    subs = read_entries(FEEDS_FILE)
+    with lock:
+        for sub_url in subs:
+            urls.update(post["url"] for post in subscriptions.get(sub_url, {}).get("items", []))
+    return urls
+
+
+def set_viewed(url: str, is_viewed: bool) -> bool:
+    """Record that you opened url now, or forget that you did. Only for items in the feed."""
+    if is_viewed and url not in known_urls():
+        return False
+    with lock:
+        if is_viewed:
+            viewed[url] = time.time()
+        elif viewed.pop(url, None) is None:
+            return False
+    save_json(VIEWED_FILE, viewed)
+    return True
+
+
 def feed(ranker: str) -> dict:
     entries = read_entries()
     subs = read_entries(FEEDS_FILE)
@@ -352,11 +415,31 @@ def feed(ranker: str) -> dict:
                     "domain": urlparse(post["url"]).netloc.removeprefix("www."),
                     "added": post["first_seen"], "date": post["published"] or post["first_seen"], "position": -1,
                 })
+        for item in items:
+            item.update(view_state(item["url"], now))
         n_pending = len(pending)
     if new:
         save_json(ADDED_FILE, added)
     ranked = ranking.rank(ranker, items, now)
-    return {"items": ranked[:MAX_ITEMS_SHOWN], "total": len(ranked), "pending": n_pending, "ranker": ranker}
+    # Hidden items stay in their ranked place, so an item you just opened keeps its spot on the page.
+    shown, n_visible, n_hidden = [], 0, 0
+    for item in ranked:
+        if item["hidden"]:
+            n_hidden += 1
+            if n_hidden <= MAX_ITEMS_SHOWN:
+                shown.append(item)
+        else:
+            n_visible += 1
+            if n_visible <= MAX_ITEMS_SHOWN:
+                shown.append(item)
+    return {
+        "items": shown,
+        "total": n_visible,
+        "hidden": n_hidden,
+        "hide_viewed": describe_duration(hide_viewed) if hide_viewed > 0 else None,
+        "pending": n_pending,
+        "ranker": ranker,
+    }
 
 
 def append_line(path: Path, url: str, tags: list[str]):
@@ -428,6 +511,9 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 ok = check_subscription(url)
             self._json({"ok": ok, "subscriptions": subscription_status()}, 200 if ok else 404)
+        elif path in ("/api/viewed", "/api/viewed/remove"):
+            ok = set_viewed(str(body.get("url", "")), is_viewed=path == "/api/viewed")
+            self._json({"ok": ok}, 200 if ok else 404)
         elif path == "/api/refresh":
             for u in read_links():
                 schedule(u, force=True)
@@ -461,16 +547,21 @@ def main():
     ap.add_argument("--port", type=int, default=80, help="default 80; ports below 1024 need extra permission")
     ap.add_argument("--ranker", default=ranking.DEFAULT, choices=sorted(ranking.RANKERS))
     ap.add_argument("--feed-interval", type=float, default=30, help="minutes between subscription checks")
+    ap.add_argument("--hide-viewed", type=parse_duration, default="30d",
+                    help="how long an item stays hidden after you open it: e.g. 30d, 12h, 2w, never, or 0 to "
+                         "not hide (default: 30d)")
     ap.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR,
                     help="where links.txt, feeds.txt and the caches are kept (default: ./data)")
     args = ap.parse_args()
 
-    global feed_interval
+    global feed_interval, hide_viewed
     feed_interval = max(args.feed_interval, 1) * 60
+    hide_viewed = args.hide_viewed
     set_data_dir(args.data_dir.resolve())
     cache.update(load_json(CACHE_FILE))
     added.update(load_json(ADDED_FILE))
     subscriptions.update(load_json(FEED_CACHE_FILE))
+    viewed.update(load_json(VIEWED_FILE))
     try:
         server = ThreadingHTTPServer((args.host, args.port), Handler)
     except PermissionError:

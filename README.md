@@ -20,6 +20,7 @@ Everything personal is kept in the data directory (`--data-dir`, default `data/`
 
 - `links.txt` and `feeds.txt`: your links and subscriptions (created with instructions on first run)
 - `added.json`: when each link or post was first seen
+- `viewed.json`: when you last opened each item
 - `cache.json` and `feeds.json`: fetched page details and subscription posts
 
 To back up or move your feed, copy this directory.
@@ -72,6 +73,20 @@ within about 30 seconds.
 
 Page details for links are fetched once; subscription posts are kept between checks. "Refresh all"
 re-fetches links and checks every subscription now.
+
+## Viewed items
+
+Opening an item (clicking its link, middle-clicking it, or playing its video) records when you
+last viewed it. Scrolling past doesn't count. After a reload, viewed items are hidden for 30 days,
+then they come back marked "shown again". Change the time with `--hide-viewed`: e.g. `12h`, `7d`,
+`2w`, `never` (stay hidden until unmarked) or `0` (don't hide). For the service, add the option
+to `ExecStart` in the unit file.
+
+What you open stays on the page until you open something else, which hides it straight away (a
+playing video stops). The browser's Back button brings it back, and Forward hides it again; this
+keeps working after a reload in the same tab. "Show viewed" at the top brings all hidden items
+back, each saying when you viewed it and when it returns, with an "Unmark" button to forget that
+you viewed it.
 
 ## Ranking
 
