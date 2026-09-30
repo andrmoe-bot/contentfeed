@@ -1,8 +1,8 @@
 # systemd unit for the content feed. See README.md ("Run as a service") for installation.
 #
-# Assumes the repository is at /opt/contentfeed, owned by the "contentfeed" user. The server
-# stores links.txt, feeds.txt and its caches next to server.py, so that directory must be
-# writable by the service user.
+# Code: /opt/contentfeed (a git checkout, owned by root; the service only reads it).
+# Data: /var/lib/contentfeed (links.txt, feeds.txt and caches), created by systemd and
+#       readable only by the "contentfeed" user.
 
 [Unit]
 Description=Content feed (links and subscriptions served on the LAN)
@@ -13,19 +13,26 @@ After=network-online.target
 Type=simple
 User=contentfeed
 Group=contentfeed
-WorkingDirectory=/opt/contentfeed
-ExecStart=/usr/bin/python3 /opt/contentfeed/server.py --host 0.0.0.0 --port 8090
+StateDirectory=contentfeed
+StateDirectoryMode=0700
+UMask=0077
+WorkingDirectory=/var/lib/contentfeed
+ExecStart=/usr/bin/python3 /opt/contentfeed/server.py --host 0.0.0.0 --port 80 --data-dir /var/lib/contentfeed
+# Port 80 is privileged: grant only the permission to use it, and nothing else
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 # Show print() output in the journal immediately instead of buffering it
 Environment=PYTHONUNBUFFERED=1
+# Don't write __pycache__ into the read-only code directory
+Environment=PYTHONDONTWRITEBYTECODE=1
 Restart=on-failure
 RestartSec=5
 
-# Sandboxing: the service can only write to its own directory.
+# Sandboxing: the service can only write to its data directory.
 # In some unprivileged containers (e.g. LXC without nesting) these fail with
 # "status=226/NAMESPACE"; if so, comment out this block.
 NoNewPrivileges=yes
 ProtectSystem=strict
-ReadWritePaths=/opt/contentfeed
 ProtectHome=yes
 PrivateTmp=yes
 PrivateDevices=yes

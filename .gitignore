@@ -1,6 +1,3 @@
-cache.json
-*.tmp
+data/
 __pycache__/
 feed.log
-added.json
-feeds.json
