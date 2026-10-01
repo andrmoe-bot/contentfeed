@@ -28,8 +28,16 @@
   .why td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
   .play { position: relative; display: block; width: 100%; padding: 0; border: 0; border-radius: 0; background: #000; }
   .play img { opacity: .9; }
-  .viewed { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 0 16px 10px; font-size: 13px; color: var(--muted); }
-  .viewed button { padding: 2px 8px; font-size: 13px; }
+  .viewed { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 0 10px 8px 16px; font-size: 13px; color: var(--muted); }
+  .dots { display: flex; margin-left: auto; }
+  /* A 28px target around an 14px dot: a ring in its color, filled when it's the item's color */
+  .dot { width: 28px; height: 28px; padding: 0; border: 0; border-radius: 50%; background: none; display: grid; place-items: center; }
+  .dot::before { content: ""; width: 14px; height: 14px; box-sizing: border-box; border-radius: 50%; border: 2px solid var(--dot); }
+  .dot[aria-pressed="true"]::before { background: var(--dot-fill, var(--dot)); }
+  .dot:hover::before { transform: scale(1.2); }
+  .dot.green { --dot: #16a34a; }
+  .dot.white { --dot: var(--muted); --dot-fill: #fff; }
+  .dot.red { --dot: #dc2626; }
   article.is-hidden { opacity: .65; }
   .toggle { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); cursor: pointer; }
   .toggle input { flex: none; margin: 0; }
@@ -45,7 +53,7 @@
     <h1>Content Feed</h1>
     <nav><a href="/subscriptions" id="subs-link">Subscriptions</a></nav>
     <span id="status"></span>
-    <label class="toggle" title="Also show items you opened recently"><input type="checkbox" id="show-viewed"> Show viewed <span id="hidden-count"></span></label>
+    <label class="toggle" title="Also show items you opened recently, and red items"><input type="checkbox" id="show-viewed"> Show hidden <span id="hidden-count"></span></label>
   </div>
   <form class="bar" id="add">
     <input id="url" type="text" autocomplete="off" placeholder="Paste a link or feed, optionally followed by tags" required>
@@ -69,7 +77,9 @@ const cards = new Map();  // url -> { key, el }: cards are reused while their co
 // brought back with the browser's Back button. Opening something hides the others right away.
 const openedHere = new Set();
 
-const VIEW_FIELDS = ["last_viewed", "hidden", "returns"];
+const VIEW_FIELDS = ["color", "last_viewed", "hidden", "returns"];
+// How long each color keeps an opened item hidden, from the server: e.g. { green: "for 3 days", ... }
+let hideTimes = {};
 const contentKey = (item) => JSON.stringify(item, (k, v) => (VIEW_FIELDS.includes(k) ? undefined : v));
 
 function until(unix) {
@@ -130,9 +140,13 @@ function hideEarlier(url) {
   if (!earlier.length) return;
   // Rebuild these cards if they're shown again, so a hidden video stops and comes back as a thumbnail.
   for (const u of earlier) cards.delete(u);
+  addHideStep(earlier);
+}
+
+function addHideStep(urls) {
   step += 1;
   for (const k of Object.keys(hides)) if (+k >= step) delete hides[k];  // pushState drops Forward history too
-  hides[step] = earlier;
+  hides[step] = urls;
   saveHides();
   history.pushState({ step }, "");
 }
@@ -153,10 +167,42 @@ addEventListener("popstate", (e) => {
   cards.get(restored[0])?.el.scrollIntoView({ block: "nearest" });
 });
 
-async function unmark(item) {
-  openedHere.delete(item.url);
-  await post("/api/viewed/remove", { url: item.url }).catch(() => {});
+// Colors don't have proper names yet. Green items come back sooner after you open them, white is
+// the default, and red items are hidden for good, even before you open them.
+const COLORS = ["green", "white", "red"];
+
+function colorTitle(color) {
+  if (color === "red") return "Red: don't show again";
+  if (color === "white") return hideTimes.white ? `White (default): mark as viewed, hidden ${hideTimes.white}` : "White (default): mark as viewed";
+  const name = "Green";
+  return hideTimes[color] ? `${name}: hidden ${hideTimes[color]} after you open it` : `${name}: shown again right after you open it`;
+}
+
+// White also marks the item viewed, so it's a quick "seen it". White and red hide the card right
+// away, and Back brings it back, like opening something. The item you have open stays put.
+async function setColor(item, color) {
+  const seen = color === "white";
+  if (item.color === color && !seen) return;
+  item.color = color;
+  if ((seen || color === "red") && !openedHere.has(item.url)) {
+    addHideStep([item.url]);
+    item.hidden = true;
+    render();
+  } else {
+    const c = cards.get(item.url);
+    if (c) showViewState(c.el, item);  // show the new color right away
+  }
+  await post("/api/color", { url: item.url, color }).catch(() => {});
+  if (seen) await post("/api/viewed", { url: item.url }).catch(() => {});
   load();
+}
+
+function colorDots(item) {
+  return el("span", { class: "dots", role: "group", "aria-label": "Color" }, ...COLORS.map((color) => {
+    const dot = el("button", { type: "button", class: `dot ${color}`, title: colorTitle(color), "aria-label": color, "aria-pressed": String(item.color === color) });
+    dot.addEventListener("click", () => setColor(item, color));
+    return dot;
+  }));
 }
 
 // YouTube: show the thumbnail and only load the player when clicked, so a feed full of videos stays fast.
@@ -203,21 +249,18 @@ function card(item) {
   return art;
 }
 
-// The last-viewed line changes without rebuilding the card, so a playing video keeps playing.
+// The color and last-viewed line change without rebuilding the card, so a playing video keeps playing.
 function showViewState(art, item) {
   const line = art.querySelector(".viewed");
   art.classList.toggle("is-hidden", item.hidden && !openedHere.has(item.url));
-  if (!item.last_viewed) {
-    line.hidden = true;
-    return;
+  let text = "";
+  if (item.color === "red") text = item.last_viewed ? `Viewed ${ago(item.last_viewed)} · red, hidden for good` : "Red, hidden for good";
+  else if (item.last_viewed) {
+    text = `Viewed ${ago(item.last_viewed)}`;
+    if (item.hidden) text += item.returns ? ` · hidden, ${until(item.returns)}` : " · hidden for good";
+    else if (!openedHere.has(item.url)) text = `Last viewed ${ago(item.last_viewed)} · shown again`;
   }
-  let text = `Viewed ${ago(item.last_viewed)}`;
-  if (item.hidden) text += item.returns ? ` · hidden, ${until(item.returns)}` : " · hidden until unmarked";
-  else if (!openedHere.has(item.url)) text = `Last viewed ${ago(item.last_viewed)} · shown again`;
-  const unmarkBtn = el("button", { type: "button", title: "Forget that you viewed this" }, "Unmark");
-  unmarkBtn.addEventListener("click", () => unmark(item));
-  line.replaceChildren(el("span", {}, text), unmarkBtn);
-  line.hidden = false;
+  line.replaceChildren(el("span", {}, text), colorDots(item));
 }
 
 function render() {
@@ -236,7 +279,7 @@ function render() {
   for (const url of cards.keys()) if (!urls.has(url)) cards.delete(url);
 
   if (!nodes.length) {
-    const text = items.length ? "You've viewed everything. Turn on “Show viewed” to see it again." : "Nothing here yet. Add a link or subscribe to a feed above.";
+    const text = items.length ? "You've viewed everything. Turn on “Show hidden” to see it again." : "Nothing here yet. Add a link or subscribe to a feed above.";
     feedEl.replaceChildren(el("div", { class: "empty" }, text));
     return;
   }
@@ -269,10 +312,12 @@ async function load() {
     const res = await fetch("/api/feed");
     const data = await res.json();
     items = data.items;
+    hideTimes = data.colors;
     render();
     const visible = items.filter((it) => !it.hidden).length;
     const shown = data.total > visible ? `top ${visible} of ${data.total}` : `${data.total}`;
-    const hiding = data.hide_viewed ? ` · viewed items hidden ${data.hide_viewed}` : "";
+    const green = data.colors.green && data.colors.green !== data.hide_viewed ? ` (green ${data.colors.green.replace(/^for /, "")})` : "";
+    const hiding = data.hide_viewed ? ` · viewed items hidden ${data.hide_viewed}${green}` : "";
     statusEl.textContent = `${shown} items${hiding} · ranked by ${data.ranker}` + (data.pending ? ` · fetching ${data.pending}…` : "");
     document.getElementById("hidden-count").textContent = data.hidden ? `(${data.hidden})` : "";
     pollTimer = setTimeout(load, data.pending ? 1500 : 30000);

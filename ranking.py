@@ -14,9 +14,10 @@ Each item has its page metadata (url, title, description, domain, ...) plus thes
     feed         the subscription's title (posts only)
     position     index in links.txt (0 = first line); -1 for posts
     last_viewed  unix time you last opened it, or None
+    color        "green", "white" (the default) or "red", as you marked it on the page
 
-Hiding items you opened recently (server.py --hide-viewed) is separate from ranking: hidden
-items are ranked like the rest but only shown with "Show viewed" turned on.
+Hiding is separate from ranking: items you opened recently (server.py --hide-viewed and
+--hide-green) and red items are ranked like the rest but only shown with "Show hidden" turned on.
 
 Register a ranker with @ranker("name") and select it with `server.py --ranker name`, or try it
 without restarting via /api/feed?ranker=name.
