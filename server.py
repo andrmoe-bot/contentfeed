@@ -363,11 +363,19 @@ def set_subscription_tags(url: str, tags: list[str]) -> bool:
 
 
 def unsubscribe(url: str) -> bool:
+    """Remove the subscription, with its posts and when you opened or colored them, so subscribing
+    again starts afresh. Posts that are also in links.txt or another subscription keep theirs."""
     if not replace_line(FEEDS_FILE, url, None):
         return False
+    elsewhere = known_urls()  # feeds.txt no longer has url
     with lock:
-        subscriptions.pop(url, None)
+        posts = {p["url"] for p in subscriptions.pop(url, {}).get("items", [])} - elsewhere
+        for post in posts:
+            viewed.pop(post, None)
+            colors.pop(post, None)
     save_json(FEED_CACHE_FILE, subscriptions)
+    save_json(VIEWED_FILE, viewed)
+    save_json(COLORS_FILE, colors)
     return True
 
 

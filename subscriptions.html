@@ -150,7 +150,7 @@ function row(s) {
 
   const removeBtn = el("button", { type: "button", class: "danger" }, "Unsubscribe");
   removeBtn.addEventListener("click", async () => {
-    if (!confirm(`Unsubscribe from ${s.title}? Its posts will disappear from the feed.`)) return;
+    if (!confirm(`Unsubscribe from ${s.title}? Its posts will disappear from the feed, along with which ones you opened or colored.`)) return;
     const { ok, data } = await api("/api/subscriptions/remove", { url: s.url });
     say(ok ? `Unsubscribed from ${s.title}.` : "Couldn't unsubscribe; it may already be gone.", !ok);
     if (data.subscriptions) show(data.subscriptions);
