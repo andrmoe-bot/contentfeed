@@ -34,11 +34,26 @@
 <main>
   <form class="panel" id="weights" novalidate>
     <h2>Score</h2>
-    <p class="intro">The feed is sorted by score, highest first. An item starts at minus its age in days, so one
-      point is one day: a bonus of 20 makes an item count as 20 days newer. Every card's “Score” details
-      show the points it got.</p>
+    <p class="intro">The feed is sorted by score, highest first. A score adds up the points below: two weights
+      multiplied by numbers of days, and bonuses and penalties added on top. Every card's “Score” details show the
+      points it got.</p>
     <p class="formula" id="formula"></p>
 
+    <div class="row">
+      <label for="age_weight">Age weight</label>
+      <div class="fields"><span class="sign">×</span><input id="age_weight" type="number" step="any" inputmode="decimal" required> points per day old</div>
+      <p class="hint">Days since the item was published, or since you added a link. Negative puts newer items first. <span data-default="age_weight"></span></p>
+    </div>
+    <div class="row">
+      <label for="seen_weight">Last opened weight</label>
+      <div class="fields"><span class="sign">×</span><input id="seen_weight" type="number" step="any" inputmode="decimal" required> points per day since opened</div>
+      <p class="hint">For items you've opened. Positive means an item you just opened sinks, and climbs back as days pass. Clicking white also counts as opening. <span data-default="seen_weight"></span></p>
+    </div>
+    <div class="row">
+      <label for="never_seen_bonus">Never opened bonus</label>
+      <div class="fields"><span class="sign">+</span><input id="never_seen_bonus" type="number" min="0" step="any" inputmode="decimal" required> points</div>
+      <p class="hint">For items you've never opened. <span data-default="never_seen_bonus"></span></p>
+    </div>
     <div class="row">
       <label for="green_bonus">Green bonus</label>
       <div class="fields"><span class="sign">+</span><input id="green_bonus" type="number" min="0" step="any" inputmode="decimal" required> points</div>
@@ -52,17 +67,7 @@
     <div class="row">
       <label for="red_penalty">Red penalty</label>
       <div class="fields"><span class="sign">−</span><input id="red_penalty" type="number" min="0" step="any" inputmode="decimal" required> points</div>
-      <p class="hint">For items you marked red. 100000 (about 270 years) puts them below everything else. <span data-default="red_penalty"></span></p>
-    </div>
-    <div class="row">
-      <label for="viewed_penalty">Opened recently penalty</label>
-      <div class="fields"><span class="sign">−</span><input id="viewed_penalty" type="number" min="0" step="any" inputmode="decimal" required> points</div>
-      <p class="hint">For items you opened in the last few days (below). Clicking white also counts as opening. <span data-default="viewed_penalty"></span></p>
-    </div>
-    <div class="row">
-      <label for="viewed_days">Recently means</label>
-      <div class="fields"><span class="sign"></span><input id="viewed_days" type="number" min="0" step="any" inputmode="decimal" required> days</div>
-      <p class="hint">How long the penalty lasts after you open an item. 0 turns it off. <span data-default="viewed_days"></span></p>
+      <p class="hint">For items you marked red. Make it bigger than everything else adds up to, and red items sink to the bottom. <span data-default="red_penalty"></span></p>
     </div>
 
     <p class="hint" id="example"></p>
@@ -76,19 +81,23 @@
 
 <script src="/common.js"></script>
 <script>
-const KEYS = ["green_bonus", "next_bonus", "red_penalty", "viewed_penalty", "viewed_days"];
+const KEYS = ["age_weight", "seen_weight", "never_seen_bonus", "green_bonus", "next_bonus", "red_penalty"];
+const SIGNED = ["age_weight", "seen_weight"];  // may be negative; the others are amounts added or taken away
+const LIMIT = 10_000_000;
 const form = document.getElementById("weights");
 const inputs = Object.fromEntries(KEYS.map((k) => [k, document.getElementById(k)]));
 let saved = {};
 let defaults = {};
 
 const fmt = (n) => Number(n).toLocaleString("en-US", { maximumFractionDigits: 2 }).replaceAll(",", "\u202f").replace("-", "−");
+// " + 5" or " − 5", for adding a term to a sum
+const plus = (n) => (n < 0 ? ` − ${fmt(-n)}` : ` + ${fmt(n)}`);
 
 function current() {
   return Object.fromEntries(KEYS.map((k) => [k, inputs[k].value.trim() === "" ? NaN : Number(inputs[k].value)]));
 }
 
-const valid = (w) => KEYS.every((k) => Number.isFinite(w[k]) && w[k] >= 0 && w[k] <= 10_000_000);
+const valid = (w) => KEYS.every((k) => Number.isFinite(w[k]) && w[k] >= (SIGNED.includes(k) ? -LIMIT : 0) && w[k] <= LIMIT);
 
 // Shows the formula and a worked example with the numbers as typed, before saving.
 function update() {
@@ -96,17 +105,20 @@ function update() {
   const ok = valid(w);
   document.getElementById("save").disabled = !ok || KEYS.every((k) => w[k] === saved[k]);
   if (!ok) {
-    document.getElementById("formula").textContent = "Each value must be a number from 0 to 10 000 000.";
+    document.getElementById("formula").textContent =
+      "Each weight must be a number from −10 000 000 to 10 000 000, and each bonus or penalty from 0 to 10 000 000.";
     document.getElementById("example").textContent = "";
     return;
   }
   document.getElementById("formula").textContent =
-    `score = −age in days + ${fmt(w.green_bonus)} if green + ${fmt(w.next_bonus)} if next in its subscription − ${fmt(w.red_penalty)} if red − ${fmt(w.viewed_penalty)} if opened in the last ${fmt(w.viewed_days)} days`;
-  const opened = w.viewed_days > 1;
-  const example = -10 - (opened ? w.viewed_penalty : 0);
-  document.getElementById("example").textContent = opened
-    ? `For example, a video from 10 days ago that you opened yesterday scores −10 − ${fmt(w.viewed_penalty)} = ${fmt(example)}, the same as an unopened one from ${fmt(-example)} days ago.`
-    : "For example, a video from 10 days ago scores −10, whether you opened it or not.";
+    `score = ${fmt(w.age_weight)} × age in days${plus(w.seen_weight)} × days since you opened it` +
+    `${plus(w.never_seen_bonus)} if never opened${plus(w.green_bonus)} if green` +
+    `${plus(w.next_bonus)} if next in its subscription − ${fmt(w.red_penalty)} if red`;
+  const unopened = 10 * w.age_weight + w.never_seen_bonus;
+  const opened = 10 * w.age_weight + 3 * w.seen_weight;
+  document.getElementById("example").textContent =
+    `For example, a video from 10 days ago scores ${fmt(10 * w.age_weight)}${plus(w.never_seen_bonus)} = ${fmt(unopened)} ` +
+    `if you haven't opened it, and ${fmt(10 * w.age_weight)}${plus(3 * w.seen_weight)} = ${fmt(opened)} if you opened it 3 days ago.`;
 }
 
 function fill(w) {
