@@ -19,6 +19,7 @@ Each item has its page metadata (url, title, description, domain, ...) plus thes
     next_after   for a post: the title of the post you opened most recently in its subscription,
                  if this post was published right after that one ("what's next"); otherwise None
     sub_last_viewed  for a post: unix time you last opened any post in its subscription, or None
+                 if you've never opened anything from it
 
 Nothing is hidden: items you've opened or marked red are scored differently, not removed.
 
@@ -44,6 +45,7 @@ DEFAULT_WEIGHTS = {
     "seen_weight": 2,  # points per day since you last opened it; items you never opened get never_seen_bonus
     "sub_seen_weight": 10,  # points per day since you last opened any post in the item's subscription
     "never_seen_bonus": 1000,
+    "sub_never_seen_bonus": 1000,  # for posts from subscriptions you've never opened anything from
     "green_bonus": 20,
     "red_penalty": 100000,  # red items sink below everything else
     "next_bonus": 10000,  # the post after the one you last opened in a subscription rises above anything not red
@@ -106,7 +108,10 @@ def score(item: dict, now: float) -> Reasons:
         seen = int((now - item["last_viewed"]) // 86400)
         if seen > 0 and w["seen_weight"]:
             reasons.append((f"opened {days_label(seen)} ago", points(w["seen_weight"] * seen)))
-    if item.get("sub_last_viewed") is not None:
+    if item["kind"] == "subscription" and item.get("sub_last_viewed") is None:
+        if w["sub_never_seen_bonus"]:
+            reasons.append((f"nothing opened from “{short(item['feed'])}”", w["sub_never_seen_bonus"]))
+    elif item.get("sub_last_viewed") is not None:
         sub_seen = int((now - item["sub_last_viewed"]) // 86400)
         if sub_seen > 0 and w["sub_seen_weight"]:
             label = f"opened something from “{short(item['feed'])}” {days_label(sub_seen)} ago"
