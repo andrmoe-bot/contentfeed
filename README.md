@@ -107,8 +107,16 @@ the libraries you want, limits what the password stored here can do. Then subscr
 
 The server is checked like any other subscription, and the feed picks up changes to `jellyfin.json`
 at the next check. Movies and episodes are dated by when they were added to the server ("added 2 days
-ago"), so new additions come first, and ones removed from the server leave the feed. Opening a card
-opens it in Jellyfin's web app. "Next in its subscription" goes by series: open an episode and the
+ago"), so new additions come first, and ones removed from the server leave the feed.
+
+Click a card's picture to play it right there; the title opens it in Jellyfin's web app instead.
+The video comes through the feed server, which logs in for you, so your browser needs no Jellyfin
+login and never sees the password or token. Jellyfin converts files the browser can't play as they are
+(such as MKV or HEVC) to HLS, which Chromium-based browsers like Vivaldi play, but Firefox doesn't.
+The feed server only passes on videos of posts in the feed, but anyone who can open the feed can play
+them.
+
+"Next in its subscription" goes by series: open an episode and the
 next one in season and episode order gets the bonus. Movies don't get it. Whether you've watched
 something in Jellyfin doesn't count as opened here; only opening it from the feed does.
 

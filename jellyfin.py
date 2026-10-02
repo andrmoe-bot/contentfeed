@@ -19,6 +19,19 @@ from feeds import FETCH_TIMEOUT, FeedError
 
 MAX_ITEMS = 5000  # most recently added first
 MAX_BYTES = 50_000_000
+STREAM_TIMEOUT = 60  # Jellyfin may take a while to start converting a video
+# What a browser can play as it is; Jellyfin converts anything else to HLS with H.264 and AAC.
+BROWSER = {
+    "MaxStreamingBitrate": 20_000_000,
+    "DirectPlayProfiles": [
+        {"Type": "Video", "Container": "mp4,m4v", "VideoCodec": "h264", "AudioCodec": "aac,mp3"},
+        {"Type": "Video", "Container": "webm", "VideoCodec": "vp8,vp9,av1", "AudioCodec": "vorbis,opus"},
+    ],
+    "TranscodingProfiles": [{"Type": "Video", "Context": "Streaming", "Protocol": "hls", "Container": "mp4",
+                             "VideoCodec": "h264", "AudioCodec": "aac", "MaxAudioChannels": "2", "MinSegments": 1,
+                             "BreakOnNonKeyFrames": True}],
+    "CodecProfiles": [], "ContainerProfiles": [], "SubtitleProfiles": [],
+}
 USER_AGENT = "ContentFeed/1.0"  # an API client's; some proxies, such as the demo server's, refuse browser-like ones
 CLIENT = 'MediaBrowser Client="ContentFeed", Device="ContentFeed", DeviceId="contentfeed", Version="1.0"'
 
@@ -53,13 +66,18 @@ def is_jellyfin(url: str) -> bool:
         return False
 
 
-def request(server: str, path: str, token: str | None = None, body: dict | None = None):
+def open_url(server: str, path: str, token: str | None = None, body: dict | None = None, headers: dict | None = None,
+             timeout: float = FETCH_TIMEOUT):
     auth = CLIENT + (f', Token="{token}"' if token else "")
-    headers = {"User-Agent": USER_AGENT, "Accept": "application/json", "Authorization": auth}
+    h = {"User-Agent": USER_AGENT, "Accept": "application/json", "Authorization": auth, **(headers or {})}
     if body is not None:
-        headers["Content-Type"] = "application/json"
-    req = urllib.request.Request(server + path, json.dumps(body).encode() if body is not None else None, headers)
-    with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT) as r:
+        h["Content-Type"] = "application/json"
+    req = urllib.request.Request(server + path, json.dumps(body).encode() if body is not None else None, h)
+    return urllib.request.urlopen(req, timeout=timeout)
+
+
+def request(server: str, path: str, token: str | None = None, body: dict | None = None):
+    with open_url(server, path, token, body) as r:
         return json.loads(r.read(MAX_BYTES))
 
 
@@ -75,16 +93,22 @@ def log_in(server: str, login: dict) -> tuple[str, str]:
     return tokens[server]
 
 
-def get(server: str, login: dict, path: str, params: dict):
-    """GET from the API as the user, logging in first, and again if the server has forgotten the token."""
+def as_user(server: str, login: dict, call):
+    """call(token, user id), logging in first, and again if the server has forgotten the token."""
     for attempt in range(2):
         token, user = tokens.get(server) or log_in(server, login)
         try:
-            return request(server, f"{path}?{urlencode({**params, 'userId': user})}", token)
+            return call(token, user)
         except urllib.error.HTTPError as e:
             if e.code != 401 or attempt:
                 raise
             tokens.pop(server, None)
+
+
+def get(server: str, login: dict, path: str, params: dict, body: dict | None = None):
+    """Call the API as the user: GET, or POST with a body."""
+    return as_user(server, login, lambda token, user: request(
+        server, f"{path}?{urlencode({**params, 'userId': user})}", token, body))
 
 
 def image(server: str, item: dict) -> str | None:
@@ -169,3 +193,39 @@ def fetch(url: str, login: dict) -> dict:
         "feed_url": url,
         "complete": True,  # every post there is: ones missing from it were removed from the server
     }
+
+
+# Playing in the feed. The browser gets videos through the feed server, which adds the token, so the token
+# and password never reach it. Jellyfin puts the token in the addresses it returns, so it is taken out.
+
+TOKEN_PARAM = re.compile(r"(?i)(?<=[?&])api_?key=[^&\"\s]*&?")
+
+
+def without_token(text: str) -> str:
+    return TOKEN_PARAM.sub("", text)
+
+
+def normal_id(item: str) -> str:
+    """Jellyfin writes ids both as 32 hex digits and as a GUID with dashes."""
+    return item.replace("-", "").lower()
+
+
+def playback(url: str, login: dict) -> tuple[str, bool]:
+    """How a browser can play the item at url: (path on its server, without the token; whether it's HLS)."""
+    server, item = server_of(url), item_id(url)
+    info = get(server, login, f"/Items/{quote(item)}/PlaybackInfo", {}, {"DeviceProfile": BROWSER})
+    sources = info.get("MediaSources") or []
+    if not sources:
+        raise FeedError("Jellyfin has nothing to play for this item")
+    source = sources[0]
+    if source.get("SupportsDirectPlay"):
+        query = urlencode({"static": "true", "mediaSourceId": source["Id"], "playSessionId": info.get("PlaySessionId", "")})
+        return f"/videos/{normal_id(item)}/stream?{query}", False
+    if not source.get("TranscodingUrl"):
+        raise FeedError("Jellyfin can't convert this item for the browser")
+    return without_token(source["TranscodingUrl"]), True
+
+
+def stream(server: str, login: dict, path: str, headers: dict):
+    """Open a video, playlist or segment as the user; the caller closes it."""
+    return as_user(server, login, lambda token, user: open_url(server, path, token, headers=headers, timeout=STREAM_TIMEOUT))

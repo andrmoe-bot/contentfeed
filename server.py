@@ -13,8 +13,11 @@ channels and playlists, older videos than the feed lists are loaded once (see fe
 """
 
 import argparse
+import hashlib
 import json
+import re
 import threading
+import urllib.error
 import time
 from concurrent.futures import ThreadPoolExecutor
 from html.parser import HTMLParser
@@ -574,6 +577,52 @@ def add_link(line: str) -> bool:
     return True
 
 
+# Playing Jellyfin videos in the feed: the browser asks the feed server, which relays from Jellyfin with its
+# own login. Only videos of posts in the feed are relayed, and only the parts a player needs.
+RELAY = re.compile(r"^/jellyfin/([0-9a-f]{12})(/videos/([0-9a-f-]{32,36})/(?:stream|master\.m3u8|main\.m3u8|hls1/\w+/-?\d+\.(?:mp4|ts)))$",
+                   re.I)
+
+
+def relay_key(server: str) -> str:
+    return hashlib.sha256(server.encode()).hexdigest()[:12]
+
+
+def jellyfin_post(url: str) -> tuple[str, dict] | None:
+    """(server, login) for a Jellyfin post in the feed, or None."""
+    with lock:
+        known = any(p["url"] == url and p.get("jellyfin") for s in subscriptions.values() for p in s.get("items", []))
+    login = jellyfin.login_for(url, load_json(JELLYFIN_FILE)) if known else None
+    return (jellyfin.server_of(url), login) if login is not None else None
+
+
+def jellyfin_relay_target(key: str, item: str) -> tuple[str, dict] | None:
+    """(server, login) for a relay request, if item is a post in the feed on the server with that key."""
+    item = jellyfin.normal_id(item)
+    with lock:
+        urls = [p["url"] for s in subscriptions.values() for p in s.get("items", [])
+                if p.get("jellyfin") and jellyfin.normal_id(jellyfin.item_id(p["url"]) or "") == item]
+    for url in urls:
+        target = jellyfin_post(url)
+        if target and relay_key(target[0]) == key.lower():
+            return target
+    return None
+
+
+def jellyfin_play(url: str) -> dict:
+    """Where the browser can play a Jellyfin post: {"src": relay address, "hls": bool}, or {"error": …}."""
+    target = jellyfin_post(url)
+    if target is None:
+        return {"error": "not a Jellyfin post in the feed, or its server has no login in jellyfin.json"}
+    server, login = target
+    try:
+        path, hls = jellyfin.playback(url, login)
+    except urllib.error.HTTPError as e:
+        return {"error": f"HTTP {e.code} from Jellyfin"}
+    except (OSError, ValueError, KeyError, feeds.FeedError) as e:
+        return {"error": str(e)[:300]}
+    return {"src": f"/jellyfin/{relay_key(server)}{path}", "hls": hls}
+
+
 class Handler(BaseHTTPRequestHandler):
     def _send(self, code: int, body: bytes, ctype: str):
         self.send_response(code)
@@ -603,8 +652,41 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"subscriptions": subscription_status(), "interval_minutes": feed_interval / 60})
         elif path == "/api/settings":
             self._json(settings())
+        elif path == "/api/jellyfin/play":
+            result = jellyfin_play(parse_qs(parsed.query).get("url", [""])[0])
+            self._json(result, 400 if "error" in result else 200)
+        elif RELAY.match(path):
+            self._relay(RELAY.match(path), parsed.query)
         else:
             self._send(404, b"Not found", "text/plain")
+
+    def _relay(self, m, query: str):
+        """Pass on a Jellyfin video, playlist or segment, with byte ranges so the player can seek."""
+        target = jellyfin_relay_target(m.group(1), m.group(3))
+        if target is None:
+            return self._send(404, b"Not found", "text/plain")
+        server, login = target
+        headers = {"Range": self.headers["Range"]} if self.headers.get("Range") else {}
+        try:
+            r = jellyfin.stream(server, login, m.group(2) + (f"?{jellyfin.without_token(query)}" if query else ""), headers)
+        except urllib.error.HTTPError as e:
+            return self._send(e.code, f"HTTP {e.code} from Jellyfin".encode(), "text/plain")
+        except (OSError, feeds.FeedError) as e:
+            return self._send(502, f"couldn't reach Jellyfin: {e}".encode(), "text/plain")
+        with r:
+            ctype = r.headers.get("Content-Type", "application/octet-stream")
+            if m.group(2).endswith(".m3u8"):  # playlists name the next files with the token in them
+                return self._send(200, jellyfin.without_token(r.read(jellyfin.MAX_BYTES).decode()).encode(), ctype)
+            self.send_response(r.status)
+            for name in ("Content-Type", "Content-Length", "Content-Range", "Accept-Ranges"):
+                if r.headers.get(name):
+                    self.send_header(name, r.headers[name])
+            self.end_headers()
+            try:
+                while chunk := r.read(256 * 1024):
+                    self.wfile.write(chunk)
+            except (BrokenPipeError, ConnectionResetError):  # the player stopped or seeked elsewhere
+                pass
 
     def do_POST(self):
         path = urlparse(self.path).path
