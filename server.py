@@ -28,7 +28,7 @@ import ranking
 ROOT = Path(__file__).resolve().parent  # code and pages; the server never writes here
 DEFAULT_DATA_DIR = ROOT / "data"
 # Data files; set_data_dir() points these into the data directory at startup.
-LINKS_FILE = FEEDS_FILE = CACHE_FILE = ADDED_FILE = FEED_CACHE_FILE = VIEWED_FILE = Path()
+LINKS_FILE = FEEDS_FILE = CACHE_FILE = ADDED_FILE = FEED_CACHE_FILE = VIEWED_FILE = COLORS_FILE = SETTINGS_FILE = Path()
 TEMPLATES = {
     "links.txt": """\
 # One link per line, optionally followed by tags: https://example.com music longread
@@ -48,6 +48,7 @@ TEMPLATES = {
 PAGES = {  # request path -> (file, content type)
     "/": ("index.html", "text/html; charset=utf-8"),
     "/subscriptions": ("subscriptions.html", "text/html; charset=utf-8"),
+    "/settings": ("settings.html", "text/html; charset=utf-8"),
     "/style.css": ("style.css", "text/css; charset=utf-8"),
     "/common.js": ("common.js", "text/javascript; charset=utf-8"),
 }
@@ -97,11 +98,12 @@ class MetaParser(HTMLParser):
 
 def set_data_dir(path: Path):
     """Use path for all data files, creating it and the starter lists if they don't exist yet."""
-    global LINKS_FILE, FEEDS_FILE, CACHE_FILE, ADDED_FILE, FEED_CACHE_FILE, VIEWED_FILE, COLORS_FILE
+    global LINKS_FILE, FEEDS_FILE, CACHE_FILE, ADDED_FILE, FEED_CACHE_FILE, VIEWED_FILE, COLORS_FILE, SETTINGS_FILE
     path.mkdir(parents=True, exist_ok=True)
     LINKS_FILE, FEEDS_FILE = path / "links.txt", path / "feeds.txt"
     CACHE_FILE, ADDED_FILE, FEED_CACHE_FILE = path / "cache.json", path / "added.json", path / "feeds.json"
     VIEWED_FILE, COLORS_FILE = path / "viewed.json", path / "colors.json"
+    SETTINGS_FILE = path / "settings.json"
     for name, text in TEMPLATES.items():
         if not (path / name).exists():
             (path / name).write_text(text, encoding="utf-8")
@@ -427,6 +429,32 @@ def set_color(url: str, color: str) -> bool:
     return True
 
 
+def settings() -> dict:
+    return {"weights": ranking.WEIGHTS, "defaults": ranking.DEFAULT_WEIGHTS}
+
+
+def save_settings(weights) -> str | None:
+    """Set the score ranker's weights from the Settings page. Returns an error message, or None."""
+    try:
+        checked = ranking.check_weights(weights if isinstance(weights, dict) else {})
+    except ValueError as e:
+        return str(e)
+    with lock:
+        ranking.WEIGHTS.update(checked)
+    save_json(SETTINGS_FILE, {"weights": checked})
+    return None
+
+
+def load_settings():
+    weights = load_json(SETTINGS_FILE).get("weights")
+    if weights is None:
+        return
+    try:  # settings saved by an older version may lack newer weights; they keep their defaults
+        ranking.WEIGHTS.update(ranking.check_weights({**ranking.DEFAULT_WEIGHTS, **weights}))
+    except ValueError as e:
+        print(f"Ignoring {SETTINGS_FILE}: {e}")
+
+
 def feed(ranker: str, limit: int = MAX_ITEMS_SHOWN) -> dict:
     entries = read_entries()
     subs = read_entries(FEEDS_FILE)
@@ -514,6 +542,8 @@ class Handler(BaseHTTPRequestHandler):
             self._json(feed(name, max(int(limit), 1) if limit.isdigit() else MAX_ITEMS_SHOWN))
         elif path == "/api/subscriptions":
             self._json({"subscriptions": subscription_status(), "interval_minutes": feed_interval / 60})
+        elif path == "/api/settings":
+            self._json(settings())
         else:
             self._send(404, b"Not found", "text/plain")
 
@@ -546,6 +576,9 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/color":
             ok = set_color(str(body.get("url", "")), str(body.get("color", "")))
             self._json({"ok": ok}, 200 if ok else 404)
+        elif path == "/api/settings":
+            error = save_settings(body.get("weights"))
+            self._json({"ok": not error, "error": error, **settings()}, 400 if error else 200)
         elif path == "/api/refresh":
             for u in read_links():
                 schedule(u, force=True)
@@ -597,6 +630,7 @@ def main():
     subscriptions.update(load_json(FEED_CACHE_FILE))
     viewed.update(load_json(VIEWED_FILE))
     colors.update(load_json(COLORS_FILE))
+    load_settings()
     try:
         server = ThreadingHTTPServer((args.host, args.port), Handler)
     except PermissionError:

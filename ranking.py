@@ -33,11 +33,27 @@ Ranker = Callable[[dict, float], Reasons]
 RANKERS: dict[str, Ranker] = {}
 DEFAULT = "score"
 
-# Points for the "score" ranker. One point is one day of age.
-GREEN = 20  # green items count as 20 days newer
-RED = -100000  # red items sink below everything else (about 270 years)
-VIEWED = -100  # opened in the last VIEWED_DAYS days: counts as 100 days older
-VIEWED_DAYS = 30
+# Settings for the "score" ranker, where one point is one day of age. These are the defaults; you
+# can change them on the Settings page (/settings), and server.py keeps your values in settings.json.
+DEFAULT_WEIGHTS = {
+    "green_bonus": 20,  # green items count as 20 days newer
+    "red_penalty": 100000,  # red items sink below everything else (about 270 years)
+    "viewed_penalty": 100,  # items opened in the last viewed_days days count as 100 days older
+    "viewed_days": 30,
+}
+WEIGHTS = dict(DEFAULT_WEIGHTS)
+
+
+def check_weights(weights: dict) -> dict:
+    """The weights as numbers, or ValueError if one is missing, unknown, negative or too big."""
+    if set(weights) != set(DEFAULT_WEIGHTS):
+        raise ValueError(f"expected exactly these settings: {', '.join(DEFAULT_WEIGHTS)}")
+    out = {}
+    for key, value in weights.items():
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 <= value <= 10_000_000:
+            raise ValueError(f"{key} must be a number from 0 to 10000000")
+        out[key] = int(value) if float(value).is_integer() else value
+    return out
 
 
 def ranker(name: str):
@@ -59,12 +75,14 @@ def score(item: dict, now: float) -> Reasons:
     """Newest first, adjusted by color and by whether you opened the item recently."""
     days = int((now - item["date"]) // 86400)  # whole days, so points don't change every second
     reasons = [(f"{days} day{'s' if days != 1 else ''} old", -days)] if days > 0 else []
-    if item["color"] == "green":
-        reasons.append(("green", GREEN))
-    elif item["color"] == "red":
-        reasons.append(("red", RED))
-    if item["last_viewed"] and now - item["last_viewed"] < VIEWED_DAYS * 86400:
-        reasons.append((f"opened in the last {VIEWED_DAYS} days", VIEWED))
+    w = WEIGHTS
+    if item["color"] == "green" and w["green_bonus"]:
+        reasons.append(("green", w["green_bonus"]))
+    elif item["color"] == "red" and w["red_penalty"]:
+        reasons.append(("red", -w["red_penalty"]))
+    days_viewed = w["viewed_days"]
+    if item["last_viewed"] and w["viewed_penalty"] and now - item["last_viewed"] < days_viewed * 86400:
+        reasons.append((f"opened in the last {days_viewed:g} day{'s' if days_viewed != 1 else ''}", -w["viewed_penalty"]))
     return reasons
 
 

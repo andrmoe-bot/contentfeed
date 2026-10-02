@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Settings</title>
+<link rel="stylesheet" href="/style.css">
+<style>
+  form.panel {
+    background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+    padding: 12px 16px 16px; display: grid; gap: 14px;
+  }
+  h2 { font-size: 16px; margin: 0; }
+  .intro, .hint, .formula { font-size: 13px; color: var(--muted); margin: 0; }
+  .formula { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
+  .row { display: grid; gap: 4px; }
+  .row label { font-weight: 600; }
+  .fields { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .fields input { flex: 0 0 auto; width: 7.5em; font-variant-numeric: tabular-nums; }
+  .sign { width: 1ch; text-align: center; font-weight: 600; }
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .actions #message { flex-basis: auto; }
+  button:disabled { opacity: .5; cursor: default; }
+  input:invalid { border-color: var(--error); }
+</style>
+</head>
+<body>
+<header>
+  <div class="bar">
+    <h1>Settings</h1>
+    <nav><a href="/">← Back to feed</a></nav>
+  </div>
+</header>
+<main>
+  <form class="panel" id="weights" novalidate>
+    <h2>Score</h2>
+    <p class="intro">The feed is sorted by score, highest first. An item starts at minus its age in days, so one
+      point is one day: a bonus of 20 makes an item count as 20 days newer. Every card's “Score” details
+      show the points it got.</p>
+    <p class="formula" id="formula"></p>
+
+    <div class="row">
+      <label for="green_bonus">Green bonus</label>
+      <div class="fields"><span class="sign">+</span><input id="green_bonus" type="number" min="0" step="any" inputmode="decimal" required> points</div>
+      <p class="hint">For items you marked green. <span data-default="green_bonus"></span></p>
+    </div>
+    <div class="row">
+      <label for="red_penalty">Red penalty</label>
+      <div class="fields"><span class="sign">−</span><input id="red_penalty" type="number" min="0" step="any" inputmode="decimal" required> points</div>
+      <p class="hint">For items you marked red. 100000 (about 270 years) puts them below everything else. <span data-default="red_penalty"></span></p>
+    </div>
+    <div class="row">
+      <label for="viewed_penalty">Opened recently penalty</label>
+      <div class="fields"><span class="sign">−</span><input id="viewed_penalty" type="number" min="0" step="any" inputmode="decimal" required> points</div>
+      <p class="hint">For items you opened in the last few days (below). Clicking white also counts as opening. <span data-default="viewed_penalty"></span></p>
+    </div>
+    <div class="row">
+      <label for="viewed_days">Recently means</label>
+      <div class="fields"><span class="sign"></span><input id="viewed_days" type="number" min="0" step="any" inputmode="decimal" required> days</div>
+      <p class="hint">How long the penalty lasts after you open an item. 0 turns it off. <span data-default="viewed_days"></span></p>
+    </div>
+
+    <p class="hint" id="example"></p>
+    <div class="actions">
+      <button class="primary" type="submit" id="save" disabled>Save</button>
+      <button type="button" id="reset">Reset to defaults</button>
+      <p id="message" role="status"></p>
+    </div>
+  </form>
+</main>
+
+<script src="/common.js"></script>
+<script>
+const KEYS = ["green_bonus", "red_penalty", "viewed_penalty", "viewed_days"];
+const form = document.getElementById("weights");
+const inputs = Object.fromEntries(KEYS.map((k) => [k, document.getElementById(k)]));
+let saved = {};
+let defaults = {};
+
+const fmt = (n) => Number(n).toLocaleString("en-US", { maximumFractionDigits: 2 }).replaceAll(",", "\u202f").replace("-", "−");
+
+function current() {
+  return Object.fromEntries(KEYS.map((k) => [k, inputs[k].value.trim() === "" ? NaN : Number(inputs[k].value)]));
+}
+
+const valid = (w) => KEYS.every((k) => Number.isFinite(w[k]) && w[k] >= 0 && w[k] <= 10_000_000);
+
+// Shows the formula and a worked example with the numbers as typed, before saving.
+function update() {
+  const w = current();
+  const ok = valid(w);
+  document.getElementById("save").disabled = !ok || KEYS.every((k) => w[k] === saved[k]);
+  if (!ok) {
+    document.getElementById("formula").textContent = "Each value must be a number from 0 to 10 000 000.";
+    document.getElementById("example").textContent = "";
+    return;
+  }
+  document.getElementById("formula").textContent =
+    `score = −age in days + ${fmt(w.green_bonus)} if green − ${fmt(w.red_penalty)} if red − ${fmt(w.viewed_penalty)} if opened in the last ${fmt(w.viewed_days)} days`;
+  const opened = w.viewed_days > 1;
+  const example = -10 - (opened ? w.viewed_penalty : 0);
+  document.getElementById("example").textContent = opened
+    ? `For example, a video from 10 days ago that you opened yesterday scores −10 − ${fmt(w.viewed_penalty)} = ${fmt(example)}, the same as an unopened one from ${fmt(-example)} days ago.`
+    : "For example, a video from 10 days ago scores −10, whether you opened it or not.";
+}
+
+function fill(w) {
+  for (const k of KEYS) inputs[k].value = w[k];
+  update();
+}
+
+async function load() {
+  const data = await (await fetch("/api/settings")).json();
+  saved = data.weights;
+  defaults = data.defaults;
+  for (const span of document.querySelectorAll("[data-default]")) {
+    const k = span.dataset.default;
+    span.textContent = `Default: ${fmt(defaults[k])}.`;
+  }
+  fill(saved);
+}
+
+form.addEventListener("input", () => { say(""); update(); });
+
+document.getElementById("reset").addEventListener("click", () => {
+  fill(defaults);
+  say(KEYS.every((k) => defaults[k] === saved[k]) ? "These are the defaults." : "Defaults filled in; press Save to use them.");
+});
+
+form.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const w = current();
+  if (!valid(w)) return;
+  const res = await fetch("/api/settings", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ weights: w }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) return say(`Couldn't save: ${data.error || "unknown error"}`, true);
+  saved = data.weights;
+  fill(saved);
+  say("Saved. The feed uses these from its next update.");
+});
+
+load();
+</script>
+</body>
+</html>

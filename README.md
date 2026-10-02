@@ -22,6 +22,7 @@ Everything personal is kept in the data directory (`--data-dir`, default `data/`
 - `added.json`: when each link or post was first seen
 - `viewed.json`: when you last opened each item
 - `colors.json`: the items you marked green or red
+- `settings.json`: your scoring settings from the Settings page, if you changed them
 - `cache.json` and `feeds.json`: fetched page details and subscription posts
 
 To back up or move your feed, copy this directory.
@@ -90,7 +91,7 @@ re-fetches links and checks every subscription now.
 
 Opening an item (clicking its link, middle-clicking it, or playing its video) records when you
 last viewed it. Scrolling past doesn't count. Nothing is hidden: for 30 days after you open an
-item, it ranks as if it were 100 days older (see Ranking). The card says when you viewed it.
+item, it ranks as if it were 100 days older (by default; see Ranking). The card says when you viewed it.
 
 Cards you open or color stay where they are until you reload the page, so nothing moves away
 while you're looking at it. Playing a video stops the one playing in another card.
@@ -104,6 +105,8 @@ yet; for now they change an item's score:
 - **white**: the default, no change. Clicking white also marks the item viewed: a quick "seen it".
 - **red**: −100000, which puts it at the bottom, below everything else
 
+These are the defaults; you can change them on the Settings page.
+
 ## Ranking
 
 Feed order comes from a ranker in `ranking.py`. Rankers never learn from how you use the
@@ -116,7 +119,8 @@ The default, `score`, starts from the item's age and adjusts it, one point per d
 
     score = −(age in days) + 20 if green − 100000 if red − 100 if opened in the last 30 days
 
-The numbers are at the top of `ranking.py`. Equal scores are ordered newest first. The other ranker,
+Change the numbers on the Settings page (`/settings`, linked at the top of the feed); the feed
+uses them from its next update. The defaults are at the top of `ranking.py`. Equal scores are ordered newest first. The other ranker,
 `chronological`, has no rules: everything scores 0 and the newest item is first. To add another ranker, register a
 function with `@ranker("name")`, then select it with `python3 server.py --ranker name`, or try
 it without a restart at `/api/feed?ranker=name`.
