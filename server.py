@@ -229,7 +229,8 @@ def refresh_subscription(url: str, force: bool = False):
         with lock:
             old = dict(subscriptions.get(url, {}))
         try:
-            login = jellyfin.login_for(url, load_json(JELLYFIN_FILE))
+            logins, problem = jellyfin.read_logins(JELLYFIN_FILE)
+            login = jellyfin.login_for(url, logins)
             if login is not None:
                 fresh = jellyfin.fetch(url, login)
             else:
@@ -238,12 +239,11 @@ def refresh_subscription(url: str, force: bool = False):
                     fresh = feeds.fetch(feed_url, *(() if force else (old.get("etag"), old.get("modified"))))
                 except feeds.FeedError as e:
                     if jellyfin.is_jellyfin(url):
-                        raise feeds.FeedError(f"{url} is a Jellyfin server: add your login for it to jellyfin.json "
-                                              "in the data directory") from e
+                        raise feeds.FeedError(jellyfin.missing_login(url, logins, problem, JELLYFIN_FILE)) from e
                     raise
         except Exception as e:  # keep the old posts; show the error in the subscriptions list
             with lock:
-                subscriptions[url] = {**old, "error": str(e)[:300], "fetched": time.time()}
+                subscriptions[url] = {**old, "error": str(e)[:600], "fetched": time.time()}
             save_json(FEED_CACHE_FILE, subscriptions)
             return
         now = time.time()
@@ -591,7 +591,7 @@ def jellyfin_post(url: str) -> tuple[str, dict] | None:
     """(server, login) for a Jellyfin post in the feed, or None."""
     with lock:
         known = any(p["url"] == url and p.get("jellyfin") for s in subscriptions.values() for p in s.get("items", []))
-    login = jellyfin.login_for(url, load_json(JELLYFIN_FILE)) if known else None
+    login = jellyfin.login_for(url, jellyfin.read_logins(JELLYFIN_FILE)[0]) if known else None
     return (jellyfin.server_of(url), login) if login is not None else None
 
 
