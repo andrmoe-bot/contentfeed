@@ -13,8 +13,11 @@ channels and playlists, older videos than the feed lists are loaded once (see fe
 """
 
 import argparse
+import hashlib
 import json
+import re
 import threading
+import urllib.error
 import time
 from concurrent.futures import ThreadPoolExecutor
 from html.parser import HTMLParser
@@ -23,12 +26,13 @@ from pathlib import Path
 from urllib.parse import parse_qs, urljoin, urlparse
 
 import feeds
+import jellyfin
 import ranking
 
 ROOT = Path(__file__).resolve().parent  # code and pages; the server never writes here
 DEFAULT_DATA_DIR = ROOT / "data"
 # Data files; set_data_dir() points these into the data directory at startup.
-LINKS_FILE = FEEDS_FILE = CACHE_FILE = ADDED_FILE = FEED_CACHE_FILE = VIEWED_FILE = COLORS_FILE = SETTINGS_FILE = Path()
+LINKS_FILE = FEEDS_FILE = CACHE_FILE = ADDED_FILE = FEED_CACHE_FILE = VIEWED_FILE = COLORS_FILE = SETTINGS_FILE = JELLYFIN_FILE = Path()
 TEMPLATES = {
     "links.txt": """\
 # One link per line, optionally followed by tags: https://example.com music longread
@@ -39,6 +43,7 @@ TEMPLATES = {
 # Subscriptions: one per line, optionally followed by tags, like links.txt.
 # A line can be an RSS/Atom feed, or a page that has one: a YouTube channel (@handle, /channel/…)
 # or playlist, a subreddit, a blog, a Mastodon profile, and so on. Lines starting with # are ignored.
+# A Jellyfin server, or a library or series on one, needs its login in jellyfin.json; see the README.
 #
 # https://www.youtube.com/@veritasium science video
 # https://www.reddit.com/r/python programming
@@ -98,12 +103,12 @@ class MetaParser(HTMLParser):
 
 def set_data_dir(path: Path):
     """Use path for all data files, creating it and the starter lists if they don't exist yet."""
-    global LINKS_FILE, FEEDS_FILE, CACHE_FILE, ADDED_FILE, FEED_CACHE_FILE, VIEWED_FILE, COLORS_FILE, SETTINGS_FILE
+    global LINKS_FILE, FEEDS_FILE, CACHE_FILE, ADDED_FILE, FEED_CACHE_FILE, VIEWED_FILE, COLORS_FILE, SETTINGS_FILE, JELLYFIN_FILE
     path.mkdir(parents=True, exist_ok=True)
     LINKS_FILE, FEEDS_FILE = path / "links.txt", path / "feeds.txt"
     CACHE_FILE, ADDED_FILE, FEED_CACHE_FILE = path / "cache.json", path / "added.json", path / "feeds.json"
     VIEWED_FILE, COLORS_FILE = path / "viewed.json", path / "colors.json"
-    SETTINGS_FILE = path / "settings.json"
+    SETTINGS_FILE, JELLYFIN_FILE = path / "settings.json", path / "jellyfin.json"
     for name, text in TEMPLATES.items():
         if not (path / name).exists():
             (path / name).write_text(text, encoding="utf-8")
@@ -224,8 +229,18 @@ def refresh_subscription(url: str, force: bool = False):
         with lock:
             old = dict(subscriptions.get(url, {}))
         try:
-            feed_url = old.get("feed_url") or feeds.discover(url)
-            fresh = feeds.fetch(feed_url, *(() if force else (old.get("etag"), old.get("modified"))))
+            login = jellyfin.login_for(url, load_json(JELLYFIN_FILE))
+            if login is not None:
+                fresh = jellyfin.fetch(url, login)
+            else:
+                try:
+                    feed_url = old.get("feed_url") or feeds.discover(url)
+                    fresh = feeds.fetch(feed_url, *(() if force else (old.get("etag"), old.get("modified"))))
+                except feeds.FeedError as e:
+                    if jellyfin.is_jellyfin(url):
+                        raise feeds.FeedError(f"{url} is a Jellyfin server: add your login for it to jellyfin.json "
+                                              "in the data directory") from e
+                    raise
         except Exception as e:  # keep the old posts; show the error in the subscriptions list
             with lock:
                 subscriptions[url] = {**old, "error": str(e)[:300], "fetched": time.time()}
@@ -235,7 +250,11 @@ def refresh_subscription(url: str, force: bool = False):
         if fresh is None:  # not modified since last check
             entry = {**old, "fetched": now}
         else:
-            entry = {**old, **fresh, "items": merge_posts(old.get("items", []), fresh["items"], now)}
+            kept = old.get("items", [])
+            if fresh.get("complete"):  # the source lists everything it has, so posts missing from it are gone
+                current = {post_key(p) for p in fresh["items"]}
+                kept = [p for p in kept if post_key(p) in current]
+            entry = {**old, **fresh, "items": merge_posts(kept, fresh["items"], now)}
         entry.pop("error", None)
         with lock:
             subscriptions[url] = entry
@@ -468,15 +487,20 @@ def load_settings():
 
 def next_posts(subs) -> dict[str, str]:
     """For each subscription, the post published right after the one you opened most recently,
-    as {its url: the opened post's title}. Call with lock held."""
+    as {its url: the opened post's title}. Call with lock held. A subscription whose posts belong to
+    series, such as a Jellyfin server's TV shows, has a next post in each series, in episode order."""
     out = {}
     for sub_url in subs:
-        posts = subscriptions.get(sub_url, {}).get("items", [])  # newest first
-        opened = [(viewed[p["url"]], i) for i, p in enumerate(posts) if p["url"] in viewed]
-        if opened:
-            i = max(opened)[1]
-            if i > 0:
-                out.setdefault(posts[i - 1]["url"], posts[i]["title"] or posts[i]["url"])
+        series = {}
+        for p in subscriptions.get(sub_url, {}).get("items", []):  # newest first
+            series.setdefault(p.get("series"), []).append(p)
+        for posts in series.values():
+            posts.sort(key=lambda p: p.get("episode", []), reverse=True)  # last episode first; stable otherwise
+            opened = [(viewed[p["url"]], i) for i, p in enumerate(posts) if p["url"] in viewed]
+            if opened:
+                i = max(opened)[1]
+                if i > 0:
+                    out.setdefault(posts[i - 1]["url"], posts[i]["title"] or posts[i]["url"])
     return out
 
 
@@ -553,6 +577,52 @@ def add_link(line: str) -> bool:
     return True
 
 
+# Playing Jellyfin videos in the feed: the browser asks the feed server, which relays from Jellyfin with its
+# own login. Only videos of posts in the feed are relayed, and only the parts a player needs.
+RELAY = re.compile(r"^/jellyfin/([0-9a-f]{12})(/videos/([0-9a-f-]{32,36})/(?:stream|master\.m3u8|main\.m3u8|hls1/\w+/-?\d+\.(?:mp4|ts)))$",
+                   re.I)
+
+
+def relay_key(server: str) -> str:
+    return hashlib.sha256(server.encode()).hexdigest()[:12]
+
+
+def jellyfin_post(url: str) -> tuple[str, dict] | None:
+    """(server, login) for a Jellyfin post in the feed, or None."""
+    with lock:
+        known = any(p["url"] == url and p.get("jellyfin") for s in subscriptions.values() for p in s.get("items", []))
+    login = jellyfin.login_for(url, load_json(JELLYFIN_FILE)) if known else None
+    return (jellyfin.server_of(url), login) if login is not None else None
+
+
+def jellyfin_relay_target(key: str, item: str) -> tuple[str, dict] | None:
+    """(server, login) for a relay request, if item is a post in the feed on the server with that key."""
+    item = jellyfin.normal_id(item)
+    with lock:
+        urls = [p["url"] for s in subscriptions.values() for p in s.get("items", [])
+                if p.get("jellyfin") and jellyfin.normal_id(jellyfin.item_id(p["url"]) or "") == item]
+    for url in urls:
+        target = jellyfin_post(url)
+        if target and relay_key(target[0]) == key.lower():
+            return target
+    return None
+
+
+def jellyfin_play(url: str) -> dict:
+    """Where the browser can play a Jellyfin post: {"src": relay address, "hls": bool}, or {"error": …}."""
+    target = jellyfin_post(url)
+    if target is None:
+        return {"error": "not a Jellyfin post in the feed, or its server has no login in jellyfin.json"}
+    server, login = target
+    try:
+        path, hls = jellyfin.playback(url, login)
+    except urllib.error.HTTPError as e:
+        return {"error": f"HTTP {e.code} from Jellyfin"}
+    except (OSError, ValueError, KeyError, feeds.FeedError) as e:
+        return {"error": str(e)[:300]}
+    return {"src": f"/jellyfin/{relay_key(server)}{path}", "hls": hls}
+
+
 class Handler(BaseHTTPRequestHandler):
     def _send(self, code: int, body: bytes, ctype: str):
         self.send_response(code)
@@ -582,8 +652,41 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"subscriptions": subscription_status(), "interval_minutes": feed_interval / 60})
         elif path == "/api/settings":
             self._json(settings())
+        elif path == "/api/jellyfin/play":
+            result = jellyfin_play(parse_qs(parsed.query).get("url", [""])[0])
+            self._json(result, 400 if "error" in result else 200)
+        elif RELAY.match(path):
+            self._relay(RELAY.match(path), parsed.query)
         else:
             self._send(404, b"Not found", "text/plain")
+
+    def _relay(self, m, query: str):
+        """Pass on a Jellyfin video, playlist or segment, with byte ranges so the player can seek."""
+        target = jellyfin_relay_target(m.group(1), m.group(3))
+        if target is None:
+            return self._send(404, b"Not found", "text/plain")
+        server, login = target
+        headers = {"Range": self.headers["Range"]} if self.headers.get("Range") else {}
+        try:
+            r = jellyfin.stream(server, login, m.group(2) + (f"?{jellyfin.without_token(query)}" if query else ""), headers)
+        except urllib.error.HTTPError as e:
+            return self._send(e.code, f"HTTP {e.code} from Jellyfin".encode(), "text/plain")
+        except (OSError, feeds.FeedError) as e:
+            return self._send(502, f"couldn't reach Jellyfin: {e}".encode(), "text/plain")
+        with r:
+            ctype = r.headers.get("Content-Type", "application/octet-stream")
+            if m.group(2).endswith(".m3u8"):  # playlists name the next files with the token in them
+                return self._send(200, jellyfin.without_token(r.read(jellyfin.MAX_BYTES).decode()).encode(), ctype)
+            self.send_response(r.status)
+            for name in ("Content-Type", "Content-Length", "Content-Range", "Accept-Ranges"):
+                if r.headers.get(name):
+                    self.send_header(name, r.headers[name])
+            self.end_headers()
+            try:
+                while chunk := r.read(256 * 1024):
+                    self.wfile.write(chunk)
+            except (BrokenPipeError, ConnectionResetError):  # the player stopped or seeked elsewhere
+                pass
 
     def do_POST(self):
         path = urlparse(self.path).path
