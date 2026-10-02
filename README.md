@@ -90,8 +90,9 @@ re-fetches links and checks every subscription now.
 ## Viewed items
 
 Opening an item (clicking its link, middle-clicking it, or playing its video) records when you
-last viewed it. Scrolling past doesn't count. Nothing is hidden: for 30 days after you open an
-item, it ranks as if it were 100 days older (by default; see Ranking). The card says when you viewed it.
+last viewed it. Scrolling past doesn't count. Nothing is hidden: by default, items you've never
+opened get a 1000-point bonus, and an item you've opened gains 2 points per day since you opened it
+(see Ranking). The card says when you viewed it.
 
 Cards you open or color stay where they are until you reload the page, so nothing moves away
 while you're looking at it. Playing a video stops the one playing in another card.
@@ -101,7 +102,7 @@ while you're looking at it. Playing a video stops the one playing in another car
 Each card has three dots in its bottom corner: green, white and red. They don't have proper names
 yet; for now they change an item's score:
 
-- **green**: +20, as if it were 20 days newer
+- **green**: +20
 - **white**: the default, no change. Clicking white also marks the item viewed: a quick "seen it".
 - **red**: −100000, which puts it at the bottom, below everything else
 
@@ -115,10 +116,15 @@ the colors you picked), dates (when a post was published, or when a link was add
 last opened an item. A ranker returns reasons with points, such as
 `("tagged music", 2)`; the score is their sum. Click "Score" on any card to see its reasons.
 
-The default, `score`, starts from the item's age and adjusts it, one point per day:
+The default, `score`, weighs the item's age and how long ago you opened it, then adds bonuses
+and penalties. With the default settings:
 
-    score = −(age in days) + 20 if green + 10000 if next in its subscription
-            − 100000 if red − 100 if opened in the last 30 days
+    score = −1 × (age in days) + 2 × (days since you opened it)
+            + 1000 if never opened + 20 if green + 10000 if next in its subscription
+            − 100000 if red
+
+Days since you opened it only counts for items you've opened; items you've never opened get the
+"never opened" bonus instead. Ages and days are counted in whole days.
 
 "Next in its subscription" follows along with channels and playlists: in each subscription, the
 post published right after the one you opened most recently gets the bonus. Open episode 4 and

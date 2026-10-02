@@ -447,9 +447,12 @@ def save_settings(weights) -> str | None:
 
 def load_settings():
     weights = load_json(SETTINGS_FILE).get("weights")
-    if weights is None:
+    if not isinstance(weights, dict):
         return
-    try:  # settings saved by an older version may lack newer weights; they keep their defaults
+    # Settings saved by another version may lack newer weights, which keep their defaults, or have
+    # ones that no longer exist, which are dropped.
+    weights = {k: v for k, v in weights.items() if k in ranking.DEFAULT_WEIGHTS}
+    try:
         ranking.WEIGHTS.update(ranking.check_weights({**ranking.DEFAULT_WEIGHTS, **weights}))
     except ValueError as e:
         print(f"Ignoring {SETTINGS_FILE}: {e}")
