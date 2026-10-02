@@ -117,7 +117,14 @@ last opened an item. A ranker returns reasons with points, such as
 
 The default, `score`, starts from the item's age and adjusts it, one point per day:
 
-    score = −(age in days) + 20 if green − 100000 if red − 100 if opened in the last 30 days
+    score = −(age in days) + 20 if green + 10000 if next in its subscription
+            − 100000 if red − 100 if opened in the last 30 days
+
+"Next in its subscription" follows along with channels and playlists: in each subscription, the
+post published right after the one you opened most recently gets the bonus. Open episode 4 and
+episode 5 rises to the top, however old it is; open episode 5 and the bonus moves on to episode 6. This also works
+for older YouTube videos, which are in the channel's upload order. If you most recently opened a
+subscription's newest post, none of its posts get the bonus.
 
 Change the numbers on the Settings page (`/settings`, linked at the top of the feed); the feed
 uses them from its next update. The defaults are at the top of `ranking.py`. Equal scores are ordered newest first. The other ranker,

@@ -455,6 +455,20 @@ def load_settings():
         print(f"Ignoring {SETTINGS_FILE}: {e}")
 
 
+def next_posts(subs) -> dict[str, str]:
+    """For each subscription, the post published right after the one you opened most recently,
+    as {its url: the opened post's title}. Call with lock held."""
+    out = {}
+    for sub_url in subs:
+        posts = subscriptions.get(sub_url, {}).get("items", [])  # newest first
+        opened = [(viewed[p["url"]], i) for i, p in enumerate(posts) if p["url"] in viewed]
+        if opened:
+            i = max(opened)[1]
+            if i > 0:
+                out.setdefault(posts[i - 1]["url"], posts[i]["title"] or posts[i]["url"])
+    return out
+
+
 def feed(ranker: str, limit: int = MAX_ITEMS_SHOWN) -> dict:
     entries = read_entries()
     subs = read_entries(FEEDS_FILE)
@@ -472,6 +486,7 @@ def feed(ranker: str, limit: int = MAX_ITEMS_SHOWN) -> dict:
             for i, (url, tags) in enumerate(entries.items())
         ]
         seen = set(entries)
+        next_after = next_posts(subs)
         for sub_url, tags in subs.items():
             s = subscriptions.get(sub_url, {})
             for post in s.get("items", []):
@@ -484,7 +499,7 @@ def feed(ranker: str, limit: int = MAX_ITEMS_SHOWN) -> dict:
                     "added": post["first_seen"], "date": post["published"] or post["first_seen"], "position": -1,
                 })
         for item in items:
-            item.update(view_state(item["url"]))
+            item.update(view_state(item["url"]), next_after=next_after.get(item["url"]))
         n_pending = len(pending)
     if new:
         save_json(ADDED_FILE, added)
