@@ -17,8 +17,7 @@ Each item has its page metadata (url, title, description, domain, ...) plus thes
     last_viewed  unix time you last opened it, or None
     color        "green", "white" (the default) or "red", as you marked it on the page
 
-Hiding is separate from ranking: items you opened recently (server.py --hide-viewed and
---hide-green) and red items are ranked like the rest but only shown with "Show hidden" turned on.
+Nothing is hidden: items you've opened or marked red are scored down, not removed.
 
 Register a ranker with @ranker("name") and select it with `server.py --ranker name`, or try it
 without restarting via /api/feed?ranker=name.
@@ -32,7 +31,13 @@ from typing import Callable
 Reasons = list[tuple[str, float]]
 Ranker = Callable[[dict, float], Reasons]
 RANKERS: dict[str, Ranker] = {}
-DEFAULT = "chronological"
+DEFAULT = "score"
+
+# Points for the "score" ranker. One point is one day of age.
+GREEN = 20  # green items count as 20 days newer
+RED = -100000  # red items sink below everything else (about 270 years)
+VIEWED = -100  # opened in the last VIEWED_DAYS days: counts as 100 days older
+VIEWED_DAYS = 30
 
 
 def ranker(name: str):
@@ -47,6 +52,20 @@ def ranker(name: str):
 def chronological(item: dict, now: float) -> Reasons:
     """No rules: every item scores 0, so the feed is simply newest first."""
     return []
+
+
+@ranker("score")
+def score(item: dict, now: float) -> Reasons:
+    """Newest first, adjusted by color and by whether you opened the item recently."""
+    days = int((now - item["date"]) // 86400)  # whole days, so points don't change every second
+    reasons = [(f"{days} day{'s' if days != 1 else ''} old", -days)] if days > 0 else []
+    if item["color"] == "green":
+        reasons.append(("green", GREEN))
+    elif item["color"] == "red":
+        reasons.append(("red", RED))
+    if item["last_viewed"] and now - item["last_viewed"] < VIEWED_DAYS * 86400:
+        reasons.append((f"opened in the last {VIEWED_DAYS} days", VIEWED))
+    return reasons
 
 
 def rank(name: str, items: list[dict], now: float) -> list[dict]:

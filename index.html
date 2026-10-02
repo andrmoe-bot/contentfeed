@@ -39,9 +39,6 @@
   .dot.green { --dot: #16a34a; }
   .dot.white { --dot: var(--muted); --dot-fill: #fff; }
   .dot.red { --dot: #dc2626; }
-  article.is-hidden { opacity: .65; }
-  .toggle { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); cursor: pointer; }
-  .toggle input { flex: none; margin: 0; }
   .play::after {
     content: ""; position: absolute; inset: 50% auto auto 50%; width: 64px; height: 44px; transform: translate(-50%, -50%);
     border-radius: 12px; background: #e00 url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M9 7l8 5-8 5z' fill='white'/%3E%3C/svg%3E") center / 28px no-repeat;
@@ -54,7 +51,6 @@
     <h1>Content Feed</h1>
     <nav><a href="/subscriptions" id="subs-link">Subscriptions</a></nav>
     <span id="status"></span>
-    <label class="toggle" title="Also show items you opened recently, and red items"><input type="checkbox" id="show-viewed"> Show hidden <span id="hidden-count"></span></label>
   </div>
   <form class="bar" id="add">
     <input id="url" type="text" autocomplete="off" placeholder="Paste a link or feed, optionally followed by tags" required>
@@ -71,131 +67,52 @@
 <script>
 const feedEl = document.getElementById("feed");
 const statusEl = document.getElementById("status");
-const showViewedEl = document.getElementById("show-viewed");
 let items = [];
 const PAGE = 300;  // items per "Show more"
 let limit = PAGE;
 let pollTimer;
 const cards = new Map();  // url -> { key, el }: cards are reused while their content is unchanged
-// Opened items kept on the page although they're now viewed: the one you opened last, plus any
-// brought back with the browser's Back button. Opening something hides the others right away.
-const openedHere = new Set();
+// Cards you opened or colored on this page stay where they are until you reload it, even though
+// their score has changed, so nothing moves away under you.
+const stay = new Set();
+let shown = [];  // items as last shown
+let playing = null;  // url of the video playing on this page
 
-const VIEW_FIELDS = ["color", "last_viewed", "hidden", "returns"];
-// How long each color keeps an opened item hidden, from the server: e.g. { green: "for 3 days", ... }
-let hideTimes = {};
+const VIEW_FIELDS = ["color", "last_viewed"];
 const contentKey = (item) => JSON.stringify(item, (k, v) => (VIEW_FIELDS.includes(k) ? undefined : v));
-
-function until(unix) {
-  const days = Math.ceil((unix - Date.now() / 1000) / 86400);
-  if (days > 1) return `back in ${days} days`;
-  const hours = Math.ceil((unix - Date.now() / 1000) / 3600);
-  return hours > 1 ? `back in ${hours} hours` : "back within the hour";
-}
 
 async function post(path, body) {
   return fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), keepalive: true });
 }
 
-// Run change() without moving elem on screen, e.g. when cards above it are hidden or brought back.
-// The browser's own scroll anchoring is paused meanwhile, so it doesn't adjust a second time.
-function keepInPlace(elem, change) {
-  const root = document.documentElement;
-  const before = elem?.isConnected ? elem.getBoundingClientRect().top : null;
-  root.style.overflowAnchor = "none";
-  change();
-  if (before !== null && elem.isConnected) scrollBy(0, elem.getBoundingClientRect().top - before);
-  requestAnimationFrame(() => requestAnimationFrame(() => { root.style.overflowAnchor = ""; }));
-}
-
-let lastOpened = null;
-
-// Opening an item (its link, or playing its video) records it as viewed and hides what you opened before.
+// Opening an item (its link, or playing its video) records it as viewed.
 async function opened(item) {
-  lastOpened = item.url;
-  keepInPlace(cards.get(item.url)?.el, () => {
-    hideEarlier(item.url);
-    render();
-  });
+  stay.add(item.url);
+  item.last_viewed = Date.now() / 1000;
+  const c = cards.get(item.url);
+  if (c) showViewState(c.el, item);
   await post("/api/viewed", { url: item.url }).catch(() => {});
   load();
 }
 
-// Back and Forward: every time opening something hides earlier items, a history entry is added.
-// Back brings those items back; Forward hides them again. The steps are kept for this tab
-// (sessionStorage), so Back still works after a reload.
-history.scrollRestoration = "manual";  // we keep things in place ourselves; don't jump to a saved position
-let step = history.state?.step ?? 0;
-let hides = loadHides();  // step -> urls hidden at that step
-if (history.state?.step === undefined) history.replaceState({ step: 0 }, "");
-
-function loadHides() {
-  try { return JSON.parse(sessionStorage.getItem("hides")) || {}; } catch { return {}; }
-}
-
-function saveHides() {
-  try { sessionStorage.setItem("hides", JSON.stringify(hides)); } catch {}
-}
-
-function hideEarlier(url) {
-  const earlier = [...openedHere].filter((u) => u !== url);
-  openedHere.clear();
-  openedHere.add(url);
-  if (!earlier.length) return;
-  // Rebuild these cards if they're shown again, so a hidden video stops and comes back as a thumbnail.
-  for (const u of earlier) cards.delete(u);
-  addHideStep(earlier);
-}
-
-function addHideStep(urls) {
-  step += 1;
-  for (const k of Object.keys(hides)) if (+k >= step) delete hides[k];  // pushState drops Forward history too
-  hides[step] = urls;
-  saveHides();
-  history.pushState({ step }, "");
-}
-
-addEventListener("popstate", (e) => {
-  const target = e.state?.step ?? 0;
-  const restored = [];
-  keepInPlace(cards.get(lastOpened)?.el, () => {
-    for (; step > target; step--) {
-      for (const u of hides[step] || []) { openedHere.add(u); cards.delete(u); restored.push(u); }
-    }
-    for (; step < target; step++) {
-      for (const u of hides[step + 1] || []) { openedHere.delete(u); cards.delete(u); }
-    }
-    render();
-  });
-  // Make sure what Back brought back is on screen
-  cards.get(restored[0])?.el.scrollIntoView({ block: "nearest" });
-});
-
-// Colors don't have proper names yet. Green items come back sooner after you open them, white is
-// the default, and red items are hidden for good, even before you open them.
+// Colors don't have proper names yet. Green items rank higher, white is the default, and red
+// items sink to the bottom. The card's score details show the exact points.
 const COLORS = ["green", "white", "red"];
+const COLOR_TITLES = {
+  green: "Green: ranked higher",
+  white: "White (default): mark as viewed",
+  red: "Red: ranked at the bottom",
+};
 
-function colorTitle(color) {
-  if (color === "red") return "Red: don't show again";
-  if (color === "white") return hideTimes.white ? `White (default): mark as viewed, hidden ${hideTimes.white}` : "White (default): mark as viewed";
-  const name = "Green";
-  return hideTimes[color] ? `${name}: hidden ${hideTimes[color]} after you open it` : `${name}: shown again right after you open it`;
-}
-
-// White also marks the item viewed, so it's a quick "seen it". White and red hide the card right
-// away, and Back brings it back, like opening something. The item you have open stays put.
+// White also marks the item viewed, so it's a quick "seen it".
 async function setColor(item, color) {
   const seen = color === "white";
   if (item.color === color && !seen) return;
   item.color = color;
-  if ((seen || color === "red") && !openedHere.has(item.url)) {
-    addHideStep([item.url]);
-    item.hidden = true;
-    render();
-  } else {
-    const c = cards.get(item.url);
-    if (c) showViewState(c.el, item);  // show the new color right away
-  }
+  stay.add(item.url);
+  if (seen) item.last_viewed = Date.now() / 1000;
+  const c = cards.get(item.url);
+  if (c) showViewState(c.el, item);  // show the new color right away
   await post("/api/color", { url: item.url, color }).catch(() => {});
   if (seen) await post("/api/viewed", { url: item.url }).catch(() => {});
   load();
@@ -203,7 +120,7 @@ async function setColor(item, color) {
 
 function colorDots(item) {
   return el("span", { class: "dots", role: "group", "aria-label": "Color" }, ...COLORS.map((color) => {
-    const dot = el("button", { type: "button", class: `dot ${color}`, title: colorTitle(color), "aria-label": color, "aria-pressed": String(item.color === color) });
+    const dot = el("button", { type: "button", class: `dot ${color}`, title: COLOR_TITLES[color], "aria-label": color, "aria-pressed": String(item.color === color) });
     dot.addEventListener("click", () => setColor(item, color));
     return dot;
   }));
@@ -218,7 +135,10 @@ function youtube(item) {
       class: "media", allowfullscreen: "", allow: "autoplay; encrypted-media; picture-in-picture",
       src: `https://www.youtube-nocookie.com/embed/${encodeURIComponent(item.youtube)}?autoplay=1`,
     }));
-    opened(item);  // hides the previously opened item, which stops its video
+    // Stop the video playing in another card by turning it back into a thumbnail.
+    if (playing && playing !== item.url) cards.delete(playing);
+    playing = item.url;
+    opened(item);
   });
   return btn;
 }
@@ -256,20 +176,24 @@ function card(item) {
 
 // The color and last-viewed line change without rebuilding the card, so a playing video keeps playing.
 function showViewState(art, item) {
-  const line = art.querySelector(".viewed");
-  art.classList.toggle("is-hidden", item.hidden && !openedHere.has(item.url));
-  let text = "";
-  if (item.color === "red") text = item.last_viewed ? `Viewed ${ago(item.last_viewed)} · red, hidden for good` : "Red, hidden for good";
-  else if (item.last_viewed) {
-    text = `Viewed ${ago(item.last_viewed)}`;
-    if (item.hidden) text += item.returns ? ` · hidden, ${until(item.returns)}` : " · hidden for good";
-    else if (!openedHere.has(item.url)) text = `Last viewed ${ago(item.last_viewed)} · shown again`;
-  }
-  line.replaceChildren(el("span", {}, text), colorDots(item));
+  const text = item.last_viewed ? `Viewed ${ago(item.last_viewed)}` : "";
+  art.querySelector(".viewed").replaceChildren(el("span", {}, text), colorDots(item));
+}
+
+// The server's order, except that cards in stay keep the place they had, even when their new
+// score puts them below the items the server sent, like a card you just made red.
+function arrange(list) {
+  const byUrl = new Map([...shown.map((it) => [it.url, it]), ...list.map((it) => [it.url, it])]);
+  const kept = shown.map((it, i) => [it.url, i]).filter(([url]) => stay.has(url));
+  const keptUrls = new Set(kept.map(([url]) => url));
+  const out = list.filter((it) => !keptUrls.has(it.url));
+  for (const [url, i] of kept) out.splice(i, 0, byUrl.get(url));
+  return out;
 }
 
 function render() {
-  const list = items.filter((it) => !it.hidden || showViewedEl.checked || openedHere.has(it.url));
+  const list = arrange(items);
+  shown = list;
   const nodes = list.map((item) => {
     const key = contentKey(item);
     let c = cards.get(item.url);
@@ -280,12 +204,11 @@ function render() {
     showViewState(c.el, item);
     return c.el;
   });
-  const urls = new Set(items.map((it) => it.url));
+  const urls = new Set(list.map((it) => it.url));
   for (const url of cards.keys()) if (!urls.has(url)) cards.delete(url);
 
   if (!nodes.length) {
-    const text = items.length ? "You've viewed everything. Turn on “Show hidden” to see it again." : "Nothing here yet. Add a link or subscribe to a feed above.";
-    feedEl.replaceChildren(el("div", { class: "empty" }, text));
+    feedEl.replaceChildren(el("div", { class: "empty" }, "Nothing here yet. Add a link or subscribe to a feed above."));
     return;
   }
   // Only move cards that are out of place: moving a card with a playing video would restart it.
@@ -317,17 +240,12 @@ async function load() {
     const res = await fetch(`/api/feed?limit=${limit}`);
     const data = await res.json();
     items = data.items;
-    hideTimes = data.colors;
     render();
-    const visible = items.filter((it) => !it.hidden).length;
-    const shown = data.total > visible ? `top ${visible} of ${data.total}` : `${data.total}`;
-    const green = data.colors.green && data.colors.green !== data.hide_viewed ? ` (green ${data.colors.green.replace(/^for /, "")})` : "";
-    const hiding = data.hide_viewed ? ` · viewed items hidden ${data.hide_viewed}${green}` : "";
-    statusEl.textContent = `${shown} items${hiding} · ranked by ${data.ranker}` + (data.pending ? ` · fetching ${data.pending}…` : "");
+    const count = data.total > items.length ? `top ${items.length} of ${data.total}` : `${data.total}`;
+    statusEl.textContent = `${count} items · ranked by ${data.ranker}` + (data.pending ? ` · fetching ${data.pending}…` : "");
     const more = document.getElementById("more");
-    more.hidden = data.total <= visible;
-    more.textContent = `Show ${Math.min(PAGE, data.total - visible)} more (${data.total - visible} not shown)`;
-    document.getElementById("hidden-count").textContent = data.hidden ? `(${data.hidden})` : "";
+    more.hidden = data.total <= items.length;
+    more.textContent = `Show ${Math.min(PAGE, data.total - items.length)} more (${data.total - items.length} not shown)`;
     pollTimer = setTimeout(load, data.pending ? 1500 : 30000);
   } catch {
     statusEl.textContent = "Server unreachable";
@@ -370,8 +288,6 @@ async function loadSubscriptionCount() {
   const { subscriptions } = await (await fetch("/api/subscriptions")).json();
   document.getElementById("subs-link").textContent = `Subscriptions (${subscriptions.length})`;
 }
-
-showViewedEl.addEventListener("change", render);
 
 loadSubscriptionCount();
 load();
