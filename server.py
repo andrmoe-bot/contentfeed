@@ -8,7 +8,8 @@ starting with "#" are comments. They are created with instructions on first run.
 
 For each link the server fetches the page once and extracts title, description, image and site
 name from OpenGraph / HTML metadata (cached in cache.json). Subscriptions are re-checked on a timer
-and their posts are cached in feeds.json.
+and their posts are kept in feeds.json, including posts that have since left the feed. For YouTube
+channels and playlists, older videos than the feed lists are loaded once (see feeds.older_videos).
 """
 
 import argparse
@@ -53,7 +54,9 @@ PAGES = {  # request path -> (file, content type)
     "/common.js": ("common.js", "text/javascript; charset=utf-8"),
 }
 MAX_BYTES = 1_000_000
-MAX_ITEMS_SHOWN = 300
+MAX_ITEMS_SHOWN = 300  # per page of the feed; "Show more" asks for the next page
+MAX_POSTS_KEPT = 5000  # per subscription, newest first
+OLDER_RETRY = 6 * 3600  # seconds before trying again to load a channel's older videos after a failure
 
 lock = threading.Lock()
 cache: dict[str, dict] = {}
@@ -203,8 +206,22 @@ def schedule(url: str, force: bool = False):
     executor.submit(refresh, url)
 
 
+def post_key(post: dict) -> str:
+    return post.get("youtube") or post["url"]  # a YouTube short has two urls: /shorts/ID and /watch?v=ID
+
+
+def merge_posts(old: list[dict], new: list[dict], now: float) -> list[dict]:
+    """Old and new posts together, newest first. New posts replace old copies but keep first_seen."""
+    first_seen = {post_key(p): p.get("first_seen", now) for p in old}
+    merged = {post_key(p): p for p in old}
+    for p in new:
+        merged[post_key(p)] = {**p, "first_seen": first_seen.get(post_key(p), now)}
+    posts = sorted(merged.values(), key=lambda p: p["published"] or p["first_seen"], reverse=True)
+    return posts[:MAX_POSTS_KEPT]
+
+
 def refresh_subscription(url: str, force: bool = False):
-    """Check one subscription and merge its posts, keeping when each post was first seen."""
+    """Check one subscription and merge its posts, keeping posts that have left the feed."""
     try:
         with lock:
             old = dict(subscriptions.get(url, {}))
@@ -220,10 +237,7 @@ def refresh_subscription(url: str, force: bool = False):
         if fresh is None:  # not modified since last check
             entry = {**old, "fetched": now}
         else:
-            first_seen = {it["url"]: it.get("first_seen", now) for it in old.get("items", [])}
-            for it in fresh["items"]:
-                it["first_seen"] = first_seen.get(it["url"], now)
-            entry = fresh
+            entry = {**old, **fresh, "items": merge_posts(old.get("items", []), fresh["items"], now)}
         entry.pop("error", None)
         with lock:
             subscriptions[url] = entry
@@ -241,6 +255,48 @@ def schedule_subscription(url: str, force: bool = False):
             return
         pending.add(key)
     executor.submit(refresh_subscription, url, force)
+
+
+def load_older(url: str):
+    """Add the older videos of a YouTube subscription, beyond the ones its feed lists."""
+    try:
+        with lock:
+            feed_url = subscriptions.get(url, {}).get("feed_url")
+        try:
+            older = feeds.older_videos(feed_url)
+        except feeds.FeedError as e:
+            with lock:
+                if url in subscriptions:
+                    subscriptions[url]["older_error"] = {"error": str(e)[:300], "time": time.time()}
+            save_json(FEED_CACHE_FILE, subscriptions)
+            return
+        now = time.time()
+        with lock:
+            s = subscriptions.get(url)
+            if s is None or s.get("feed_url") != feed_url:  # unsubscribed meanwhile
+                return
+            known = {post_key(p) for p in s.get("items", [])}
+            # Posts already known came from the feed, with exact dates, so they win over these.
+            s["items"] = merge_posts(s.get("items", []), [p for p in older if post_key(p) not in known], now)
+            s["older_loaded"] = now
+            s.pop("older_error", None)
+        save_json(FEED_CACHE_FILE, subscriptions)
+    finally:
+        with lock:
+            pending.discard("older:" + url)
+
+
+def schedule_older(url: str):
+    """Load a YouTube subscription's older videos once, after its feed has been read."""
+    key = "older:" + url
+    with lock:
+        s = subscriptions.get(url, {})
+        failed = s.get("older_error", {}).get("time", 0)
+        if (key in pending or s.get("older_loaded") or not feeds.youtube_playlist_id(s.get("feed_url") or "")
+                or time.time() - failed < OLDER_RETRY):
+            return
+        pending.add(key)
+    executor.submit(load_older, url)
 
 
 def subscribe(line: str) -> str | None:
@@ -261,6 +317,7 @@ def subscribe(line: str) -> str | None:
         save_json(FEED_CACHE_FILE, subscriptions)
         return error
     append_line(FEEDS_FILE, url, clean_tags(tags))
+    schedule_older(url)
     return None
 
 
@@ -281,6 +338,8 @@ def subscription_status() -> list[dict]:
                 "latest": max(dates, default=None),
                 "fetched": s.get("fetched"),
                 "error": s.get("error"),
+                "older": "loading" if "older:" + url in pending else "loaded" if s.get("older_loaded") else None,
+                "older_error": s.get("older_error", {}).get("error"),
                 "checking": "feed:" + url in pending,
             })
     return status
@@ -328,6 +387,7 @@ def poll_subscriptions():
     while True:
         for url in read_entries(FEEDS_FILE):
             schedule_subscription(url)
+            schedule_older(url)
         time.sleep(60)
 
 
@@ -408,7 +468,7 @@ def set_color(url: str, color: str) -> bool:
     return True
 
 
-def feed(ranker: str) -> dict:
+def feed(ranker: str, limit: int = MAX_ITEMS_SHOWN) -> dict:
     entries = read_entries()
     subs = read_entries(FEEDS_FILE)
     for url in entries:
@@ -447,11 +507,11 @@ def feed(ranker: str) -> dict:
     for item in ranked:
         if item["hidden"]:
             n_hidden += 1
-            if n_hidden <= MAX_ITEMS_SHOWN:
+            if n_hidden <= limit:
                 shown.append(item)
         else:
             n_visible += 1
-            if n_visible <= MAX_ITEMS_SHOWN:
+            if n_visible <= limit:
                 shown.append(item)
     return {
         "items": shown,
@@ -501,10 +561,12 @@ class Handler(BaseHTTPRequestHandler):
             name, ctype = PAGES[path]
             self._send(200, (ROOT / name).read_bytes(), ctype)
         elif path == "/api/feed":
-            name = parse_qs(parsed.query).get("ranker", [self.server.ranker])[0]
+            query = parse_qs(parsed.query)
+            name = query.get("ranker", [self.server.ranker])[0]
             if name not in ranking.RANKERS:
                 return self._json({"error": f"unknown ranker; available: {sorted(ranking.RANKERS)}"}, 400)
-            self._json(feed(name))
+            limit = query.get("limit", [""])[0]
+            self._json(feed(name, max(int(limit), 1) if limit.isdigit() else MAX_ITEMS_SHOWN))
         elif path == "/api/subscriptions":
             self._json({"subscriptions": subscription_status(), "interval_minutes": feed_interval / 60})
         else:

@@ -19,6 +19,7 @@
   p { margin: 0; color: var(--muted); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
   .loading h2 { color: var(--muted); }
   .empty { text-align: center; color: var(--muted); padding: 48px 0; }
+  #more:not([hidden]) { display: block; margin: 0 auto 48px; }
   .tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
   .tags span { font-size: 12px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); }
   .why { padding: 0 16px 10px; color: var(--muted); font-size: 13px; }
@@ -64,6 +65,7 @@
   </form>
 </header>
 <main id="feed"></main>
+<button type="button" id="more" hidden></button>
 
 <script src="/common.js"></script>
 <script>
@@ -71,6 +73,8 @@ const feedEl = document.getElementById("feed");
 const statusEl = document.getElementById("status");
 const showViewedEl = document.getElementById("show-viewed");
 let items = [];
+const PAGE = 300;  // items per "Show more"
+let limit = PAGE;
 let pollTimer;
 const cards = new Map();  // url -> { key, el }: cards are reused while their content is unchanged
 // Opened items kept on the page although they're now viewed: the one you opened last, plus any
@@ -231,7 +235,8 @@ function card(item) {
   const icon = item.icon ? el("img", { src: item.icon, alt: "" }) : null;
   if (icon) icon.onerror = () => icon.remove();
   const source = item.kind === "subscription" ? item.feed : item.site || domain;
-  const when = item.kind === "subscription" ? ago(item.date) : `added ${ago(item.date)}`;
+  // Older YouTube videos only have dates like "3 years ago", so theirs are approximate.
+  const when = item.kind === "link" ? `added ${ago(item.date)}` : item.date_approx ? `about ${ago(item.date)}` : ago(item.date);
 
   const body = el("div", { class: "body" },
     el("div", { class: "source" }, icon, `${source} · ${when}`),
@@ -309,7 +314,7 @@ function why(item) {
 async function load() {
   clearTimeout(pollTimer);
   try {
-    const res = await fetch("/api/feed");
+    const res = await fetch(`/api/feed?limit=${limit}`);
     const data = await res.json();
     items = data.items;
     hideTimes = data.colors;
@@ -319,6 +324,9 @@ async function load() {
     const green = data.colors.green && data.colors.green !== data.hide_viewed ? ` (green ${data.colors.green.replace(/^for /, "")})` : "";
     const hiding = data.hide_viewed ? ` · viewed items hidden ${data.hide_viewed}${green}` : "";
     statusEl.textContent = `${shown} items${hiding} · ranked by ${data.ranker}` + (data.pending ? ` · fetching ${data.pending}…` : "");
+    const more = document.getElementById("more");
+    more.hidden = data.total <= visible;
+    more.textContent = `Show ${Math.min(PAGE, data.total - visible)} more (${data.total - visible} not shown)`;
     document.getElementById("hidden-count").textContent = data.hidden ? `(${data.hidden})` : "";
     pollTimer = setTimeout(load, data.pending ? 1500 : 30000);
   } catch {
@@ -326,6 +334,12 @@ async function load() {
     pollTimer = setTimeout(load, 5000);
   }
 }
+
+document.getElementById("more").addEventListener("click", (e) => {
+  limit += PAGE;
+  e.target.disabled = true;
+  load().finally(() => { e.target.disabled = false; });
+});
 
 document.getElementById("add").addEventListener("submit", async (e) => {
   e.preventDefault();

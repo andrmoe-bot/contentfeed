@@ -4,6 +4,7 @@ A subscription can be given as the feed itself or as a page that has one: a YouT
 handle or playlist, a subreddit, a blog, a Mastodon profile, and so on.
 """
 
+import json
 import re
 import time
 import urllib.error
@@ -18,6 +19,7 @@ USER_AGENT = "Mozilla/5.0 (compatible; ContentFeed/1.0)"
 FETCH_TIMEOUT = 10
 MAX_FEED_BYTES = 5_000_000
 MAX_ITEMS_PER_FEED = 50
+MAX_OLDER_VIDEOS = 3000  # per YouTube channel or playlist, see older_videos()
 FEED_TYPES = ("application/rss+xml", "application/atom+xml", "application/feed+xml", "application/rdf+xml")
 
 
@@ -266,3 +268,96 @@ def parse(body: bytes, base_url: str) -> dict:
         "items": items[:MAX_ITEMS_PER_FEED],
         "fetched": time.time(),
     }
+
+
+# Older YouTube videos. A channel's feed lists only its latest 15 videos, so the rest are read from the
+# playlist page's inline data and its "load more" requests: YouTube's own, undocumented page data,
+# which needs no key but may change. It gives upload dates only as "3 years ago", so dates are approximate.
+
+AGO_UNITS = {"second": 1, "minute": 60, "hour": 3600, "day": 86400, "week": 7 * 86400, "month": 30 * 86400, "year": 365 * 86400}
+YT_DATA = re.compile(r"var ytInitialData = (\{.*?\});</script>", re.S)
+YT_VERSION = re.compile(r'"INNERTUBE_CLIENT_VERSION":"([^"]+)"')
+
+
+def youtube_playlist_id(feed_url: str) -> str | None:
+    """The playlist holding everything a YouTube feed covers: a channel's uploads ("UU..."), or the playlist."""
+    p = urlparse(feed_url)
+    if p.netloc.lower().removeprefix("www.") != "youtube.com" or p.path != "/feeds/videos.xml":
+        return None
+    q = parse_qs(p.query)
+    if "channel_id" in q and q["channel_id"][0].startswith("UC"):
+        return "UU" + q["channel_id"][0][2:]
+    return q.get("playlist_id", [None])[0]
+
+
+def find_all(obj, key: str):
+    """Every value stored under key, anywhere in nested JSON."""
+    if isinstance(obj, dict):
+        if key in obj:
+            yield obj[key]
+        for v in obj.values():
+            yield from find_all(v, key)
+    elif isinstance(obj, list):
+        for v in obj:
+            yield from find_all(v, key)
+
+
+def parse_ago(text: str, now: float) -> float | None:
+    m = re.search(r"(\d+)\s+(second|minute|hour|day|week|month|year)s?\s+ago", text or "")
+    return now - int(m.group(1)) * AGO_UNITS[m.group(2)] if m else None
+
+
+def videos_on_page(data) -> tuple[list[dict], str | None]:
+    """The videos in a playlist page or continuation response, and the token for the next batch."""
+    videos = []
+    for lockup in find_all(data, "lockupViewModel"):
+        vid = lockup.get("contentId")
+        if lockup.get("contentType") != "LOCKUP_CONTENT_TYPE_VIDEO" or not vid:
+            continue
+        meta = lockup.get("metadata", {})
+        title = next(find_all(meta, "title"), {}).get("content", "")
+        labels = [p.get("accessibilityLabel", "") for p in find_all(meta, "metadataParts") for p in p]
+        videos.append({"id": vid, "title": title, "ago": next((l for l in labels if l.endswith(" ago")), "")})
+    token = next((c["token"] for c in find_all(data, "continuationCommand") if isinstance(c, dict) and "token" in c), None)
+    return videos, token
+
+
+def older_videos(feed_url: str, limit: int = MAX_OLDER_VIDEOS) -> list[dict]:
+    """All videos of a YouTube channel or playlist feed, newest first, as feed items with approximate dates."""
+    playlist = youtube_playlist_id(feed_url)
+    if not playlist:
+        return []
+    try:
+        with open_url(f"https://www.youtube.com/playlist?list={playlist}&hl=en", "text/html") as r:
+            page = r.read(MAX_FEED_BYTES * 2).decode("utf-8", errors="replace")
+        data, version = YT_DATA.search(page), YT_VERSION.search(page)
+        if not data or not version:
+            raise FeedError("couldn't load older videos: YouTube's playlist page has changed")
+        videos, token = videos_on_page(json.loads(data.group(1)))
+        while token and len(videos) < limit:
+            body = {"context": {"client": {"clientName": "WEB", "clientVersion": version.group(1), "hl": "en"}}, "continuation": token}
+            req = urllib.request.Request(
+                "https://www.youtube.com/youtubei/v1/browse?prettyPrint=false", data=json.dumps(body).encode(),
+                headers={"User-Agent": USER_AGENT, "Content-Type": "application/json", "Cookie": "SOCS=CAI"})
+            with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT) as r:
+                more, token = videos_on_page(json.loads(r.read(MAX_FEED_BYTES)))
+            if not more:
+                break
+            videos += more
+    except (OSError, ValueError) as e:  # network errors, HTTP errors, bad JSON
+        raise FeedError(f"couldn't load older videos: {e}") from e
+    now = time.time()
+    items, date = [], now
+    for v in videos[:limit]:
+        # Keep the playlist's order even where several videos share an "ago", such as "3 years ago".
+        date = min(parse_ago(v["ago"], now) or date, date - 1)
+        items.append({
+            "url": f"https://www.youtube.com/watch?v={v['id']}",
+            "title": v["title"][:300] or v["id"],
+            "description": "",
+            "image": f"https://i.ytimg.com/vi/{v['id']}/hqdefault.jpg",
+            "youtube": v["id"],
+            "published": date,
+            "date_approx": True,
+        })
+    return items
