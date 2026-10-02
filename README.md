@@ -15,8 +15,13 @@ printed address from any device on the network.
 
 ## Your data
 
-Everything personal is kept in the data directory (`--data-dir`, default `data/` next to
-`server.py`), never in the code, and `data/` is git-ignored:
+Everything personal is kept in the data directory, never in the code. Where that is depends on
+how you run the feed:
+
+- as the systemd service (see Run as a service): `/var/lib/contentfeed`
+- with `python3 server.py`: `data/` next to `server.py` (git-ignored), or the folder given with `--data-dir`
+
+It holds:
 
 - `links.txt` and `feeds.txt`: your links and subscriptions (created with instructions on first run)
 - `added.json`: when each link or post was first seen
@@ -93,7 +98,8 @@ re-fetches links and checks every subscription now.
 ## Jellyfin
 
 You can subscribe to the movies and TV episodes on a [Jellyfin](https://jellyfin.org) server. First
-add a login for the server to `jellyfin.json` in the data directory (create it if it isn't there).
+add a login for the server to `jellyfin.json` in the data directory (`/var/lib/contentfeed` for the
+service; create the file if it isn't there).
 The key is the server's address, the same as in the browser up to `/web`:
 
     {"https://jellyfin.example": {"username": "me", "password": "…"}}
