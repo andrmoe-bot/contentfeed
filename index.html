@@ -78,7 +78,9 @@ const stay = new Set();
 let shown = [];  // items as last shown
 let playing = null;  // url of the video playing on this page
 
-const VIEW_FIELDS = ["color", "last_viewed"];
+// Fields that change when you open or color an item. They're updated in place, not by rebuilding
+// the card, so a video you just started keeps playing.
+const VIEW_FIELDS = ["color", "last_viewed", "score", "reasons"];
 const contentKey = (item) => JSON.stringify(item, (k, v) => (VIEW_FIELDS.includes(k) ? undefined : v));
 
 async function post(path, body) {
@@ -174,10 +176,14 @@ function card(item) {
   return art;
 }
 
-// The color and last-viewed line change without rebuilding the card, so a playing video keeps playing.
+// The score, color and last-viewed line change without rebuilding the card, so a playing video keeps playing.
 function showViewState(art, item) {
   const text = item.last_viewed ? `Viewed ${ago(item.last_viewed)}` : "";
   art.querySelector(".viewed").replaceChildren(el("span", {}, text), colorDots(item));
+  const old = art.querySelector(".why"), details = why(item);
+  if (old.outerHTML === details.outerHTML) return;
+  details.open = old.open;
+  old.replaceWith(details);
 }
 
 // The server's order, except that cards in stay keep the place they had, even when their new
@@ -212,6 +218,9 @@ function render() {
     return;
   }
   // Only move cards that are out of place: moving a card with a playing video would restart it.
+  // Cards that are going away (or being rebuilt) are removed first, so the cards after them don't move.
+  const keep = new Set(nodes);
+  for (const child of [...feedEl.children]) if (!keep.has(child)) child.remove();
   nodes.forEach((node, i) => {
     if (feedEl.children[i] !== node) feedEl.insertBefore(node, feedEl.children[i] || null);
   });
