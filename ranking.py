@@ -18,6 +18,7 @@ Each item has its page metadata (url, title, description, domain, ...) plus thes
     color        "green", "white" (the default) or "red", as you marked it on the page
     next_after   for a post: the title of the post you opened most recently in its subscription,
                  if this post was published right after that one ("what's next"); otherwise None
+    sub_last_viewed  for a post: unix time you last opened any post in its subscription, or None
 
 Nothing is hidden: items you've opened or marked red are scored differently, not removed.
 
@@ -35,19 +36,20 @@ Ranker = Callable[[dict, float], Reasons]
 RANKERS: dict[str, Ranker] = {}
 DEFAULT = "score"
 
-# Settings for the "score" ranker. Age and days since you last opened an item are multiplied by
-# their weights; the rest are points added or taken away. These are the defaults; you can change
+# Settings for the "score" ranker. Age, days since you last opened an item and days since you last
+# opened anything in its subscription are multiplied by their weights; the rest are points added or taken away. These are the defaults; you can change
 # them on the Settings page (/settings), and server.py keeps your values in settings.json.
 DEFAULT_WEIGHTS = {
     "age_weight": -1,  # points per day since the item was published (or added)
     "seen_weight": 2,  # points per day since you last opened it; items you never opened get never_seen_bonus
+    "sub_seen_weight": 10,  # points per day since you last opened any post in the item's subscription
     "never_seen_bonus": 1000,
     "green_bonus": 20,
     "red_penalty": 100000,  # red items sink below everything else
     "next_bonus": 10000,  # the post after the one you last opened in a subscription rises above anything not red
 }
 WEIGHTS = dict(DEFAULT_WEIGHTS)
-SIGNED = {"age_weight", "seen_weight"}  # may be negative; the others are amounts added or taken away
+SIGNED = {"age_weight", "seen_weight", "sub_seen_weight"}  # may be negative; the others are amounts added or taken away
 LIMIT = 10_000_000
 
 
@@ -66,6 +68,10 @@ def check_weights(weights: dict) -> dict:
 
 def days_label(days: int) -> str:
     return f"{days} day{'s' if days != 1 else ''}"
+
+
+def short(title: str) -> str:
+    return title if len(title) <= 60 else title[:59] + "…"
 
 
 def points(x: float) -> float:
@@ -88,8 +94,8 @@ def chronological(item: dict, now: float) -> Reasons:
 
 @ranker("score")
 def score(item: dict, now: float) -> Reasons:
-    """Weighted age and days since you last opened the item, adjusted by color and by whether
-    it's next in a subscription you're following along."""
+    """Weighted age, days since you last opened the item and days since you last opened anything in
+    its subscription, adjusted by color and by whether it's next in a subscription you're following along."""
     w = WEIGHTS
     days = int((now - item["date"]) // 86400)  # whole days, so points don't change every second
     reasons = [(f"{days_label(days)} old", points(w["age_weight"] * days))] if days > 0 and w["age_weight"] else []
@@ -100,14 +106,17 @@ def score(item: dict, now: float) -> Reasons:
         seen = int((now - item["last_viewed"]) // 86400)
         if seen > 0 and w["seen_weight"]:
             reasons.append((f"opened {days_label(seen)} ago", points(w["seen_weight"] * seen)))
+    if item.get("sub_last_viewed") is not None:
+        sub_seen = int((now - item["sub_last_viewed"]) // 86400)
+        if sub_seen > 0 and w["sub_seen_weight"]:
+            label = f"opened something from “{short(item['feed'])}” {days_label(sub_seen)} ago"
+            reasons.append((label, points(w["sub_seen_weight"] * sub_seen)))
     if item["color"] == "green" and w["green_bonus"]:
         reasons.append(("green", w["green_bonus"]))
     elif item["color"] == "red" and w["red_penalty"]:
         reasons.append(("red", -w["red_penalty"]))
     if item.get("next_after") and w["next_bonus"]:
-        title = item["next_after"]
-        title = title if len(title) <= 60 else title[:59] + "…"
-        reasons.append((f"next after “{title}”", w["next_bonus"]))
+        reasons.append((f"next after “{short(item['next_after'])}”", w["next_bonus"]))
     return reasons
 
 

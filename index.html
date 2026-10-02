@@ -80,7 +80,7 @@ let playing = null;  // url of the video playing on this page
 
 // Fields that change when you open or color an item. They're updated in place, not by rebuilding
 // the card, so a video you just started keeps playing.
-const VIEW_FIELDS = ["color", "last_viewed", "next_after", "score", "reasons"];
+const VIEW_FIELDS = ["color", "last_viewed", "next_after", "sub_last_viewed", "score", "reasons"];
 const contentKey = (item) => JSON.stringify(item, (k, v) => (VIEW_FIELDS.includes(k) ? undefined : v));
 
 async function post(path, body) {

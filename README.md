@@ -116,15 +116,19 @@ the colors you picked), dates (when a post was published, or when a link was add
 last opened an item. A ranker returns reasons with points, such as
 `("tagged music", 2)`; the score is their sum. Click "Score" on any card to see its reasons.
 
-The default, `score`, weighs the item's age and how long ago you opened it, then adds bonuses
-and penalties. With the default settings:
+The default, `score`, weighs the item's age, how long ago you opened it and how long ago you
+opened anything in its subscription, then adds bonuses and penalties. With the default settings:
 
     score = −1 × (age in days) + 2 × (days since you opened it)
+            + 10 × (days since you opened anything in its subscription)
             + 1000 if never opened + 20 if green + 10000 if next in its subscription
             − 100000 if red
 
 Days since you opened it only counts for items you've opened; items you've never opened get the
-"never opened" bonus instead. Ages and days are counted in whole days.
+"never opened" bonus instead. Days since you opened anything in its subscription counts for
+posts from subscriptions you've opened at least one post of, and is the same for all of that
+subscription's posts: the longer you leave a channel, the higher its posts rise. Links and
+subscriptions you've never opened anything from don't get it. Ages and days are counted in whole days.
 
 "Next in its subscription" follows along with channels and playlists: in each subscription, the
 post published right after the one you opened most recently gets the bonus. Open episode 4 and

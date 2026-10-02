@@ -472,6 +472,16 @@ def next_posts(subs) -> dict[str, str]:
     return out
 
 
+def last_opened(subs) -> dict[str, float]:
+    """For each subscription you've opened a post of, when you last opened one. Call with lock held."""
+    out = {}
+    for sub_url in subs:
+        times = [viewed[p["url"]] for p in subscriptions.get(sub_url, {}).get("items", []) if p["url"] in viewed]
+        if times:
+            out[sub_url] = max(times)
+    return out
+
+
 def feed(ranker: str, limit: int = MAX_ITEMS_SHOWN) -> dict:
     entries = read_entries()
     subs = read_entries(FEEDS_FILE)
@@ -490,6 +500,7 @@ def feed(ranker: str, limit: int = MAX_ITEMS_SHOWN) -> dict:
         ]
         seen = set(entries)
         next_after = next_posts(subs)
+        sub_opened = last_opened(subs)
         for sub_url, tags in subs.items():
             s = subscriptions.get(sub_url, {})
             for post in s.get("items", []):
@@ -500,6 +511,7 @@ def feed(ranker: str, limit: int = MAX_ITEMS_SHOWN) -> dict:
                     **post, "kind": "subscription", "tags": tags, "feed": s["title"], "icon": s.get("icon"),
                     "domain": urlparse(post["url"]).netloc.removeprefix("www."),
                     "added": post["first_seen"], "date": post["published"] or post["first_seen"], "position": -1,
+                    "sub_last_viewed": sub_opened.get(sub_url),
                 })
         for item in items:
             item.update(view_state(item["url"]), next_after=next_after.get(item["url"]))

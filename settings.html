@@ -34,7 +34,7 @@
 <main>
   <form class="panel" id="weights" novalidate>
     <h2>Score</h2>
-    <p class="intro">The feed is sorted by score, highest first. A score adds up the points below: two weights
+    <p class="intro">The feed is sorted by score, highest first. A score adds up the points below: three weights
       multiplied by numbers of days, and bonuses and penalties added on top. Every card's “Score” details show the
       points it got.</p>
     <p class="formula" id="formula"></p>
@@ -46,8 +46,13 @@
     </div>
     <div class="row">
       <label for="seen_weight">Last opened weight</label>
-      <div class="fields"><span class="sign">×</span><input id="seen_weight" type="number" step="any" inputmode="decimal" required> points per day since opened</div>
+      <div class="fields"><span class="sign">×</span><input id="seen_weight" type="number" step="any" inputmode="decimal" required> points per day</div>
       <p class="hint">For items you've opened. Positive means an item you just opened sinks, and climbs back as days pass. Clicking white also counts as opening. <span data-default="seen_weight"></span></p>
+    </div>
+    <div class="row">
+      <label for="sub_seen_weight">Subscription last opened weight</label>
+      <div class="fields"><span class="sign">×</span><input id="sub_seen_weight" type="number" step="any" inputmode="decimal" required> points per day</div>
+      <p class="hint">Days since you opened any post in the item's subscription, the same for all its posts. Positive means subscriptions you've left alone rise. Not for links, or subscriptions you've never opened anything from. <span data-default="sub_seen_weight"></span></p>
     </div>
     <div class="row">
       <label for="never_seen_bonus">Never opened bonus</label>
@@ -81,8 +86,8 @@
 
 <script src="/common.js"></script>
 <script>
-const KEYS = ["age_weight", "seen_weight", "never_seen_bonus", "green_bonus", "next_bonus", "red_penalty"];
-const SIGNED = ["age_weight", "seen_weight"];  // may be negative; the others are amounts added or taken away
+const KEYS = ["age_weight", "seen_weight", "sub_seen_weight", "never_seen_bonus", "green_bonus", "next_bonus", "red_penalty"];
+const SIGNED = ["age_weight", "seen_weight", "sub_seen_weight"];  // may be negative; the others are amounts added or taken away
 const LIMIT = 10_000_000;
 const form = document.getElementById("weights");
 const inputs = Object.fromEntries(KEYS.map((k) => [k, document.getElementById(k)]));
@@ -112,6 +117,7 @@ function update() {
   }
   document.getElementById("formula").textContent =
     `score = ${fmt(w.age_weight)} × age in days${plus(w.seen_weight)} × days since you opened it` +
+    `${plus(w.sub_seen_weight)} × days since you opened anything in its subscription` +
     `${plus(w.never_seen_bonus)} if never opened${plus(w.green_bonus)} if green` +
     `${plus(w.next_bonus)} if next in its subscription − ${fmt(w.red_penalty)} if red`;
   const unopened = 10 * w.age_weight + w.never_seen_bonus;
