@@ -89,37 +89,34 @@ re-fetches links and checks every subscription now.
 ## Viewed items
 
 Opening an item (clicking its link, middle-clicking it, or playing its video) records when you
-last viewed it. Scrolling past doesn't count. After a reload, viewed items are hidden for 30 days,
-then they come back marked "shown again". Change the time with `--hide-viewed`: e.g. `12h`, `7d`,
-`2w`, `never` (stay hidden for good) or `0` (don't hide). For the service, add the option
-to `ExecStart` in the unit file.
+last viewed it. Scrolling past doesn't count. Nothing is hidden: for 30 days after you open an
+item, it ranks as if it were 100 days older (see Ranking). The card says when you viewed it.
 
-What you open stays on the page until you open something else, which hides it straight away (a
-playing video stops). The browser's Back button brings it back, and Forward hides it again; this
-keeps working after a reload in the same tab. "Show hidden" at the top brings all hidden items
-back, each saying when you viewed it and when it returns.
+Cards you open or color stay where they are until you reload the page, so nothing moves away
+while you're looking at it. Playing a video stops the one playing in another card.
 
 ## Colors
 
 Each card has three dots in its bottom corner: green, white and red. They don't have proper names
-yet; for now they decide how long an item stays hidden after you open it:
+yet; for now they change an item's score:
 
-- **green**: comes back sooner, after 3 days (change with `--hide-green`)
-- **white**: the default, the `--hide-viewed` time
-- **red**: don't show again. A red item is hidden straight away, even if you haven't opened it.
-
-An item keeps its color, so a green item keeps coming back every few days. Colors only affect
-hiding, not the order. Clicking a dot also marks the item viewed, so it's a quick way to hide
-something you've seen: the card goes away straight away, for that color's time. Back brings it
-back, or turn on "Show hidden" and pick another color.
+- **green**: +20, as if it were 20 days newer
+- **white**: the default, no change. Clicking white also marks the item viewed: a quick "seen it".
+- **red**: −100000, which puts it at the bottom, below everything else
 
 ## Ranking
 
 Feed order comes from a ranker in `ranking.py`. Rankers never learn from how you use the
-feed; they only use what you wrote (tags, which file or subscription an item came from, the site)
-and dates (when a post was published, or when a link was added). A ranker returns reasons with points, such as
+feed; they only use what you wrote (tags, which file or subscription an item came from, the site,
+the colors you picked), dates (when a post was published, or when a link was added) and when you
+last opened an item. A ranker returns reasons with points, such as
 `("tagged music", 2)`; the score is their sum. Click "Score" on any card to see its reasons.
 
-The default, `chronological`, has no rules: everything scores 0 and the newest item is first. To add another ranker, register a
+The default, `score`, starts from the item's age and adjusts it, one point per day:
+
+    score = −(age in days) + 20 if green − 100000 if red − 100 if opened in the last 30 days
+
+The numbers are at the top of `ranking.py`. Equal scores are ordered newest first. The other ranker,
+`chronological`, has no rules: everything scores 0 and the newest item is first. To add another ranker, register a
 function with `@ranker("name")`, then select it with `python3 server.py --ranker name`, or try
 it without a restart at `/api/feed?ranker=name`.
