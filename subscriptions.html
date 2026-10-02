@@ -79,7 +79,7 @@ function show(list) {
   render();
   // While a check is running, look again shortly so its result appears.
   clearTimeout(pollTimer);
-  if (subs.some((s) => s.checking)) pollTimer = setTimeout(load, 2000);
+  if (subs.some((s) => s.checking || s.older === "loading")) pollTimer = setTimeout(load, 2000);
 }
 
 async function load() {
@@ -117,7 +117,8 @@ function row(s) {
   if (icon) icon.onerror = () => icon.remove();
 
   const stats = s.checking ? "Checking…" : s.fetched
-    ? [`${s.posts} post${s.posts === 1 ? "" : "s"}`, s.latest ? `latest ${ago(s.latest)}` : null, `checked ${ago(s.fetched)}`].filter(Boolean).join(" · ")
+    ? [`${s.posts} post${s.posts === 1 ? "" : "s"}`, s.latest ? `latest ${ago(s.latest)}` : null, `checked ${ago(s.fetched)}`,
+       s.older === "loading" ? "loading older videos…" : null].filter(Boolean).join(" · ")
     : "Not checked yet";
 
   const addr = el("div", { class: "addr" }, el("a", { href: s.url, target: "_blank", rel: "noopener noreferrer" }, s.url));
@@ -160,6 +161,7 @@ function row(s) {
     addr,
     el("div", { class: "stats" }, stats),
     s.error ? el("div", { class: "error" }, `Last check failed: ${s.error}`) : null,
+    s.older_error ? el("div", { class: "error" }, `${s.older_error[0].toUpperCase()}${s.older_error.slice(1)}; trying again later.`) : null,
     tagForm,
     el("div", { class: "actions" }, checkBtn, removeBtn),
   );

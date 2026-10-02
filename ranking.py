@@ -9,6 +9,7 @@ Each item has its page metadata (url, title, description, domain, ...) plus thes
 
     kind         "link" (from links.txt) or "subscription" (a post from a feed in feeds.txt)
     date         unix time: when a link was added, or when a post was published
+    date_approx  True for older YouTube videos, whose date is only known as "3 years ago"
     added        unix time the server first saw the link or post
     tags         words written after the URL on its line in links.txt or feeds.txt, lowercased
     feed         the subscription's title (posts only)

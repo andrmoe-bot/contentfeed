@@ -63,8 +63,19 @@ A subscription can be an RSS or Atom feed, or a page that has one: a YouTube cha
 The server finds the feed, checks it every 30 minutes (`--feed-interval MINUTES`), and adds
 its posts to the feed.
 
+Posts stay in the feed after they drop out of the subscription's feed (up to 5000 per subscription).
+Feeds only list recent posts (a YouTube channel's feed has its latest 15 videos), so for YouTube
+channels and playlists the server also loads every older video once, right after subscribing. It
+reads them from YouTube's playlist page, which needs no API key but gives upload dates only as
+"3 years ago", so these videos show approximate dates ("about 3 years ago"). This uses YouTube's own
+page data rather than an official API, so it can break when YouTube changes its pages; the
+Subscriptions page then shows the error and the server tries again every 6 hours.
+
+The feed shows 300 items at a time; "Show more" at the bottom loads the next 300. Newest come first,
+so older videos are near the end.
+
 The Subscriptions page (`/subscriptions`, linked at the top of the feed) lists every subscription
-with its post count, latest post, last check and any error. From there you can subscribe, edit
+with its post count, latest post, last check and any errors. From there you can subscribe, edit
 tags, check a feed now and unsubscribe. Every change is written straight to `feeds.txt`, keeping
 your comments in it.
 
