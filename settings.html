@@ -45,6 +45,11 @@
       <p class="hint">For items you marked green. <span data-default="green_bonus"></span></p>
     </div>
     <div class="row">
+      <label for="next_bonus">Next in subscription bonus</label>
+      <div class="fields"><span class="sign">+</span><input id="next_bonus" type="number" min="0" step="any" inputmode="decimal" required> points</div>
+      <p class="hint">For the post published right after the one you opened most recently in the same subscription, so you can follow a channel or playlist in order. <span data-default="next_bonus"></span></p>
+    </div>
+    <div class="row">
       <label for="red_penalty">Red penalty</label>
       <div class="fields"><span class="sign">−</span><input id="red_penalty" type="number" min="0" step="any" inputmode="decimal" required> points</div>
       <p class="hint">For items you marked red. 100000 (about 270 years) puts them below everything else. <span data-default="red_penalty"></span></p>
@@ -71,7 +76,7 @@
 
 <script src="/common.js"></script>
 <script>
-const KEYS = ["green_bonus", "red_penalty", "viewed_penalty", "viewed_days"];
+const KEYS = ["green_bonus", "next_bonus", "red_penalty", "viewed_penalty", "viewed_days"];
 const form = document.getElementById("weights");
 const inputs = Object.fromEntries(KEYS.map((k) => [k, document.getElementById(k)]));
 let saved = {};
@@ -96,7 +101,7 @@ function update() {
     return;
   }
   document.getElementById("formula").textContent =
-    `score = −age in days + ${fmt(w.green_bonus)} if green − ${fmt(w.red_penalty)} if red − ${fmt(w.viewed_penalty)} if opened in the last ${fmt(w.viewed_days)} days`;
+    `score = −age in days + ${fmt(w.green_bonus)} if green + ${fmt(w.next_bonus)} if next in its subscription − ${fmt(w.red_penalty)} if red − ${fmt(w.viewed_penalty)} if opened in the last ${fmt(w.viewed_days)} days`;
   const opened = w.viewed_days > 1;
   const example = -10 - (opened ? w.viewed_penalty : 0);
   document.getElementById("example").textContent = opened

@@ -16,6 +16,8 @@ Each item has its page metadata (url, title, description, domain, ...) plus thes
     position     index in links.txt (0 = first line); -1 for posts
     last_viewed  unix time you last opened it, or None
     color        "green", "white" (the default) or "red", as you marked it on the page
+    next_after   for a post: the title of the post you opened most recently in its subscription,
+                 if this post was published right after that one ("what's next"); otherwise None
 
 Nothing is hidden: items you've opened or marked red are scored down, not removed.
 
@@ -40,6 +42,7 @@ DEFAULT_WEIGHTS = {
     "red_penalty": 100000,  # red items sink below everything else (about 270 years)
     "viewed_penalty": 100,  # items opened in the last viewed_days days count as 100 days older
     "viewed_days": 30,
+    "next_bonus": 10000,  # the post after the one you last opened in a subscription rises above anything not red
 }
 WEIGHTS = dict(DEFAULT_WEIGHTS)
 
@@ -72,7 +75,8 @@ def chronological(item: dict, now: float) -> Reasons:
 
 @ranker("score")
 def score(item: dict, now: float) -> Reasons:
-    """Newest first, adjusted by color and by whether you opened the item recently."""
+    """Newest first, adjusted by color, by whether you opened the item recently, and by whether it's
+    next in a subscription you're following along."""
     days = int((now - item["date"]) // 86400)  # whole days, so points don't change every second
     reasons = [(f"{days} day{'s' if days != 1 else ''} old", -days)] if days > 0 else []
     w = WEIGHTS
@@ -83,6 +87,10 @@ def score(item: dict, now: float) -> Reasons:
     days_viewed = w["viewed_days"]
     if item["last_viewed"] and w["viewed_penalty"] and now - item["last_viewed"] < days_viewed * 86400:
         reasons.append((f"opened in the last {days_viewed:g} day{'s' if days_viewed != 1 else ''}", -w["viewed_penalty"]))
+    if item.get("next_after") and w["next_bonus"]:
+        title = item["next_after"]
+        title = title if len(title) <= 60 else title[:59] + "…"
+        reasons.append((f"next after “{title}”", w["next_bonus"]))
     return reasons
 
 
