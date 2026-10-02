@@ -23,12 +23,13 @@ from pathlib import Path
 from urllib.parse import parse_qs, urljoin, urlparse
 
 import feeds
+import jellyfin
 import ranking
 
 ROOT = Path(__file__).resolve().parent  # code and pages; the server never writes here
 DEFAULT_DATA_DIR = ROOT / "data"
 # Data files; set_data_dir() points these into the data directory at startup.
-LINKS_FILE = FEEDS_FILE = CACHE_FILE = ADDED_FILE = FEED_CACHE_FILE = VIEWED_FILE = COLORS_FILE = SETTINGS_FILE = Path()
+LINKS_FILE = FEEDS_FILE = CACHE_FILE = ADDED_FILE = FEED_CACHE_FILE = VIEWED_FILE = COLORS_FILE = SETTINGS_FILE = JELLYFIN_FILE = Path()
 TEMPLATES = {
     "links.txt": """\
 # One link per line, optionally followed by tags: https://example.com music longread
@@ -39,6 +40,7 @@ TEMPLATES = {
 # Subscriptions: one per line, optionally followed by tags, like links.txt.
 # A line can be an RSS/Atom feed, or a page that has one: a YouTube channel (@handle, /channel/…)
 # or playlist, a subreddit, a blog, a Mastodon profile, and so on. Lines starting with # are ignored.
+# A Jellyfin server, or a library or series on one, needs its login in jellyfin.json; see the README.
 #
 # https://www.youtube.com/@veritasium science video
 # https://www.reddit.com/r/python programming
@@ -98,12 +100,12 @@ class MetaParser(HTMLParser):
 
 def set_data_dir(path: Path):
     """Use path for all data files, creating it and the starter lists if they don't exist yet."""
-    global LINKS_FILE, FEEDS_FILE, CACHE_FILE, ADDED_FILE, FEED_CACHE_FILE, VIEWED_FILE, COLORS_FILE, SETTINGS_FILE
+    global LINKS_FILE, FEEDS_FILE, CACHE_FILE, ADDED_FILE, FEED_CACHE_FILE, VIEWED_FILE, COLORS_FILE, SETTINGS_FILE, JELLYFIN_FILE
     path.mkdir(parents=True, exist_ok=True)
     LINKS_FILE, FEEDS_FILE = path / "links.txt", path / "feeds.txt"
     CACHE_FILE, ADDED_FILE, FEED_CACHE_FILE = path / "cache.json", path / "added.json", path / "feeds.json"
     VIEWED_FILE, COLORS_FILE = path / "viewed.json", path / "colors.json"
-    SETTINGS_FILE = path / "settings.json"
+    SETTINGS_FILE, JELLYFIN_FILE = path / "settings.json", path / "jellyfin.json"
     for name, text in TEMPLATES.items():
         if not (path / name).exists():
             (path / name).write_text(text, encoding="utf-8")
@@ -224,8 +226,18 @@ def refresh_subscription(url: str, force: bool = False):
         with lock:
             old = dict(subscriptions.get(url, {}))
         try:
-            feed_url = old.get("feed_url") or feeds.discover(url)
-            fresh = feeds.fetch(feed_url, *(() if force else (old.get("etag"), old.get("modified"))))
+            login = jellyfin.login_for(url, load_json(JELLYFIN_FILE))
+            if login is not None:
+                fresh = jellyfin.fetch(url, login)
+            else:
+                try:
+                    feed_url = old.get("feed_url") or feeds.discover(url)
+                    fresh = feeds.fetch(feed_url, *(() if force else (old.get("etag"), old.get("modified"))))
+                except feeds.FeedError as e:
+                    if jellyfin.is_jellyfin(url):
+                        raise feeds.FeedError(f"{url} is a Jellyfin server: add your login for it to jellyfin.json "
+                                              "in the data directory") from e
+                    raise
         except Exception as e:  # keep the old posts; show the error in the subscriptions list
             with lock:
                 subscriptions[url] = {**old, "error": str(e)[:300], "fetched": time.time()}
@@ -235,7 +247,11 @@ def refresh_subscription(url: str, force: bool = False):
         if fresh is None:  # not modified since last check
             entry = {**old, "fetched": now}
         else:
-            entry = {**old, **fresh, "items": merge_posts(old.get("items", []), fresh["items"], now)}
+            kept = old.get("items", [])
+            if fresh.get("complete"):  # the source lists everything it has, so posts missing from it are gone
+                current = {post_key(p) for p in fresh["items"]}
+                kept = [p for p in kept if post_key(p) in current]
+            entry = {**old, **fresh, "items": merge_posts(kept, fresh["items"], now)}
         entry.pop("error", None)
         with lock:
             subscriptions[url] = entry
@@ -468,15 +484,20 @@ def load_settings():
 
 def next_posts(subs) -> dict[str, str]:
     """For each subscription, the post published right after the one you opened most recently,
-    as {its url: the opened post's title}. Call with lock held."""
+    as {its url: the opened post's title}. Call with lock held. A subscription whose posts belong to
+    series, such as a Jellyfin server's TV shows, has a next post in each series, in episode order."""
     out = {}
     for sub_url in subs:
-        posts = subscriptions.get(sub_url, {}).get("items", [])  # newest first
-        opened = [(viewed[p["url"]], i) for i, p in enumerate(posts) if p["url"] in viewed]
-        if opened:
-            i = max(opened)[1]
-            if i > 0:
-                out.setdefault(posts[i - 1]["url"], posts[i]["title"] or posts[i]["url"])
+        series = {}
+        for p in subscriptions.get(sub_url, {}).get("items", []):  # newest first
+            series.setdefault(p.get("series"), []).append(p)
+        for posts in series.values():
+            posts.sort(key=lambda p: p.get("episode", []), reverse=True)  # last episode first; stable otherwise
+            opened = [(viewed[p["url"]], i) for i, p in enumerate(posts) if p["url"] in viewed]
+            if opened:
+                i = max(opened)[1]
+                if i > 0:
+                    out.setdefault(posts[i - 1]["url"], posts[i]["title"] or posts[i]["url"])
     return out
 
 

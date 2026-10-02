@@ -55,7 +55,7 @@
   <form class="bar" id="add">
     <input id="url" type="text" autocomplete="off" placeholder="Paste a link or feed, optionally followed by tags" required>
     <button class="primary" type="submit" value="link" title="Add this page to links.txt">Add link</button>
-    <button type="submit" value="subscribe" title="Follow a feed, YouTube channel, subreddit, blog… (feeds.txt)">Subscribe</button>
+    <button type="submit" value="subscribe" title="Follow a feed, YouTube channel, subreddit, blog, Jellyfin server… (feeds.txt)">Subscribe</button>
     <button type="button" id="refresh" title="Re-fetch every link and check every subscription now">Refresh all</button>
     <p id="message" role="status"></p>
   </form>
@@ -157,8 +157,10 @@ function card(item) {
   const icon = item.icon ? el("img", { src: item.icon, alt: "" }) : null;
   if (icon) icon.onerror = () => icon.remove();
   const source = item.kind === "subscription" ? item.feed : item.site || domain;
-  // Older YouTube videos only have dates like "3 years ago", so theirs are approximate.
-  const when = item.kind === "link" ? `added ${ago(item.date)}` : item.date_approx ? `about ${ago(item.date)}` : ago(item.date);
+  // Older YouTube videos only have dates like "3 years ago", so theirs are approximate. Jellyfin's are when
+  // the movie or episode was added to the server.
+  const when = item.kind === "link" || item.jellyfin ? `added ${ago(item.date)}`
+    : item.date_approx ? `about ${ago(item.date)}` : ago(item.date);
 
   const body = el("div", { class: "body" },
     el("div", { class: "source" }, icon, `${source} · ${when}`),
