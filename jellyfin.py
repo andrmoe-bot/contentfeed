@@ -162,12 +162,15 @@ def get(server: str, login: dict, path: str, params: dict, body: dict | None = N
 
 
 def image(server: str, item: dict) -> str | None:
-    """A wide picture for the card: the item's thumbnail or backdrop, or its poster, or its series'."""
+    """A wide picture for the card: the item's thumbnail or backdrop, or its poster, or its series' backdrop or poster."""
     tags = item.get("ImageTags", {})
     for kind in ("Thumb", "Primary") if item["Type"] == "Episode" else ("Thumb", "Backdrop", "Primary"):
         tag = (item.get("BackdropImageTags") or [None])[0] if kind == "Backdrop" else tags.get(kind)
         if tag:
             return f"{server}/Items/{item['Id']}/Images/{kind}?maxWidth=640&tag={tag}"
+    if item.get("ParentBackdropItemId") and item.get("ParentBackdropImageTags"):  # the series' backdrop
+        return (f"{server}/Items/{item['ParentBackdropItemId']}/Images/Backdrop?maxWidth=640"
+                f"&tag={item['ParentBackdropImageTags'][0]}")
     if item.get("SeriesId") and item.get("SeriesPrimaryImageTag"):
         return f"{server}/Items/{item['SeriesId']}/Images/Primary?maxWidth=640&tag={item['SeriesPrimaryImageTag']}"
     return None
