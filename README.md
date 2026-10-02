@@ -78,7 +78,9 @@ so older videos are near the end.
 The Subscriptions page (`/subscriptions`, linked at the top of the feed) lists every subscription
 with its post count, latest post, last check and any errors. From there you can subscribe, edit
 tags, check a feed now and unsubscribe. Every change is written straight to `feeds.txt`, keeping
-your comments in it.
+your comments in it. Unsubscribing also forgets which of its posts you opened or colored (unless a post is
+also in `links.txt` or another subscription), so subscribing again starts afresh. Removing a
+subscription by editing `feeds.txt` keeps that history.
 
 You can also add links and subscriptions (with tags) from the box at the top of the feed; they
 are appended to the files. To remove a link, edit `links.txt`. Changes to either file show up
