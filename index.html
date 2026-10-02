@@ -13,7 +13,8 @@
   .media { aspect-ratio: 16 / 9; background: var(--border); width: 100%; display: block; object-fit: cover; }
   iframe.media { border: 0; }
   video.media { background: #000; object-fit: contain; }
-  .unplayable { display: grid; place-items: center; padding: 16px; text-align: center; color: var(--muted); }
+  .unplayable { display: grid; place-content: center; gap: 6px; padding: 16px; text-align: center; color: var(--muted); }
+  .unplayable a { font-weight: 600; }
   .body { padding: 12px 16px 14px; }
   .source { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; }
   .source img { width: 16px; height: 16px; border-radius: 3px; }
@@ -148,10 +149,14 @@ function youtube(item) {
 }
 
 // Jellyfin: the same, with a video the feed server relays from Jellyfin. Files the browser can't play as they
-// are come converted to HLS.
+// are come converted to HLS. Items without a picture get none, so the card just links to Jellyfin, and
+// a video that can't play here says so and links there instead.
 function jellyfinVideo(item) {
-  const btn = el("button", { class: "play", type: "button", "aria-label": `Play ${item.title}` },
-    item.image ? el("img", { class: "media", loading: "lazy", alt: "", src: item.image }) : el("div", { class: "media" }));
+  const img = el("img", { class: "media", loading: "lazy", alt: "", src: item.image });
+  const btn = el("button", { class: "play", type: "button", "aria-label": `Play ${item.title}` }, img);
+  img.onerror = () => btn.remove();
+  const unplayable = (reason) => el("div", { class: "media unplayable" }, `Couldn't play this here: ${reason}.`,
+    el("a", { href: item.url, target: "_blank", rel: "noopener noreferrer" }, "Open in Jellyfin"));
   btn.addEventListener("click", async () => {
     if (playing && playing !== item.url) cards.delete(playing);
     playing = item.url;
@@ -160,11 +165,14 @@ function jellyfinVideo(item) {
     const data = res ? await res.json().catch(() => ({})) : { error: "the feed server didn't answer" };
     const video = el("video", { class: "media", controls: "", autoplay: "", playsinline: "" });
     if (data.src && (!data.hls || video.canPlayType("application/vnd.apple.mpegurl"))) {
+      // Such as Jellyfin failing to convert the video, or the browser failing to decode it
+      video.addEventListener("error", () => video.replaceWith(unplayable(
+        video.error?.code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED ? "Jellyfin couldn't send it in a format this browser plays"
+          : "playback failed")));
       video.src = data.src;
       btn.replaceWith(video);
     } else {
-      const reason = data.error || "this browser can't play Jellyfin's converted video; open it in Jellyfin below";
-      btn.replaceWith(el("div", { class: "media unplayable" }, `Couldn't play: ${reason}`));
+      btn.replaceWith(unplayable(data.error || "this browser can't play Jellyfin's converted video"));
     }
   });
   return btn;
@@ -175,7 +183,7 @@ function card(item) {
   const domain = item.domain || new URL(item.url).hostname;
   let media = null;
   if (item.youtube) media = youtube(item);
-  else if (item.jellyfin) media = jellyfinVideo(item);
+  else if (item.jellyfin && item.image) media = jellyfinVideo(item);
   else if (item.image) {
     media = el("img", { class: "media", loading: "lazy", alt: "", src: item.image });
     media.onerror = () => media.remove();

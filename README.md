@@ -126,7 +126,9 @@ The video comes through the feed server, which logs in for you, so your browser 
 login and never sees the password or token. Jellyfin converts files the browser can't play as they are
 (such as MKV or HEVC) to HLS, which Chromium-based browsers like Vivaldi play, but Firefox doesn't.
 The feed server only passes on videos of posts in the feed, but anyone who can open the feed can play
-them.
+them. Items without a picture have no play button, so the card just opens them in Jellyfin, and a video
+that can't play in the card (for example if Jellyfin fails to convert it) shows a link to open it in
+Jellyfin instead.
 
 "Next in its subscription" goes by series: open an episode and the
 next one in season and episode order gets the bonus. Movies don't get it. Whether you've watched
