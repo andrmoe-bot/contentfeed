@@ -98,6 +98,12 @@ The key is the server's address, the same as in the browser up to `/web`:
 
     {"https://jellyfin.example": {"username": "me", "password": "…"}}
 
+The address must match the one you subscribe to, including `http://` or `https://` and the port
+(for example `http://jellyfin.home.arpa:8096`). With the systemd service the file is
+`/var/lib/contentfeed/jellyfin.json`; if you create it as root, make it readable only by the service
+with `chown contentfeed: /var/lib/contentfeed/jellyfin.json && chmod 600 /var/lib/contentfeed/jellyfin.json`.
+If the feed can't use the file, subscribing says why.
+
 The feed sees what that user sees. A Jellyfin user just for the feed, without admin rights and with only
 the libraries you want, limits what the password stored here can do. Then subscribe to:
 
