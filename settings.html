@@ -52,12 +52,17 @@
     <div class="row">
       <label for="sub_seen_weight">Subscription last opened weight</label>
       <div class="fields"><span class="sign">×</span><input id="sub_seen_weight" type="number" step="any" inputmode="decimal" required> points per day</div>
-      <p class="hint">Days since you opened any post in the item's subscription, the same for all its posts. Positive means subscriptions you've left alone rise. Not for links, or subscriptions you've never opened anything from. <span data-default="sub_seen_weight"></span></p>
+      <p class="hint">Days since you opened any post in the item's subscription, the same for all its posts. Positive means subscriptions you've left alone rise. Not for links; subscriptions you've never opened anything from get the bonus below instead. <span data-default="sub_seen_weight"></span></p>
     </div>
     <div class="row">
       <label for="never_seen_bonus">Never opened bonus</label>
       <div class="fields"><span class="sign">+</span><input id="never_seen_bonus" type="number" min="0" step="any" inputmode="decimal" required> points</div>
       <p class="hint">For items you've never opened. <span data-default="never_seen_bonus"></span></p>
+    </div>
+    <div class="row">
+      <label for="sub_never_seen_bonus">Subscription never opened bonus</label>
+      <div class="fields"><span class="sign">+</span><input id="sub_never_seen_bonus" type="number" min="0" step="any" inputmode="decimal" required> points</div>
+      <p class="hint">For every post in a subscription you've never opened anything from, such as one you just subscribed to. <span data-default="sub_never_seen_bonus"></span></p>
     </div>
     <div class="row">
       <label for="green_bonus">Green bonus</label>
@@ -86,7 +91,7 @@
 
 <script src="/common.js"></script>
 <script>
-const KEYS = ["age_weight", "seen_weight", "sub_seen_weight", "never_seen_bonus", "green_bonus", "next_bonus", "red_penalty"];
+const KEYS = ["age_weight", "seen_weight", "sub_seen_weight", "never_seen_bonus", "sub_never_seen_bonus", "green_bonus", "next_bonus", "red_penalty"];
 const SIGNED = ["age_weight", "seen_weight", "sub_seen_weight"];  // may be negative; the others are amounts added or taken away
 const LIMIT = 10_000_000;
 const form = document.getElementById("weights");
@@ -118,7 +123,8 @@ function update() {
   document.getElementById("formula").textContent =
     `score = ${fmt(w.age_weight)} × age in days${plus(w.seen_weight)} × days since you opened it` +
     `${plus(w.sub_seen_weight)} × days since you opened anything in its subscription` +
-    `${plus(w.never_seen_bonus)} if never opened${plus(w.green_bonus)} if green` +
+    `${plus(w.never_seen_bonus)} if never opened${plus(w.sub_never_seen_bonus)} if nothing opened in its subscription` +
+    `${plus(w.green_bonus)} if green` +
     `${plus(w.next_bonus)} if next in its subscription − ${fmt(w.red_penalty)} if red`;
   const unopened = 10 * w.age_weight + w.never_seen_bonus;
   const opened = 10 * w.age_weight + 3 * w.seen_weight;
