@@ -13,6 +13,7 @@ import re
 import time
 import urllib.error
 import urllib.request
+from pathlib import Path
 from urllib.parse import parse_qs, quote, urlencode, urljoin, urlparse
 
 from feeds import FETCH_TIMEOUT, FeedError
@@ -42,7 +43,15 @@ def server_of(url: str) -> str:
     """The server's base address: everything before /web, without a trailing slash."""
     p = urlparse(url)
     path = re.split(r"/web(?:/|$)", p.path, maxsplit=1)[0].rstrip("/")
-    return f"{p.scheme}://{p.netloc}{path}"
+    return f"{p.scheme.lower()}://{p.netloc.lower()}{path}"
+
+
+def host_of(address: str) -> str | None:
+    """The host name in an address, even one written without http:// in front."""
+    try:
+        return urlparse(address if "://" in address else "//" + address).hostname
+    except ValueError:
+        return None
 
 
 def item_id(url: str) -> str | None:
@@ -56,6 +65,46 @@ def login_for(url: str, logins: dict) -> dict | None:
     """The login from jellyfin.json for the server url is on, or None if it isn't a Jellyfin server listed there."""
     server = server_of(url)
     return next((v for k, v in logins.items() if server_of(k) == server and isinstance(v, dict)), None)
+
+
+def read_logins(path: Path) -> tuple[dict, str | None]:
+    """The logins in jellyfin.json, and what's wrong with the file if it can't be used."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return {}, f"there's no {path}"
+    except (OSError, UnicodeDecodeError) as e:
+        return {}, f"couldn't read {path}: {getattr(e, 'strerror', None) or e}"
+    if not text.strip():
+        return {}, f"{path} is empty"
+    try:
+        logins = json.loads(text)
+    except json.JSONDecodeError as e:
+        return {}, f"{path} isn't valid JSON: {e.msg.lower()} at line {e.lineno}, column {e.colno}"
+    if not isinstance(logins, dict):
+        return {}, f"{path} should hold an object of server addresses, not a {type(logins).__name__}"
+    return logins, None
+
+
+def missing_login(url: str, logins: dict, problem: str | None, path: Path) -> str:
+    """Why there's no usable login for the server url is on, and what to add."""
+    server = server_of(url)
+    example = json.dumps({server: {"username": "…", "password": "…"}}, ensure_ascii=False)
+    matching = [k for k in logins if server_of(k) == server]
+    same_host = [k for k in logins if host_of(k) == host_of(server)]
+    if problem:
+        why = problem
+    elif matching:
+        why = (f"the login for {matching[0]} in {path} should be an object like "
+               '{"username": "…", "password": "…"}')
+    elif not logins:
+        why = f"{path} has no logins"
+    else:
+        why = f"{path} has logins only for {', '.join(sorted(logins))}"
+        if same_host:
+            why += (f". {same_host[0]} is on the same host, but the address must match, including "
+                    "http:// or https:// and the port")
+    return f"{server} is a Jellyfin server, but there's no login for it: {why}. Add one like {example}"
 
 
 def is_jellyfin(url: str) -> bool:
@@ -87,7 +136,8 @@ def log_in(server: str, login: dict) -> tuple[str, str]:
             "Username": login.get("username", ""), "Pw": login.get("password", "")})
     except urllib.error.HTTPError as e:
         if e.code == 401:
-            raise FeedError(f"Jellyfin at {server} didn't accept the username and password in jellyfin.json") from e
+            raise FeedError(f"Jellyfin at {server} didn't accept the password for user "
+                            f"\"{login.get('username', '')}\" in jellyfin.json") from e
         raise
     tokens[server] = (data["AccessToken"], data["User"]["Id"])
     return tokens[server]
