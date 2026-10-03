@@ -134,7 +134,7 @@ let playing = null;  // url of the video playing on this page
 
 // Fields that change when you open or color an item, or when its subscription gets a new post. They're
 // updated in place, not by rebuilding the card, so a video you just started keeps playing.
-const VIEW_FIELDS = ["color", "last_viewed", "next_after", "next_since", "sub_last_viewed", "newer", "score", "reasons"];
+const VIEW_FIELDS = ["color", "last_viewed", "next_after", "sub_last_viewed", "newer", "score", "reasons"];
 const contentKey = (item) => JSON.stringify(item, (k, v) => (VIEW_FIELDS.includes(k) ? undefined : v));
 
 async function post(path, body) {
@@ -387,8 +387,8 @@ const SETTINGS = [
     hint: "Hours since you opened the item or anything from its subscription, whichever was later; for things you've never opened from a subscription you've never opened, hours since they came into the feed. Up: things you haven't seen in a long time come back sooner." },
   { key: "fresh_start", label: "Freshness", before: "+", after: "head start",
     hint: "New posts and links start with this many points and lose one per hour, so it's gone after that many hours. So does the newest post of a subscription you've just added, counted from when you added it. Up: new things stay near the top for longer." },
-  { key: "next_start", label: "Next in series", before: "+", after: "head start",
-    hint: "The post right after the one you opened most recently in a subscription starts with this many points when you open that one, and loses one per hour. Not for subscriptions tagged “latest”. Up: you follow along in order more." },
+  { key: "series_bonus", label: "Next in series", before: "+", after: "points",
+    hint: "For the post right after the one you opened most recently in a subscription. Not for subscriptions tagged “latest”. Up: you follow along in order more." },
   { key: "repeat_penalty", label: "Repeat penalty", before: "−", after: "per repeat",
     hint: "Taken off a post for each post from its subscription higher up in the feed: once for the second, twice for the third, and so on. Up: subscriptions are mixed more." },
   { key: "green_bonus", label: "Green", before: "+", after: "points", hint: "For items you marked green." },
@@ -464,8 +464,8 @@ function showSettings(w) {
 function showFormula() {
   const w = draft;
   document.getElementById("formula").textContent =
-    `score = ${fmt(w.rediscovery_weight)} × hours away + (${fmt(w.fresh_start)} or ${fmt(w.next_start)} if next in series` +
-    ` − hours since it became new) + ${fmt(w.green_bonus)} if green − ${fmt(w.repeat_penalty)} × posts from its` +
+    `score = ${fmt(w.rediscovery_weight)} × hours away + (${fmt(w.fresh_start)} − hours since it's new)` +
+    ` + ${fmt(w.series_bonus)} if next in series + ${fmt(w.green_bonus)} if green − ${fmt(w.repeat_penalty)} × posts from its` +
     ` subscription higher up; red at the bottom`;
 }
 
