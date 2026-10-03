@@ -22,6 +22,8 @@ Each item has its page metadata (url, title, description, domain, ...) plus thes
                  if you've never opened anything from it
     newer        for a post: how many posts in its subscription are newer (0 = its newest post);
                  None for links
+    sub_last_newer  for a post: newer (as above) of the post you opened most recently in its
+                 subscription, the same for all its posts; None if you've never opened anything from it
 
 Nothing is hidden: items you've opened or marked red are scored differently, not removed.
 
@@ -40,13 +42,15 @@ RANKERS: dict[str, Ranker] = {}
 DEFAULT = "score"
 
 # Settings for the "score" ranker. Age, hours since you last opened an item, hours since you last
-# opened anything in its subscription and the number of newer posts in its subscription are multiplied by their weights; the rest are points added or taken away. These are the defaults; you can change
+# opened anything in its subscription, the number of newer posts in its subscription and the number of newer posts than
+# the one you last opened in its subscription are multiplied by their weights; the rest are points added or taken away. These are the defaults; you can change
 # them in the feed's score panel, and server.py keeps your values in settings.json.
 DEFAULT_WEIGHTS = {
     "age_weight": -0.1,  # points per hour since the item was published (or added)
     "seen_weight": 0.1,  # points per hour since you last opened it; items you never opened get never_seen_bonus
     "sub_seen_weight": 1,  # points per hour since you last opened any post in the item's subscription
     "sub_newer_weight": -100,  # points per newer post in the item's subscription: 0 for its newest post, 1 for the next…
+    "sub_last_newer_weight": 0,  # points per post newer than the one you last opened in the item's subscription
     "never_seen_bonus": 1000,
     "sub_never_seen_bonus": 1000,  # for posts from subscriptions you've never opened anything from
     "green_bonus": 10,
@@ -54,7 +58,7 @@ DEFAULT_WEIGHTS = {
     "next_bonus": 10000,  # for the post after the one you last opened in a subscription, to follow along in order
 }
 WEIGHTS = dict(DEFAULT_WEIGHTS)
-SIGNED = {"age_weight", "seen_weight", "sub_seen_weight", "sub_newer_weight"}  # may be negative; the others are amounts added or taken away
+SIGNED = {"age_weight", "seen_weight", "sub_seen_weight", "sub_newer_weight", "sub_last_newer_weight"}  # may be negative; the others are amounts added or taken away
 LIMIT = 10_000_000
 
 
@@ -103,7 +107,8 @@ def chronological(item: dict, now: float, weights: dict) -> Reasons:
 @ranker("score")
 def score(item: dict, now: float, weights: dict) -> Reasons:
     """Weighted age, hours since you last opened the item, hours since you last opened anything in
-    its subscription and number of newer posts in its subscription, adjusted by color and by whether it's next in a subscription you're following along."""
+    its subscription, number of newer posts in its subscription and number of posts newer than the one
+    you last opened there, adjusted by color and by whether it's next in a subscription you're following along."""
     w = weights
     age = int((now - item["date"]) // 3600)  # whole hours, so points don't change every second
     reasons = [(f"{hours_label(age)} old", points(w["age_weight"] * age))] if age > 0 and w["age_weight"] else []
@@ -126,6 +131,10 @@ def score(item: dict, now: float, weights: dict) -> Reasons:
     if newer and w["sub_newer_weight"]:
         label = f"{newer} newer post{'s' if newer != 1 else ''} in “{short(item['feed'])}”"
         reasons.append((label, points(w["sub_newer_weight"] * newer)))
+    last_newer = item.get("sub_last_newer")
+    if last_newer and w["sub_last_newer_weight"]:
+        label = f"last opened post in “{short(item['feed'])}” has {last_newer} newer post{'s' if last_newer != 1 else ''}"
+        reasons.append((label, points(w["sub_last_newer_weight"] * last_newer)))
     if item["color"] == "green" and w["green_bonus"]:
         reasons.append(("green", w["green_bonus"]))
     elif item["color"] == "red" and w["red_penalty"]:
