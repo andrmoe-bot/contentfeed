@@ -484,9 +484,9 @@ def load_settings():
         print(f"Ignoring {SETTINGS_FILE}: {e}")
 
 
-def next_posts(subs) -> dict[str, str]:
+def next_posts(subs) -> dict[str, tuple[str, float]]:
     """For each subscription, the post published right after the one you opened most recently,
-    as {its url: the opened post's title}. Call with lock held. A subscription whose posts belong to
+    as {its url: (the opened post's title, when you opened it)}. Call with lock held. A subscription whose posts belong to
     series, such as a Jellyfin server's TV shows, has a next post in each series, in episode order."""
     out = {}
     for sub_url in subs:
@@ -499,7 +499,7 @@ def next_posts(subs) -> dict[str, str]:
             if opened:
                 i = max(opened)[1]
                 if i > 0:
-                    out.setdefault(posts[i - 1]["url"], posts[i]["title"] or posts[i]["url"])
+                    out.setdefault(posts[i - 1]["url"], (posts[i]["title"] or posts[i]["url"], viewed[posts[i]["url"]]))
     return out
 
 
@@ -526,7 +526,7 @@ def feed(ranker: str, limit: int = MAX_ITEMS_SHOWN, weights: dict | None = None)
         added.update({url: now for url in new})
         items = [
             {**cache.get(url, {"url": url, "loading": True}), "kind": "link", "tags": tags,
-             "added": added[url], "date": added[url], "position": i, "newer": None, "sub_last_newer": None}
+             "added": added[url], "date": added[url], "position": i, "newer": None, "sub": None}
             for i, (url, tags) in enumerate(entries.items())
         ]
         seen = set(entries)
@@ -534,9 +534,7 @@ def feed(ranker: str, limit: int = MAX_ITEMS_SHOWN, weights: dict | None = None)
         sub_opened = last_opened(subs)
         for sub_url, tags in subs.items():
             s = subscriptions.get(sub_url, {})
-            # The place of the post you opened most recently in this subscription, the same for all its posts
-            opened = [(viewed[p["url"]], i) for i, p in enumerate(s.get("items", [])) if p["url"] in viewed]
-            last_newer = max(opened)[1] if opened else None
+            sub_added = min((p["first_seen"] for p in s.get("items", [])), default=now)
             for newer, post in enumerate(s.get("items", [])):  # newest first
                 if post["url"] in seen:
                     continue
@@ -545,10 +543,11 @@ def feed(ranker: str, limit: int = MAX_ITEMS_SHOWN, weights: dict | None = None)
                     **post, "kind": "subscription", "tags": tags, "feed": s["title"], "icon": s.get("icon"),
                     "domain": urlparse(post["url"]).netloc.removeprefix("www."),
                     "added": post["first_seen"], "date": post["published"] or post["first_seen"], "position": -1,
-                    "sub_last_viewed": sub_opened.get(sub_url), "newer": newer, "sub_last_newer": last_newer,
+                    "sub_last_viewed": sub_opened.get(sub_url), "newer": newer, "sub": sub_url, "sub_added": sub_added,
                 })
         for item in items:
-            item.update(view_state(item["url"]), next_after=next_after.get(item["url"]))
+            title, since = next_after.get(item["url"], (None, None))
+            item.update(view_state(item["url"]), next_after=title, next_since=since)
         n_pending = len(pending)
     if new:
         save_json(ADDED_FILE, added)
