@@ -310,14 +310,21 @@ function render() {
     feedEl.replaceChildren(el("div", { class: "empty" }, "Nothing here yet. Add a link or subscribe to a feed above."));
     return;
   }
-  // Only move cards that are out of place: moving a card with a playing video would restart it.
-  // Cards that are going away (or being rebuilt) are removed first, so the cards after them don't move.
+  // Moving a card takes it out of the page and puts it back, which restarts a video playing in it.
+  // So the playing card never moves: the cards before and after it are arranged around it, and only
+  // cards that are out of place move. Cards that are going away (or being rebuilt) are removed first.
   const keep = new Set(nodes);
   for (const child of [...feedEl.children]) if (!keep.has(child)) child.remove();
-  nodes.forEach((node, i) => {
-    if (feedEl.children[i] !== node) feedEl.insertBefore(node, feedEl.children[i] || null);
-  });
-  while (feedEl.children.length > nodes.length) feedEl.lastElementChild.remove();
+  const playingEl = playing && cards.get(playing)?.el;
+  let at = nodes.indexOf(playingEl);
+  if (at < 0 || !playingEl.isConnected) at = 0;
+  if (!nodes[at].isConnected) feedEl.prepend(nodes[at]);
+  for (let i = at - 1, next = nodes[at]; i >= 0; next = nodes[i--]) {
+    if (nodes[i].nextSibling !== next) feedEl.insertBefore(nodes[i], next);
+  }
+  for (let i = at + 1, prev = nodes[at]; i < nodes.length; prev = nodes[i++]) {
+    if (prev.nextSibling !== nodes[i]) feedEl.insertBefore(nodes[i], prev.nextSibling);
+  }
 }
 
 const fmtPoints = (n) => (n > 0 ? "+" : n < 0 ? "−" : "±") + Math.round(Math.abs(n) * 100) / 100;
