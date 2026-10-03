@@ -51,13 +51,14 @@ DEFAULT_WEIGHTS = {
     "next_up_bonus": 30,  # next up: the post after the one you opened most recently in a subscription
     "unseen_bonus": 40,  # unseen: items you've never opened (other than next up)
     "age_per_step": -8,  # unseen: per step of age since published (or added, for links)
-    "rediscovery_per_step": 8,  # seen: per step of time since you last opened the item
+    "seen_bonus": -30,  # seen: items you've opened; below 0 puts them under unseen items at first
+    "rediscovery_per_step": 12,  # seen: per step of time since you last opened the item
     "new_sub_bonus": 20,  # for posts from a subscription you've never opened anything from
     "repeat_per_post": 15,  # taken off for each post from the same subscription higher up in the feed
     "green_bonus_points": 10,
 }
 WEIGHTS = dict(DEFAULT_WEIGHTS)
-SIGNED = {"age_per_step", "rediscovery_per_step"}  # may be negative
+SIGNED = {"age_per_step", "seen_bonus", "rediscovery_per_step"}  # may be negative
 LIMIT = 10_000_000
 RED = 10_000_000  # red items sink below everything else
 
@@ -140,6 +141,8 @@ def score(item: dict, now: float, weights: dict) -> Reasons:
             label = f"{'added' if item['kind'] == 'link' else 'published'} {hours_label(age)} ago"
             reasons.append((label, points(w["age_per_step"] * steps(age))))
     else:
+        if w["seen_bonus"]:
+            reasons.append(("opened before", w["seen_bonus"]))
         away = hours_since(now, item["last_viewed"])
         if steps(away) and w["rediscovery_per_step"]:
             reasons.append((f"opened {hours_label(away)} ago", points(w["rediscovery_per_step"] * steps(away))))

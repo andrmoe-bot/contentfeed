@@ -396,6 +396,8 @@ const SETTINGS = [
     hint: "For items you've never opened, other than next up." },
   { key: "age_per_step", label: "Age of unseen", before: "", after: "per step",
     hint: "For unseen items, per step of age since published (or since you added a link). Below 0: newer first. 0: age doesn't matter. Above 0: older first." },
+  { key: "seen_bonus", label: "Seen", before: "", after: "points",
+    hint: "For items you've opened. Below 0: they start under unseen items, until Rediscovery brings them back." },
   { key: "rediscovery_per_step", label: "Rediscovery", before: "", after: "per step",
     hint: "For items you've opened, per step of time since you last opened it. Above 0: things you opened long ago come back. Below 0: recently opened first." },
   { key: "new_sub_bonus", label: "New subscription", before: "+", after: "points",
@@ -404,7 +406,7 @@ const SETTINGS = [
     hint: "Taken off a post for each post from its subscription higher up in the feed: once for the second, twice for the third, and so on. Up: subscriptions are mixed more." },
   { key: "green_bonus_points", label: "Green", before: "+", after: "points", hint: "For items you marked green." },
 ];
-const SIGNED = ["age_per_step", "rediscovery_per_step"];  // may be negative: the sign says which way
+const SIGNED = ["age_per_step", "seen_bonus", "rediscovery_per_step"];  // may be negative: the sign says which way
 const LIMIT = 10_000_000;
 let saved = {};  // as saved on the server
 let draft = {};  // as shown in the panel
@@ -476,7 +478,7 @@ function showFormula() {
   const w = draft;
   document.getElementById("formula").textContent =
     `next up: ${fmt(w.next_up_bonus)} · unseen: ${fmt(w.unseen_bonus)}${plus(w.age_per_step)} × steps of age` +
-    ` · seen: ${fmt(w.rediscovery_per_step)} × steps since opened · all:${plus(w.new_sub_bonus)} if nothing opened from` +
+    ` · seen: ${fmt(w.seen_bonus)}${plus(w.rediscovery_per_step)} × steps since opened · all:${plus(w.new_sub_bonus)} if nothing opened from` +
     ` its subscription${plus(w.green_bonus_points)} if green − ${fmt(w.repeat_per_post)} × posts from its subscription` +
     ` higher up; red at the bottom`;
 }
@@ -507,7 +509,7 @@ function save() {
 
 async function saveNow() {
   const valid = SETTINGS.every(({ key }) => inRange(key, draft[key]));
-  if (!valid) return panelSay("Each setting must be from 0 to 10 000 000; Age of unseen and Rediscovery may also go down to −10 000 000.", true);
+  if (!valid) return panelSay("Each setting must be from 0 to 10 000 000; Age of unseen, Seen and Rediscovery may also go down to −10 000 000.", true);
   if (sameWeights(draft, saved)) return;
   const res = await fetch("/api/settings", {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ weights: draft }),
