@@ -1,7 +1,7 @@
 """Feed ranking.
 
 Rankers are deliberately simple and explainable: they never learn from how the feed is used.
-A ranker looks at one item and returns its reasons, each a (label, points) pair, such as
+A ranker looks at one item (with the time now and the score settings) and returns its reasons, each a (label, points) pair, such as
 ("tagged music", 2). An item's score is the sum of its points, the feed is sorted by score
 (highest first, newest date first on ties), and every card shows its reasons on the page.
 
@@ -33,13 +33,13 @@ for age, so the page doesn't redraw every time it checks for changes.
 from typing import Callable
 
 Reasons = list[tuple[str, float]]
-Ranker = Callable[[dict, float], Reasons]
+Ranker = Callable[[dict, float, dict], Reasons]
 RANKERS: dict[str, Ranker] = {}
 DEFAULT = "score"
 
 # Settings for the "score" ranker. Age, hours since you last opened an item and hours since you last
 # opened anything in its subscription are multiplied by their weights; the rest are points added or taken away. These are the defaults; you can change
-# them on the Settings page (/settings), and server.py keeps your values in settings.json.
+# them in the feed's score panel, and server.py keeps your values in settings.json.
 DEFAULT_WEIGHTS = {
     "age_weight": -0.1,  # points per hour since the item was published (or added)
     "seen_weight": 0.1,  # points per hour since you last opened it; items you never opened get never_seen_bonus
@@ -92,16 +92,16 @@ def ranker(name: str):
 
 
 @ranker("chronological")
-def chronological(item: dict, now: float) -> Reasons:
+def chronological(item: dict, now: float, weights: dict) -> Reasons:
     """No rules: every item scores 0, so the feed is simply newest first."""
     return []
 
 
 @ranker("score")
-def score(item: dict, now: float) -> Reasons:
+def score(item: dict, now: float, weights: dict) -> Reasons:
     """Weighted age, hours since you last opened the item and hours since you last opened anything in
     its subscription, adjusted by color and by whether it's next in a subscription you're following along."""
-    w = WEIGHTS
+    w = weights
     age = int((now - item["date"]) // 3600)  # whole hours, so points don't change every second
     reasons = [(f"{hours_label(age)} old", points(w["age_weight"] * age))] if age > 0 and w["age_weight"] else []
     if item["last_viewed"] is None:
@@ -128,11 +128,13 @@ def score(item: dict, now: float) -> Reasons:
     return reasons
 
 
-def rank(name: str, items: list[dict], now: float) -> list[dict]:
-    """Return items sorted by score, each with "score" and "reasons" filled in."""
+def rank(name: str, items: list[dict], now: float, weights: dict | None = None) -> list[dict]:
+    """Return items sorted by score, each with "score" and "reasons" filled in. Weights other than the
+    saved ones are for previewing them, such as while you move a slider."""
     fn = RANKERS[name]
+    weights = weights or WEIGHTS
     scored = []
     for item in items:
-        reasons = [{"label": label, "points": points} for label, points in fn(item, now)]
+        reasons = [{"label": label, "points": points} for label, points in fn(item, now, weights)]
         scored.append({**item, "score": points(sum(r["points"] for r in reasons)), "reasons": reasons})
     return sorted(scored, key=lambda it: (it["score"], it["date"], it["position"]), reverse=True)

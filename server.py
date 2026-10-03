@@ -53,7 +53,6 @@ TEMPLATES = {
 PAGES = {  # request path -> (file, content type)
     "/": ("index.html", "text/html; charset=utf-8"),
     "/subscriptions": ("subscriptions.html", "text/html; charset=utf-8"),
-    "/settings": ("settings.html", "text/html; charset=utf-8"),
     "/style.css": ("style.css", "text/css; charset=utf-8"),
     "/common.js": ("common.js", "text/javascript; charset=utf-8"),
 }
@@ -461,7 +460,7 @@ def settings() -> dict:
 
 
 def save_settings(weights) -> str | None:
-    """Set the score ranker's weights from the Settings page. Returns an error message, or None."""
+    """Set the score ranker's weights from the feed's score panel. Returns an error message, or None."""
     try:
         checked = ranking.check_weights(weights if isinstance(weights, dict) else {})
     except ValueError as e:
@@ -514,7 +513,7 @@ def last_opened(subs) -> dict[str, float]:
     return out
 
 
-def feed(ranker: str, limit: int = MAX_ITEMS_SHOWN) -> dict:
+def feed(ranker: str, limit: int = MAX_ITEMS_SHOWN, weights: dict | None = None) -> dict:
     entries = read_entries()
     subs = read_entries(FEEDS_FILE)
     for url in entries:
@@ -550,7 +549,7 @@ def feed(ranker: str, limit: int = MAX_ITEMS_SHOWN) -> dict:
         n_pending = len(pending)
     if new:
         save_json(ADDED_FILE, added)
-    ranked = ranking.rank(ranker, items, now)
+    ranked = ranking.rank(ranker, items, now, weights)
     return {
         "items": ranked[:limit],
         "total": len(ranked),
@@ -641,13 +640,24 @@ class Handler(BaseHTTPRequestHandler):
         if path in PAGES:
             name, ctype = PAGES[path]
             self._send(200, (ROOT / name).read_bytes(), ctype)
+        elif path == "/settings":  # the old Settings page is now the feed's score panel
+            self.send_response(302)
+            self.send_header("Location", "/#settings")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
         elif path == "/api/feed":
             query = parse_qs(parsed.query)
             name = query.get("ranker", [self.server.ranker])[0]
             if name not in ranking.RANKERS:
                 return self._json({"error": f"unknown ranker; available: {sorted(ranking.RANKERS)}"}, 400)
             limit = query.get("limit", [""])[0]
-            self._json(feed(name, max(int(limit), 1) if limit.isdigit() else MAX_ITEMS_SHOWN))
+            weights = None
+            if "weights" in query:  # unsaved weights, to preview them while you move a slider
+                try:
+                    weights = ranking.check_weights(json.loads(query["weights"][0]))
+                except (ValueError, TypeError) as e:
+                    return self._json({"error": f"weights: {e}"}, 400)
+            self._json(feed(name, max(int(limit), 1) if limit.isdigit() else MAX_ITEMS_SHOWN, weights))
         elif path == "/api/subscriptions":
             self._json({"subscriptions": subscription_status(), "interval_minutes": feed_interval / 60})
         elif path == "/api/settings":

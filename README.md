@@ -27,7 +27,7 @@ It holds:
 - `added.json`: when each link or post was first seen
 - `viewed.json`: when you last opened each item
 - `colors.json`: the items you marked green or red
-- `settings.json`: your scoring settings from the Settings page, if you changed them
+- `settings.json`: your score settings from the feed's score panel, if you changed them
 - `jellyfin.json`: logins for Jellyfin servers you subscribe to (see Jellyfin), if any
 - `cache.json` and `feeds.json`: fetched page details and subscription posts
 
@@ -153,7 +153,7 @@ yet; for now they change an item's score:
 - **white**: the default, no change. Clicking white also marks the item viewed: a quick "seen it".
 - **red**: −100000, which puts it at the bottom, below everything else
 
-These are the defaults; you can change them on the Settings page.
+These are the defaults; you can change them in the score panel (see Ranking).
 
 ## Ranking
 
@@ -185,8 +185,11 @@ episode 5 rises to the top, however old it is; open episode 5 and the bonus move
 for older YouTube videos, which are in the channel's upload order. If you most recently opened a
 subscription's newest post, none of its posts get the bonus.
 
-Change the numbers on the Settings page (`/settings`, linked at the top of the feed); the feed
-uses them from its next update. The defaults are at the top of `ranking.py`. Equal scores are ordered newest first. The other ranker,
+Change the numbers in the score panel: click "Score settings" at the top of the feed. It opens
+beside the feed on a wide screen, or along the bottom on a narrow one, and stays open across reloads
+until you close it. Each setting has a slider, which goes in steps of 1, 1.5, 2, 3, 5 and 7 times a
+power of ten so it covers both 0.1 and 100000, and a box for an exact number. The feed reorders as
+you move a slider, and the setting is saved when you let go (or when you press Enter in the box). The defaults are at the top of `ranking.py`. Equal scores are ordered newest first. The other ranker,
 `chronological`, has no rules: everything scores 0 and the newest item is first. To add another ranker, register a
 function with `@ranker("name")`, then select it with `python3 server.py --ranker name`, or try
 it without a restart at `/api/feed?ranker=name`.
