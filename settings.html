@@ -35,24 +35,24 @@
   <form class="panel" id="weights" novalidate>
     <h2>Score</h2>
     <p class="intro">The feed is sorted by score, highest first. A score adds up the points below: three weights
-      multiplied by numbers of days, and bonuses and penalties added on top. Every card's “Score” details show the
+      multiplied by numbers of hours, and bonuses and penalties added on top. Every card's “Score” details show the
       points it got.</p>
     <p class="formula" id="formula"></p>
 
     <div class="row">
       <label for="age_weight">Age weight</label>
-      <div class="fields"><span class="sign">×</span><input id="age_weight" type="number" step="any" inputmode="decimal" required> points per day old</div>
-      <p class="hint">Days since the item was published, or since you added a link. Negative puts newer items first. <span data-default="age_weight"></span></p>
+      <div class="fields"><span class="sign">×</span><input id="age_weight" type="number" step="any" inputmode="decimal" required> points per hour old</div>
+      <p class="hint">Hours since the item was published, or since you added a link. Negative puts newer items first. <span data-default="age_weight"></span></p>
     </div>
     <div class="row">
       <label for="seen_weight">Last opened weight</label>
-      <div class="fields"><span class="sign">×</span><input id="seen_weight" type="number" step="any" inputmode="decimal" required> points per day</div>
-      <p class="hint">For items you've opened. Positive means an item you just opened sinks, and climbs back as days pass. Clicking white also counts as opening. <span data-default="seen_weight"></span></p>
+      <div class="fields"><span class="sign">×</span><input id="seen_weight" type="number" step="any" inputmode="decimal" required> points per hour</div>
+      <p class="hint">For items you've opened. Positive means an item you just opened sinks, and climbs back as hours pass. Clicking white also counts as opening. <span data-default="seen_weight"></span></p>
     </div>
     <div class="row">
       <label for="sub_seen_weight">Subscription last opened weight</label>
-      <div class="fields"><span class="sign">×</span><input id="sub_seen_weight" type="number" step="any" inputmode="decimal" required> points per day</div>
-      <p class="hint">Days since you opened any post in the item's subscription, the same for all its posts. Positive means subscriptions you've left alone rise. Not for links; subscriptions you've never opened anything from get the bonus below instead. <span data-default="sub_seen_weight"></span></p>
+      <div class="fields"><span class="sign">×</span><input id="sub_seen_weight" type="number" step="any" inputmode="decimal" required> points per hour</div>
+      <p class="hint">Hours since you opened any post in the item's subscription, the same for all its posts. Positive means subscriptions you've left alone rise. Not for links; subscriptions you've never opened anything from get the bonus below instead. <span data-default="sub_seen_weight"></span></p>
     </div>
     <div class="row">
       <label for="never_seen_bonus">Never opened bonus</label>
@@ -121,16 +121,16 @@ function update() {
     return;
   }
   document.getElementById("formula").textContent =
-    `score = ${fmt(w.age_weight)} × age in days${plus(w.seen_weight)} × days since you opened it` +
-    `${plus(w.sub_seen_weight)} × days since you opened anything in its subscription` +
+    `score = ${fmt(w.age_weight)} × age in hours${plus(w.seen_weight)} × hours since you opened it` +
+    `${plus(w.sub_seen_weight)} × hours since you opened anything in its subscription` +
     `${plus(w.never_seen_bonus)} if never opened${plus(w.sub_never_seen_bonus)} if nothing opened in its subscription` +
     `${plus(w.green_bonus)} if green` +
     `${plus(w.next_bonus)} if next in its subscription − ${fmt(w.red_penalty)} if red`;
-  const unopened = 10 * w.age_weight + w.never_seen_bonus;
-  const opened = 10 * w.age_weight + 3 * w.seen_weight;
+  const unopened = 240 * w.age_weight + w.never_seen_bonus;
+  const opened = 240 * w.age_weight + 72 * w.seen_weight;
   document.getElementById("example").textContent =
-    `For example, a video from 10 days ago scores ${fmt(10 * w.age_weight)}${plus(w.never_seen_bonus)} = ${fmt(unopened)} ` +
-    `if you haven't opened it, and ${fmt(10 * w.age_weight)}${plus(3 * w.seen_weight)} = ${fmt(opened)} if you opened it 3 days ago.`;
+    `For example, a video from 10 days (240 hours) ago scores ${fmt(240 * w.age_weight)}${plus(w.never_seen_bonus)} = ${fmt(unopened)} ` +
+    `if you haven't opened it, and ${fmt(240 * w.age_weight)}${plus(72 * w.seen_weight)} = ${fmt(opened)} if you opened it 3 days (72 hours) ago.`;
 }
 
 function fill(w) {
