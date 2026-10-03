@@ -165,6 +165,7 @@ The default, `score`, adds up three things, all counted in whole hours. With the
 
     score = 0.01 × (hours away)
             + (100 − hours since it became new to you)    head start, for things you haven't opened
+            + 50 if it's the next post in a series
             + 100 if green
             − 100 × (posts from its subscription higher up in the feed)
             red items at the bottom
@@ -181,13 +182,11 @@ default of 100 it's gone after about four days. Only items you haven't opened ge
 - a new post, counted from when it was published, and a new link from when you added it
 - the newest post of a subscription you've never opened anything from, counted from when you
   subscribed, so a new subscription shows its latest post near the top (only that one)
-- the next post in a series: the post right after the one you opened most recently in its
-  subscription, counted from when you opened that one. Its head start is bigger (300 by default),
-  so finishing episode 4 puts episode 5 at the top for the next few days. Open episode 5 and the
-  head start moves on to episode 6. This works for channels, playlists and Jellyfin series (in
-  episode order). Tag a subscription `latest` in feeds.txt to skip this for it, such as a news feed.
-
-When more than one head start applies, the bigger one counts.
+**Next in series.** The post right after the one you opened most recently in its subscription gets
+50 points: about as much as a post published two days ago, so after episode 4, episode 5 is
+high in the feed but not on top. Open episode 5 and the bonus moves on to episode 6. This works for
+channels, playlists and Jellyfin series (in episode order). Tag a subscription `latest` in
+feeds.txt to skip this for it, such as a news feed.
 
 **Mixing.** The feed is built from the top down: each place goes to the highest score after taking
 100 points off for every post from the same subscription already placed above it, so the second post
@@ -195,12 +194,12 @@ from a subscription loses 100, the third 200, and so on. Two posts from one subs
 are rare unless you have few subscriptions.
 
 Each card's "Score" shows its points, such as
-`opened something from “Veritasium” 2 days ago +0.48 · next after “Episode 4”, opened 2 days ago +252`.
+`opened something from “Veritasium” 2 days ago +0.48 · next after “Episode 4” +50`.
 
 Change the numbers in the score panel: click "Score settings" at the top of the feed. It opens
 beside the feed on a wide screen, or along the bottom on a narrow one, and stays open across reloads
 until you close it. There are five settings, each with a slider and a box for an exact number:
-Rediscovery (points per hour away), Freshness and Next in series (head starts), Repeat penalty, and
+Rediscovery (points per hour away), Freshness (head start), Next in series, Repeat penalty, and
 Green. Moving one up gives you more of what it's named after. The sliders go in steps of 1, 1.5, 2, 3,
 5 and 7 times a power of ten, so they cover both small and large numbers. The feed reorders as
 you move a slider, and the setting is saved when you let go (or when you press Enter in the box). The defaults are at the top of `ranking.py`. Equal scores are ordered newest first. The other ranker,

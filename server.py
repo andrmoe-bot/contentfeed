@@ -484,9 +484,9 @@ def load_settings():
         print(f"Ignoring {SETTINGS_FILE}: {e}")
 
 
-def next_posts(subs) -> dict[str, tuple[str, float]]:
+def next_posts(subs) -> dict[str, str]:
     """For each subscription, the post published right after the one you opened most recently,
-    as {its url: (the opened post's title, when you opened it)}. Call with lock held. A subscription whose posts belong to
+    as {its url: the opened post's title}. Call with lock held. A subscription whose posts belong to
     series, such as a Jellyfin server's TV shows, has a next post in each series, in episode order."""
     out = {}
     for sub_url in subs:
@@ -499,7 +499,7 @@ def next_posts(subs) -> dict[str, tuple[str, float]]:
             if opened:
                 i = max(opened)[1]
                 if i > 0:
-                    out.setdefault(posts[i - 1]["url"], (posts[i]["title"] or posts[i]["url"], viewed[posts[i]["url"]]))
+                    out.setdefault(posts[i - 1]["url"], posts[i]["title"] or posts[i]["url"])
     return out
 
 
@@ -546,8 +546,7 @@ def feed(ranker: str, limit: int = MAX_ITEMS_SHOWN, weights: dict | None = None)
                     "sub_last_viewed": sub_opened.get(sub_url), "newer": newer, "sub": sub_url, "sub_added": sub_added,
                 })
         for item in items:
-            title, since = next_after.get(item["url"], (None, None))
-            item.update(view_state(item["url"]), next_after=title, next_since=since)
+            item.update(view_state(item["url"]), next_after=next_after.get(item["url"]))
         n_pending = len(pending)
     if new:
         save_json(ADDED_FILE, added)
