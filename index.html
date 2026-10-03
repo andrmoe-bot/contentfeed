@@ -42,6 +42,41 @@
   .dot.green { --dot: #16a34a; }
   .dot.white { --dot: var(--muted); --dot-fill: #fff; }
   .dot.red { --dot: #dc2626; }
+  /* The score panel: a column on the right on wide screens, a sheet along the bottom on narrow ones */
+  #panel {
+    position: fixed; z-index: 20; background: var(--card); border: 0 solid var(--border); overflow-y: auto;
+    padding: 12px 16px 16px; display: grid; gap: 14px; align-content: start; overscroll-behavior: contain;
+  }
+  #panel[hidden] { display: none; }
+  @media (min-width: 1100px) {
+    #panel { top: 0; right: 0; bottom: 0; width: var(--panel); border-left-width: 1px; }
+    body.panel-open { padding-right: var(--panel); }
+  }
+  @media (max-width: 1099.98px) {
+    #panel { left: 0; right: 0; bottom: 0; max-height: 50vh; border-top-width: 1px; border-radius: 12px 12px 0 0; box-shadow: 0 -4px 16px rgb(0 0 0 / .15); }
+    body.panel-open { padding-bottom: 50vh; }
+  }
+  :root { --panel: 380px; }
+  .panel-head { display: flex; align-items: center; justify-content: space-between; }
+  .panel-head h2 { font-size: 16px; margin: 0; }
+  #panel-close { padding: 2px 10px; font-size: 18px; line-height: 1.2; }
+  #panel p { display: block; overflow: visible; -webkit-line-clamp: none; }
+  #panel .hint, #formula { font-size: 13px; color: var(--muted); margin: 0; }
+  #formula { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
+  #settings { display: grid; gap: 18px; }
+  .setting { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; align-items: center; }
+  .setting label { font-weight: 600; }
+  .setting .num { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; }
+  .setting input[type="number"] { flex: 0 0 auto; width: 7em; padding: 4px 8px; font-variant-numeric: tabular-nums; text-align: right; }
+  .setting input[type="number"]:invalid { border-color: var(--error); }
+  .setting input[type="range"] { grid-column: 1 / -1; width: 100%; margin: 4px 0 0; padding: 0; border: 0; background: none; accent-color: var(--accent); }
+  .setting .hint { grid-column: 1 / -1; }
+  .panel-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  #panel-status { margin: 0; font-size: 13px; color: var(--muted); }
+  #panel-status.error { color: var(--error); }
+  nav button { padding: 0; border: 0; background: none; color: var(--accent); font-size: 14px; }
+  nav button:hover { text-decoration: underline; }
+  nav button[aria-expanded="true"] { font-weight: 600; }
   .play::after {
     content: ""; position: absolute; inset: 50% auto auto 50%; width: 64px; height: 44px; transform: translate(-50%, -50%);
     border-radius: 12px; background: #e00 url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M9 7l8 5-8 5z' fill='white'/%3E%3C/svg%3E") center / 28px no-repeat;
@@ -52,7 +87,7 @@
 <header>
   <div class="bar">
     <h1>Content Feed</h1>
-    <nav><a href="/subscriptions" id="subs-link">Subscriptions</a> · <a href="/settings">Settings</a></nav>
+    <nav><a href="/subscriptions" id="subs-link">Subscriptions</a> · <button type="button" id="panel-toggle" aria-expanded="false" aria-controls="panel">Score settings</button></nav>
     <span id="status"></span>
   </div>
   <form class="bar" id="add">
@@ -65,6 +100,21 @@
 </header>
 <main id="feed"></main>
 <button type="button" id="more" hidden></button>
+<aside id="panel" aria-labelledby="panel-title" hidden>
+  <div class="panel-head">
+    <h2 id="panel-title">Score settings</h2>
+    <button type="button" id="panel-close" aria-label="Close score settings">×</button>
+  </div>
+  <p class="hint">The feed is sorted by score, highest first. A score adds up the points below: three weights multiplied
+    by numbers of hours, and bonuses and penalties on top. Every card's “Score” details show the points it got. The feed
+    reorders as you move a slider, and the setting is saved when you let go.</p>
+  <p id="formula"></p>
+  <div id="settings"></div>
+  <div class="panel-actions">
+    <button type="button" id="reset">Reset to defaults</button>
+    <p id="panel-status" role="status"></p>
+  </div>
+</aside>
 
 <script src="/common.js"></script>
 <script>
@@ -279,15 +329,40 @@ function why(item) {
   );
 }
 
-async function load() {
+// One request at a time: calls while one is running (such as from a slider being dragged) are
+// combined into a single request after it, with the newest settings.
+let loading = null;
+let loadAgain = false;
+
+function load() {
+  if (loading) {
+    loadAgain = true;
+    return loading;
+  }
+  loading = fetchFeed().finally(() => {
+    loading = null;
+    if (loadAgain) {
+      loadAgain = false;
+      load();
+    }
+  });
+  return loading;
+}
+
+async function fetchFeed() {
   clearTimeout(pollTimer);
   try {
-    const res = await fetch(`/api/feed?limit=${limit}`);
+    // Settings you haven't saved yet, such as while you drag a slider, are sent along to preview them.
+    const preview = Object.keys(saved).length && !sameWeights(draft, saved)
+      ? `&weights=${encodeURIComponent(JSON.stringify(draft))}` : "";
+    const res = await fetch(`/api/feed?limit=${limit}${preview}`);
     const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
     items = data.items;
     render();
     const count = data.total > items.length ? `top ${items.length} of ${data.total}` : `${data.total}`;
     statusEl.textContent = `${count} items · ranked by ${data.ranker}` + (data.pending ? ` · fetching ${data.pending}…` : "");
+    rankerNote(data.ranker);
     const more = document.getElementById("more");
     more.hidden = data.total <= items.length;
     more.textContent = `Show ${Math.min(PAGE, data.total - items.length)} more (${data.total - items.length} not shown)`;
@@ -297,6 +372,182 @@ async function load() {
     pollTimer = setTimeout(load, 5000);
   }
 }
+
+// The score settings panel. Each setting has a slider and a box for an exact number. The sliders go
+// in steps of 1, 1.5, 2, 3, 5 and 7 times a power of ten, so one slider covers small and huge numbers.
+const SETTINGS = [
+  { key: "age_weight", label: "Age", before: "×", after: "per hour old",
+    hint: "Hours since the item was published, or since you added the link. Negative puts newer items first." },
+  { key: "seen_weight", label: "Last opened", before: "×", after: "per hour",
+    hint: "Hours since you opened the item, for items you've opened. Positive means an item you just opened sinks, then climbs back as hours pass. Clicking white also counts as opening." },
+  { key: "sub_seen_weight", label: "Subscription last opened", before: "×", after: "per hour",
+    hint: "Hours since you opened any post in the item's subscription, the same for all its posts. Positive means subscriptions you've left alone rise. Not for links; subscriptions you've never opened anything from get the bonus below instead." },
+  { key: "never_seen_bonus", label: "Never opened", before: "+", after: "points",
+    hint: "For items you've never opened." },
+  { key: "sub_never_seen_bonus", label: "Subscription never opened", before: "+", after: "points",
+    hint: "For every post in a subscription you've never opened anything from, such as one you just subscribed to." },
+  { key: "green_bonus", label: "Green", before: "+", after: "points", hint: "For items you marked green." },
+  { key: "next_bonus", label: "Next in subscription", before: "+", after: "points",
+    hint: "For the post published right after the one you opened most recently in the same subscription, so you can follow a channel or playlist in order." },
+  { key: "red_penalty", label: "Red", before: "−", after: "points",
+    hint: "For items you marked red. Make it bigger than everything else adds up to, and red items sink to the bottom." },
+];
+const SIGNED = ["age_weight", "seen_weight", "sub_seen_weight"];  // may be negative; the others are amounts added or taken away
+const LIMIT = 10_000_000;
+let saved = {};  // as saved on the server
+let draft = {};  // as shown in the panel
+let defaults = {};
+
+// Slider positions: 0, then 1, 1.5, 2, 3, 5, 7 times each power of ten from 10^lo up to 10^hi,
+// mirrored below 0 for weights that may be negative.
+function steps(lo, hi, signed) {
+  const up = [];
+  for (let e = lo; e < hi; e++) for (const n of [1, 1.5, 2, 3, 5, 7]) up.push(Number((n * 10 ** e).toPrecision(2)));
+  up.push(10 ** hi);
+  return signed ? [...up.map((v) => -v).reverse(), 0, ...up] : [0, ...up];
+}
+const WEIGHT_STEPS = steps(-3, 3, true);  // ±0.001 to ±1000 points per hour
+const BONUS_STEPS = steps(0, 7, false);  // 1 to 10 000 000 points
+
+// The slider position closest to a typed number, on the slider's log scale.
+function nearestStep(list, value) {
+  const f = (x) => (x === 0 ? 0 : Math.sign(x) * (Math.log10(Math.abs(x)) + 4));
+  let best = 0;
+  list.forEach((v, i) => { if (Math.abs(f(v) - f(value)) < Math.abs(f(list[best]) - f(value))) best = i; });
+  return best;
+}
+
+const fmt = (n) => Number(n).toLocaleString("en-US", { maximumFractionDigits: 3 }).replaceAll(",", "\u202f").replace("-", "−");
+const plus = (n) => (n < 0 ? ` − ${fmt(-n)}` : ` + ${fmt(n)}`);  // " + 5" or " − 5", for adding a term to a sum
+const sameWeights = (a, b) => SETTINGS.every(({ key }) => a[key] === b[key]);
+const inRange = (key, v) => Number.isFinite(v) && v >= (SIGNED.includes(key) ? -LIMIT : 0) && v <= LIMIT;
+const controls = {};
+
+function buildSettings() {
+  document.getElementById("settings").replaceChildren(...SETTINGS.map(({ key, label, before, after, hint }) => {
+    const list = SIGNED.includes(key) ? WEIGHT_STEPS : BONUS_STEPS;
+    const num = el("input", { type: "number", id: `w-${key}`, step: "any", inputmode: "decimal", required: "",
+      min: SIGNED.includes(key) ? -LIMIT : 0, max: LIMIT });
+    const slider = el("input", { type: "range", min: 0, max: list.length - 1, step: 1, "aria-label": `${label} slider` });
+    const def = el("span");
+    controls[key] = { num, slider, list, def };
+    slider.addEventListener("input", () => {
+      num.value = list[slider.value];
+      change(key, list[slider.value]);
+    });
+    num.addEventListener("input", () => {
+      const v = num.value.trim() === "" ? NaN : Number(num.value);
+      if (!inRange(key, v)) return;
+      slider.value = nearestStep(list, v);
+      change(key, v);
+    });
+    slider.addEventListener("change", save);  // when you let go of the slider
+    num.addEventListener("change", save);  // when you press Enter or leave the box
+    return el("div", { class: "setting" },
+      el("label", { for: `w-${key}` }, label),
+      el("span", { class: "num" }, before, num, after),
+      slider,
+      el("p", { class: "hint" }, `${hint} `, def));
+  }));
+}
+
+function showSettings(w) {
+  for (const { key } of SETTINGS) {
+    const { num, slider, list } = controls[key];
+    if (document.activeElement !== num) num.value = w[key];
+    slider.value = nearestStep(list, w[key]);
+  }
+  showFormula();
+}
+
+function showFormula() {
+  const w = draft;
+  document.getElementById("formula").textContent =
+    `score = ${fmt(w.age_weight)} × age in hours${plus(w.seen_weight)} × hours since you opened it` +
+    `${plus(w.sub_seen_weight)} × hours since you opened anything in its subscription` +
+    `${plus(w.never_seen_bonus)} if never opened${plus(w.sub_never_seen_bonus)} if nothing opened in its subscription` +
+    `${plus(w.green_bonus)} if green${plus(w.next_bonus)} if next in its subscription − ${fmt(w.red_penalty)} if red`;
+}
+
+function panelSay(text, isError = false) {
+  const status = document.getElementById("panel-status");
+  status.textContent = text;
+  status.className = isError ? "error" : "";
+}
+
+// A setting moved: reorder the feed with it right away. Cards you opened or colored normally keep
+// their place until you reload, but while you change the settings everything takes its new place.
+function change(key, value) {
+  draft = { ...draft, [key]: value };
+  showFormula();
+  panelSay("");
+  stay.clear();
+  load();
+}
+
+// Saves run one after another, so the last change wins even when two start together, such as a
+// number box saving as you click Reset.
+let saving = Promise.resolve();
+function save() {
+  saving = saving.then(saveNow);
+  return saving;
+}
+
+async function saveNow() {
+  const valid = SETTINGS.every(({ key }) => inRange(key, draft[key]));
+  if (!valid) return panelSay("Each weight must be from −10 000 000 to 10 000 000, and each bonus or penalty from 0 to 10 000 000.", true);
+  if (sameWeights(draft, saved)) return;
+  const res = await fetch("/api/settings", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ weights: draft }),
+  }).catch(() => null);
+  const data = res ? await res.json().catch(() => ({})) : { error: "the server didn't answer" };
+  if (!res?.ok) return panelSay(`Couldn't save: ${data.error || "unknown error"}`, true);
+  saved = data.weights;
+  panelSay("Saved.");
+}
+
+let rankerShown = null;
+function rankerNote(ranker) {
+  if (ranker === rankerShown) return;
+  rankerShown = ranker;
+  if (ranker !== "score") panelSay(`The feed is ranked by ${ranker}, which doesn't use these settings.`);
+}
+
+async function loadSettings() {
+  const data = await (await fetch("/api/settings")).json();
+  saved = data.weights;
+  draft = { ...saved };
+  defaults = data.defaults;
+  for (const { key } of SETTINGS) controls[key].def.textContent = `Default: ${fmt(defaults[key])}.`;
+  showSettings(draft);
+}
+
+document.getElementById("reset").addEventListener("click", async () => {
+  if (sameWeights(draft, defaults)) return panelSay("These are the defaults.");
+  draft = { ...defaults };
+  showSettings(draft);
+  stay.clear();
+  await save();
+  load();
+});
+
+// The panel stays open or closed across reloads, in this browser.
+function setPanel(open) {
+  document.getElementById("panel").hidden = !open;
+  document.body.classList.toggle("panel-open", open);
+  document.getElementById("panel-toggle").setAttribute("aria-expanded", String(open));
+  try { localStorage.setItem("scorePanel", open ? "open" : "closed"); } catch {}
+}
+document.getElementById("panel-toggle").addEventListener("click", () => setPanel(document.getElementById("panel").hidden));
+document.getElementById("panel-close").addEventListener("click", () => setPanel(false));
+let panelOpen = false;
+try { panelOpen = localStorage.getItem("scorePanel") === "open"; } catch {}
+if (location.hash === "#settings") {  // the old /settings page links here
+  panelOpen = true;
+  history.replaceState(null, "", location.pathname + location.search);
+}
+buildSettings();
+setPanel(panelOpen);
 
 document.getElementById("more").addEventListener("click", (e) => {
   limit += PAGE;
@@ -335,7 +586,7 @@ async function loadSubscriptionCount() {
 }
 
 loadSubscriptionCount();
-load();
+loadSettings().catch(() => panelSay("Couldn't load the settings.", true)).finally(load);
 </script>
 </body>
 </html>
