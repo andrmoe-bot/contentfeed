@@ -163,11 +163,12 @@ the colors you picked), dates (when a post was published, or when a link was add
 last opened an item. A ranker returns reasons with points, such as
 `("tagged music", 2)`; the score is their sum. Click "Score" on any card to see its reasons.
 
-The default, `score`, weighs the item's age, how long ago you opened it and how long ago you
-opened anything in its subscription, then adds bonuses and penalties. With the default settings:
+The default, `score`, weighs the item's age, how long ago you opened it, how long ago you
+opened anything in its subscription and its place in its subscription, then adds bonuses and penalties. With the default settings:
 
     score = −0.1 × (age in hours) + 0.1 × (hours since you opened it)
             + 1 × (hours since you opened anything in its subscription)
+            − 100 × (number of newer posts in its subscription)
             + 1000 if never opened + 1000 if nothing opened in its subscription
             + 10 if green + 10000 if next in its subscription
             − 100000 if red
@@ -179,9 +180,17 @@ subscription's posts: the longer you leave a channel, the higher its posts rise.
 and posts from subscriptions you've never opened anything from (such as one you just subscribed to)
 get the "nothing opened in its subscription" bonus instead. Ages and times are counted in whole hours.
 
+The number of newer posts is a post's place in its subscription, newest first: 0 for its newest
+post, 1 for the one before, and so on. By default each step down costs 100 points, so every
+subscription's latest posts come before its older ones, whether it posts every hour or every month.
+Links don't get it.
+
 "Next in its subscription" follows along with channels and playlists: in each subscription, the
 post published right after the one you opened most recently gets the bonus. Open episode 4 and
-episode 5 rises to the top, however old it is; open episode 5 and the bonus moves on to episode 6. This also works
+episode 5 rises; open episode 5 and the bonus moves on to episode 6. Its place in the subscription
+still counts: with the default settings, a post 100 places from its subscription's newest loses as
+many points for its place (−10000) as the bonus adds. To follow along far back in a channel, make
+the bonus bigger or the place weight smaller. This also works
 for older YouTube videos, which are in the channel's upload order. If you most recently opened a
 subscription's newest post, none of its posts get the bonus.
 
