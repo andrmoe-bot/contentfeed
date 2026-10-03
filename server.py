@@ -526,7 +526,7 @@ def feed(ranker: str, limit: int = MAX_ITEMS_SHOWN, weights: dict | None = None)
         added.update({url: now for url in new})
         items = [
             {**cache.get(url, {"url": url, "loading": True}), "kind": "link", "tags": tags,
-             "added": added[url], "date": added[url], "position": i, "newer": None, "sub": None}
+             "added": added[url], "date": added[url], "position": i, "sub": None}
             for i, (url, tags) in enumerate(entries.items())
         ]
         seen = set(entries)
@@ -534,8 +534,7 @@ def feed(ranker: str, limit: int = MAX_ITEMS_SHOWN, weights: dict | None = None)
         sub_opened = last_opened(subs)
         for sub_url, tags in subs.items():
             s = subscriptions.get(sub_url, {})
-            sub_added = min((p["first_seen"] for p in s.get("items", [])), default=now)
-            for newer, post in enumerate(s.get("items", [])):  # newest first
+            for post in s.get("items", []):
                 if post["url"] in seen:
                     continue
                 seen.add(post["url"])
@@ -543,7 +542,7 @@ def feed(ranker: str, limit: int = MAX_ITEMS_SHOWN, weights: dict | None = None)
                     **post, "kind": "subscription", "tags": tags, "feed": s["title"], "icon": s.get("icon"),
                     "domain": urlparse(post["url"]).netloc.removeprefix("www."),
                     "added": post["first_seen"], "date": post["published"] or post["first_seen"], "position": -1,
-                    "sub_last_viewed": sub_opened.get(sub_url), "newer": newer, "sub": sub_url, "sub_added": sub_added,
+                    "sub_last_viewed": sub_opened.get(sub_url), "sub": sub_url,
                 })
         for item in items:
             item.update(view_state(item["url"]), next_after=next_after.get(item["url"]))

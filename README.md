@@ -137,9 +137,9 @@ something in Jellyfin doesn't count as opened here; only opening it from the fee
 ## Viewed items
 
 Opening an item (clicking its link, middle-clicking it, or playing its video) records when you
-last viewed it. Scrolling past doesn't count. Nothing is hidden: an item you've opened loses its
-head start and then climbs back slowly the longer you leave it and its subscription alone (see
-Ranking). The card says when you viewed it.
+last viewed it. Scrolling past doesn't count. Nothing is hidden: an item you've opened moves from
+"unseen" to "seen" and comes back the longer ago you opened it (see Ranking). The card says when you
+viewed it.
 
 Cards you open or color stay where they are until you reload the page, so nothing moves away
 while you're looking at it. Playing a video stops the one playing in another card.
@@ -149,7 +149,7 @@ while you're looking at it. Playing a video stops the one playing in another car
 Each card has three dots in its bottom corner: green, white and red. They don't have proper names
 yet; for now they change an item's score:
 
-- **green**: +100 by default; you can change it in the score panel (see Ranking)
+- **green**: +10 by default; you can change it in the score panel (see Ranking)
 - **white**: the default, no change. Clicking white also marks the item viewed: a quick "seen it".
 - **red**: puts it at the bottom, below everything else
 
@@ -161,48 +161,51 @@ the colors you picked), dates (when a post was published, or when a link was add
 last opened an item. A ranker returns reasons with points, such as
 `("tagged music", 2)`; the score is their sum. Click "Score" on any card to see its reasons.
 
-The default, `score`, adds up three things, all counted in whole hours. With the default settings:
+The default, `score`, puts every item in one of three groups and gives it that group's points.
+Times count in steps of ten: 1 hour (or less) is 0 steps, 10 hours 1, 4 days 2, 6 weeks 3,
+14 months 4 and 11 years 5, so a time adds at most about five times its setting. With the default
+settings:
 
-    score = 0.01 × (hours away)
-            + (100 − hours since it became new to you)    head start, for things you haven't opened
-            + 50 if it's the next post in a series
-            + 100 if green
-            − 100 × (posts from its subscription higher up in the feed)
-            red items at the bottom
+| Group | Points |
+|---|---|
+| **Next up**: the post right after the one you opened most recently in its subscription | 30 |
+| **Unseen**: never opened (other than next up) | 40 − 8 × steps of age since published (or since you added a link) |
+| **Seen**: opened before | 8 × steps since you last opened it |
 
-**Rediscovery.** Hours away are the hours since you opened the item or anything from its
-subscription, whichever was later. Things you've left alone for a long time come back by
-themselves: a channel you last watched a year ago gets 88 points, about as much as a post published
-12 hours ago. Things you've never opened from a subscription you've never opened count from when
-they came into the feed.
+and for every item:
 
-**Freshness.** New things start with a head start that loses one point per hour, so with the
-default of 100 it's gone after about four days. Only items you haven't opened get one:
+- +20 if nothing from its subscription has been opened yet, such as one you just subscribed to
+- +10 if green; red items go to the bottom
+- −15 for each post from its subscription higher up in the feed
 
-- a new post, counted from when it was published, and a new link from when you added it
-- the newest post of a subscription you've never opened anything from, counted from when you
-  subscribed, so a new subscription shows its latest post near the top (only that one)
-**Next in series.** The post right after the one you opened most recently in its subscription gets
-50 points: about as much as a post published two days ago, so after episode 4, episode 5 is
-high in the feed but not on top. Open episode 5 and the bonus moves on to episode 6. This works for
-channels, playlists and Jellyfin series (in episode order). Tag a subscription `latest` in
-feeds.txt to skip this for it, such as a news feed.
+So a brand-new post gets 40, next up 30, a post you've never opened from 6 weeks ago 16, one you
+opened 6 weeks ago 24, and a favourite you opened over a year ago 32 (42 if it's green). The
+feed is built from the top down, taking the repeat penalty into account as it goes, so the second
+post from a subscription loses 15, the third 30, and two in a row are rare.
 
-**Mixing.** The feed is built from the top down: each place goes to the highest score after taking
-100 points off for every post from the same subscription already placed above it, so the second post
-from a subscription loses 100, the third 200, and so on. Two posts from one subscription in a row
-are rare unless you have few subscriptions.
+The two settings per step may be negative, and the sign says which way:
+
+- **Age of unseen** below 0 puts newer posts first, 0 means age doesn't matter, and above 0 puts
+  older posts first, such as starting a new subscription from its first video.
+- **Rediscovery** above 0 brings back things you opened long ago; below 0 puts recently opened
+  things first.
+
+Because next up is a flat bonus, you can place it relative to everything else: below 40 (the
+default 30) and brand-new posts come first; above 60 and it also beats a new subscription's posts.
+Next up works for channels, playlists and Jellyfin series (in episode order); tag a subscription
+`latest` in feeds.txt to turn it off for that subscription, such as a news feed. Open episode 4 and
+episode 5 is next up; open episode 5 and it moves on to episode 6.
 
 Each card's "Score" shows its points, such as
-`opened something from “Veritasium” 2 days ago +0.48 · next after “Episode 4” +50`.
+`never opened +40 · published 6 weeks ago −24 · 1 from “Veritasium” higher up −15`.
 
 Change the numbers in the score panel: click "Score settings" at the top of the feed. It opens
 beside the feed on a wide screen, or along the bottom on a narrow one, and stays open across reloads
-until you close it. There are five settings, each with a slider and a box for an exact number:
-Rediscovery (points per hour away), Freshness (head start), Next in series, Repeat penalty, and
-Green. Moving one up gives you more of what it's named after. The sliders go in steps of 1, 1.5, 2, 3,
-5 and 7 times a power of ten, so they cover both small and large numbers. The feed reorders as
-you move a slider, and the setting is saved when you let go (or when you press Enter in the box). The defaults are at the top of `ranking.py`. Equal scores are ordered newest first. The other ranker,
+until you close it. There are seven settings, each with a slider and a box for an exact number:
+Next up, Unseen, Age of unseen, Rediscovery, New subscription, Repeat penalty and Green. The
+sliders go in steps of 1, 1.5, 2, 3, 5 and 7 times a power of ten, so they cover both small and large
+numbers. The feed reorders as
+you move a slider, and the setting is saved when you let go (or when you press Enter in the box). The defaults are at the top of `ranking.py`. Equal scores are ordered unopened first, then newest first. The other ranker,
 `chronological`, has no rules: everything scores 0 and the newest item is first. To add another ranker, register a
 function with `@ranker("name")`, then select it with `python3 server.py --ranker name`, or try
 it without a restart at `/api/feed?ranker=name`.
