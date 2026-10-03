@@ -137,9 +137,9 @@ something in Jellyfin doesn't count as opened here; only opening it from the fee
 ## Viewed items
 
 Opening an item (clicking its link, middle-clicking it, or playing its video) records when you
-last viewed it. Scrolling past doesn't count. Nothing is hidden: by default, items you've never
-opened get a 1000-point bonus, and an item you've opened gains 0.1 points per hour since you opened it
-(see Ranking). The card says when you viewed it.
+last viewed it. Scrolling past doesn't count. Nothing is hidden: an item you've opened loses its
+head start and then climbs back slowly the longer you leave it and its subscription alone (see
+Ranking). The card says when you viewed it.
 
 Cards you open or color stay where they are until you reload the page, so nothing moves away
 while you're looking at it. Playing a video stops the one playing in another card.
@@ -149,11 +149,9 @@ while you're looking at it. Playing a video stops the one playing in another car
 Each card has three dots in its bottom corner: green, white and red. They don't have proper names
 yet; for now they change an item's score:
 
-- **green**: +10
+- **green**: +100 by default; you can change it in the score panel (see Ranking)
 - **white**: the default, no change. Clicking white also marks the item viewed: a quick "seen it".
-- **red**: −100000, which puts it at the bottom, below everything else
-
-These are the defaults; you can change them in the score panel (see Ranking).
+- **red**: puts it at the bottom, below everything else
 
 ## Ranking
 
@@ -163,48 +161,48 @@ the colors you picked), dates (when a post was published, or when a link was add
 last opened an item. A ranker returns reasons with points, such as
 `("tagged music", 2)`; the score is their sum. Click "Score" on any card to see its reasons.
 
-The default, `score`, weighs the item's age, how long ago you opened it, how long ago you
-opened anything in its subscription, its place in its subscription and the place of the post you
-last opened there, then adds bonuses and penalties. With the default settings:
+The default, `score`, adds up three things, all counted in whole hours. With the default settings:
 
-    score = −0.1 × (age in hours) + 0.1 × (hours since you opened it)
-            + 1 × (hours since you opened anything in its subscription)
-            − 100 × (number of newer posts in its subscription)
-            + 0 × (number of posts newer than the one you last opened in its subscription)
-            + 1000 if never opened + 1000 if nothing opened in its subscription
-            + 10 if green + 10000 if next in its subscription
-            − 100000 if red
+    score = 0.01 × (hours away)
+            + (100 − hours since it became new to you)    head start, for things you haven't opened
+            + 100 if green
+            − 100 × (posts from its subscription higher up in the feed)
+            red items at the bottom
 
-Hours since you opened it only counts for items you've opened; items you've never opened get the
-"never opened" bonus instead. Hours since you opened anything in its subscription counts for
-posts from subscriptions you've opened at least one post of, and is the same for all of that
-subscription's posts: the longer you leave a channel, the higher its posts rise. Links don't get it,
-and posts from subscriptions you've never opened anything from (such as one you just subscribed to)
-get the "nothing opened in its subscription" bonus instead. Ages and times are counted in whole hours.
+**Rediscovery.** Hours away are the hours since you opened the item or anything from its
+subscription, whichever was later. Things you've left alone for a long time come back by
+themselves: a channel you last watched a year ago gets 88 points, about as much as a post published
+12 hours ago. Things you've never opened from a subscription you've never opened count from when
+they came into the feed.
 
-The number of newer posts is a post's place in its subscription, newest first: 0 for its newest
-post, 1 for the one before, and so on. By default each step down costs 100 points, so every
-subscription's latest posts come before its older ones, whether it posts every hour or every month.
-Links don't get it.
+**Freshness.** New things start with a head start that loses one point per hour, so with the
+default of 100 it's gone after about four days. Only items you haven't opened get one:
 
-The number of posts newer than the one you last opened is the same for all of a subscription's
-posts: 0 if the post you opened most recently there was its newest, 50 if you're working through
-it 50 posts back. It's off (0) by default; a positive weight raises subscriptions you're behind in,
-a negative one lowers them. Links and subscriptions you've never opened anything from don't get it.
+- a new post, counted from when it was published, and a new link from when you added it
+- the newest post of a subscription you've never opened anything from, counted from when you
+  subscribed, so a new subscription shows its latest post near the top (only that one)
+- the next post in a series: the post right after the one you opened most recently in its
+  subscription, counted from when you opened that one. Its head start is bigger (300 by default),
+  so finishing episode 4 puts episode 5 at the top for the next few days. Open episode 5 and the
+  head start moves on to episode 6. This works for channels, playlists and Jellyfin series (in
+  episode order). Tag a subscription `latest` in feeds.txt to skip this for it, such as a news feed.
 
-"Next in its subscription" follows along with channels and playlists: in each subscription, the
-post published right after the one you opened most recently gets the bonus. Open episode 4 and
-episode 5 rises; open episode 5 and the bonus moves on to episode 6. Its place in the subscription
-still counts: with the default settings, a post 100 places from its subscription's newest loses as
-many points for its place (−10000) as the bonus adds. To follow along far back in a channel, make
-the bonus bigger or the place weight smaller. This also works
-for older YouTube videos, which are in the channel's upload order. If you most recently opened a
-subscription's newest post, none of its posts get the bonus.
+When more than one head start applies, the bigger one counts.
+
+**Mixing.** The feed is built from the top down: each place goes to the highest score after taking
+100 points off for every post from the same subscription already placed above it, so the second post
+from a subscription loses 100, the third 200, and so on. Two posts from one subscription in a row
+are rare unless you have few subscriptions.
+
+Each card's "Score" shows its points, such as
+`opened something from “Veritasium” 2 days ago +0.48 · next after “Episode 4”, opened 2 days ago +252`.
 
 Change the numbers in the score panel: click "Score settings" at the top of the feed. It opens
 beside the feed on a wide screen, or along the bottom on a narrow one, and stays open across reloads
-until you close it. Each setting has a slider, which goes in steps of 1, 1.5, 2, 3, 5 and 7 times a
-power of ten so it covers both 0.1 and 100000, and a box for an exact number. The feed reorders as
+until you close it. There are five settings, each with a slider and a box for an exact number:
+Rediscovery (points per hour away), Freshness and Next in series (head starts), Repeat penalty, and
+Green. Moving one up gives you more of what it's named after. The sliders go in steps of 1, 1.5, 2, 3,
+5 and 7 times a power of ten, so they cover both small and large numbers. The feed reorders as
 you move a slider, and the setting is saved when you let go (or when you press Enter in the box). The defaults are at the top of `ranking.py`. Equal scores are ordered newest first. The other ranker,
 `chronological`, has no rules: everything scores 0 and the newest item is first. To add another ranker, register a
 function with `@ranker("name")`, then select it with `python3 server.py --ranker name`, or try

@@ -105,9 +105,10 @@
     <h2 id="panel-title">Score settings</h2>
     <button type="button" id="panel-close" aria-label="Close score settings">×</button>
   </div>
-  <p class="hint">The feed is sorted by score, highest first. A score adds up the points below: five weights multiplied
-    by numbers of hours or posts, and bonuses and penalties on top. Every card's “Score” details show the points it got. The feed
-    reorders as you move a slider, and the setting is saved when you let go.</p>
+  <p class="hint">The feed is sorted by score, highest first. Things you haven't seen in a while gain points by the
+    hour, new things get a head start that wears off one point per hour, and posts lose points for each post from their
+    subscription higher up. Every card's “Score” details show the points it got. The feed reorders as you move a slider,
+    and the setting is saved when you let go.</p>
   <p id="formula"></p>
   <div id="settings"></div>
   <div class="panel-actions">
@@ -133,15 +134,20 @@ let playing = null;  // url of the video playing on this page
 
 // Fields that change when you open or color an item, or when its subscription gets a new post. They're
 // updated in place, not by rebuilding the card, so a video you just started keeps playing.
-const VIEW_FIELDS = ["color", "last_viewed", "next_after", "sub_last_viewed", "newer", "sub_last_newer", "score", "reasons"];
+const VIEW_FIELDS = ["color", "last_viewed", "next_after", "next_since", "sub_last_viewed", "newer", "score", "reasons"];
 const contentKey = (item) => JSON.stringify(item, (k, v) => (VIEW_FIELDS.includes(k) ? undefined : v));
 
 async function post(path, body) {
   return fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), keepalive: true });
 }
 
+// A card keeps the item it was built with, which can be older than the one shown now. Changes go to
+// the one shown, which the card keeps showing while it stays in place below what the server sends.
+const latest = (item) => shown.find((it) => it.url === item.url) || item;
+
 // Opening an item (its link, or playing its video) records it as viewed.
 async function opened(item) {
+  item = latest(item);
   stay.add(item.url);
   item.last_viewed = Date.now() / 1000;
   const c = cards.get(item.url);
@@ -161,6 +167,7 @@ const COLOR_TITLES = {
 
 // White also marks the item viewed, so it's a quick "seen it".
 async function setColor(item, color) {
+  item = latest(item);
   const seen = color === "white";
   if (item.color === color && !seen) return;
   item.color = color;
@@ -320,7 +327,7 @@ function why(item) {
   const rows = item.reasons.map((r) => el("tr", {}, el("td", {}, r.label), el("td", {}, fmtPoints(r.points))));
   const origin = item.kind === "subscription" ? `from subscription “${item.feed}”` : "from links.txt";
   const note = el("div", {}, item.reasons.length
-    ? `Equal scores are ordered newest first. This item is ${origin}.`
+    ? `Equal scores are ordered unopened first, then newest first. This item is ${origin}.`
     : `No ranking rules apply, so it is ordered by date, newest first. This item is ${origin}.`);
   return el("details", { class: "why" },
     el("summary", {}, `Score ${fmtPoints(item.score).replace(/^\+/, "")}`),
@@ -376,27 +383,17 @@ async function fetchFeed() {
 // The score settings panel. Each setting has a slider and a box for an exact number. The sliders go
 // in steps of 1, 1.5, 2, 3, 5 and 7 times a power of ten, so one slider covers small and huge numbers.
 const SETTINGS = [
-  { key: "age_weight", label: "Age", before: "×", after: "per hour old",
-    hint: "Hours since the item was published, or since you added the link. Negative puts newer items first." },
-  { key: "seen_weight", label: "Last opened", before: "×", after: "per hour",
-    hint: "Hours since you opened the item, for items you've opened. Positive means an item you just opened sinks, then climbs back as hours pass. Clicking white also counts as opening." },
-  { key: "sub_seen_weight", label: "Subscription last opened", before: "×", after: "per hour",
-    hint: "Hours since you opened any post in the item's subscription, the same for all its posts. Positive means subscriptions you've left alone rise. Not for links; subscriptions you've never opened anything from get the bonus below instead." },
-  { key: "sub_newer_weight", label: "Place in subscription", before: "×", after: "per newer post",
-    hint: "How many posts in the item's subscription are newer: 0 for its newest post, 1 for the one before, and so on. Negative puts each subscription's latest posts first, however often it posts. Not for links." },
-  { key: "sub_last_newer_weight", label: "Place of last opened", before: "×", after: "per newer post",
-    hint: "How many posts in the item's subscription are newer than the one you opened most recently there: 0 if that was its newest post. The same for all its posts, so positive means subscriptions you're behind in rise. Not for links, or subscriptions you've never opened anything from." },
-  { key: "never_seen_bonus", label: "Never opened", before: "+", after: "points",
-    hint: "For items you've never opened." },
-  { key: "sub_never_seen_bonus", label: "Subscription never opened", before: "+", after: "points",
-    hint: "For every post in a subscription you've never opened anything from, such as one you just subscribed to." },
+  { key: "rediscovery_weight", label: "Rediscovery", before: "×", after: "per hour away", rate: true,
+    hint: "Hours since you opened the item or anything from its subscription, whichever was later; for things you've never opened from a subscription you've never opened, hours since they came into the feed. Up: things you haven't seen in a long time come back sooner." },
+  { key: "fresh_start", label: "Freshness", before: "+", after: "head start",
+    hint: "New posts and links start with this many points and lose one per hour, so it's gone after that many hours. So does the newest post of a subscription you've just added, counted from when you added it. Up: new things stay near the top for longer." },
+  { key: "next_start", label: "Next in series", before: "+", after: "head start",
+    hint: "The post right after the one you opened most recently in a subscription starts with this many points when you open that one, and loses one per hour. Not for subscriptions tagged “latest”. Up: you follow along in order more." },
+  { key: "repeat_penalty", label: "Repeat penalty", before: "−", after: "per repeat",
+    hint: "Taken off a post for each post from its subscription higher up in the feed: once for the second, twice for the third, and so on. Up: subscriptions are mixed more." },
   { key: "green_bonus", label: "Green", before: "+", after: "points", hint: "For items you marked green." },
-  { key: "next_bonus", label: "Next in subscription", before: "+", after: "points",
-    hint: "For the post published right after the one you opened most recently in the same subscription, so you can follow a channel or playlist in order." },
-  { key: "red_penalty", label: "Red", before: "−", after: "points",
-    hint: "For items you marked red. Make it bigger than everything else adds up to, and red items sink to the bottom." },
 ];
-const SIGNED = ["age_weight", "seen_weight", "sub_seen_weight", "sub_newer_weight", "sub_last_newer_weight"];  // may be negative; the others are amounts added or taken away
+const SIGNED = [];  // settings that may be negative
 const LIMIT = 10_000_000;
 let saved = {};  // as saved on the server
 let draft = {};  // as shown in the panel
@@ -410,7 +407,7 @@ function steps(lo, hi, signed) {
   up.push(10 ** hi);
   return signed ? [...up.map((v) => -v).reverse(), 0, ...up] : [0, ...up];
 }
-const WEIGHT_STEPS = steps(-3, 3, true);  // ±0.001 to ±1000 points per hour
+const RATE_STEPS = steps(-3, 3, false);  // 0.001 to 1000 points per hour
 const BONUS_STEPS = steps(0, 7, false);  // 1 to 10 000 000 points
 
 // The slider position closest to a typed number, on the slider's log scale.
@@ -428,8 +425,8 @@ const inRange = (key, v) => Number.isFinite(v) && v >= (SIGNED.includes(key) ? -
 const controls = {};
 
 function buildSettings() {
-  document.getElementById("settings").replaceChildren(...SETTINGS.map(({ key, label, before, after, hint }) => {
-    const list = SIGNED.includes(key) ? WEIGHT_STEPS : BONUS_STEPS;
+  document.getElementById("settings").replaceChildren(...SETTINGS.map(({ key, label, before, after, hint, rate }) => {
+    const list = rate ? RATE_STEPS : BONUS_STEPS;
     const num = el("input", { type: "number", id: `w-${key}`, step: "any", inputmode: "decimal", required: "",
       min: SIGNED.includes(key) ? -LIMIT : 0, max: LIMIT });
     const slider = el("input", { type: "range", min: 0, max: list.length - 1, step: 1, "aria-label": `${label} slider` });
@@ -467,12 +464,9 @@ function showSettings(w) {
 function showFormula() {
   const w = draft;
   document.getElementById("formula").textContent =
-    `score = ${fmt(w.age_weight)} × age in hours${plus(w.seen_weight)} × hours since you opened it` +
-    `${plus(w.sub_seen_weight)} × hours since you opened anything in its subscription` +
-    `${plus(w.sub_newer_weight)} × newer posts in its subscription` +
-    `${plus(w.sub_last_newer_weight)} × posts newer than the one you last opened in its subscription` +
-    `${plus(w.never_seen_bonus)} if never opened${plus(w.sub_never_seen_bonus)} if nothing opened in its subscription` +
-    `${plus(w.green_bonus)} if green${plus(w.next_bonus)} if next in its subscription − ${fmt(w.red_penalty)} if red`;
+    `score = ${fmt(w.rediscovery_weight)} × hours away + (${fmt(w.fresh_start)} or ${fmt(w.next_start)} if next in series` +
+    ` − hours since it became new) + ${fmt(w.green_bonus)} if green − ${fmt(w.repeat_penalty)} × posts from its` +
+    ` subscription higher up; red at the bottom`;
 }
 
 function panelSay(text, isError = false) {
@@ -501,7 +495,7 @@ function save() {
 
 async function saveNow() {
   const valid = SETTINGS.every(({ key }) => inRange(key, draft[key]));
-  if (!valid) return panelSay("Each weight must be from −10 000 000 to 10 000 000, and each bonus or penalty from 0 to 10 000 000.", true);
+  if (!valid) return panelSay("Each setting must be from 0 to 10 000 000.", true);
   if (sameWeights(draft, saved)) return;
   const res = await fetch("/api/settings", {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ weights: draft }),
