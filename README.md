@@ -164,11 +164,13 @@ last opened an item. A ranker returns reasons with points, such as
 `("tagged music", 2)`; the score is their sum. Click "Score" on any card to see its reasons.
 
 The default, `score`, weighs the item's age, how long ago you opened it, how long ago you
-opened anything in its subscription and its place in its subscription, then adds bonuses and penalties. With the default settings:
+opened anything in its subscription, its place in its subscription and the place of the post you
+last opened there, then adds bonuses and penalties. With the default settings:
 
     score = −0.1 × (age in hours) + 0.1 × (hours since you opened it)
             + 1 × (hours since you opened anything in its subscription)
             − 100 × (number of newer posts in its subscription)
+            + 0 × (number of posts newer than the one you last opened in its subscription)
             + 1000 if never opened + 1000 if nothing opened in its subscription
             + 10 if green + 10000 if next in its subscription
             − 100000 if red
@@ -184,6 +186,11 @@ The number of newer posts is a post's place in its subscription, newest first: 0
 post, 1 for the one before, and so on. By default each step down costs 100 points, so every
 subscription's latest posts come before its older ones, whether it posts every hour or every month.
 Links don't get it.
+
+The number of posts newer than the one you last opened is the same for all of a subscription's
+posts: 0 if the post you opened most recently there was its newest, 50 if you're working through
+it 50 posts back. It's off (0) by default; a positive weight raises subscriptions you're behind in,
+a negative one lowers them. Links and subscriptions you've never opened anything from don't get it.
 
 "Next in its subscription" follows along with channels and playlists: in each subscription, the
 post published right after the one you opened most recently gets the bonus. Open episode 4 and

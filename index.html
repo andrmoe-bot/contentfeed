@@ -105,7 +105,7 @@
     <h2 id="panel-title">Score settings</h2>
     <button type="button" id="panel-close" aria-label="Close score settings">×</button>
   </div>
-  <p class="hint">The feed is sorted by score, highest first. A score adds up the points below: four weights multiplied
+  <p class="hint">The feed is sorted by score, highest first. A score adds up the points below: five weights multiplied
     by numbers of hours or posts, and bonuses and penalties on top. Every card's “Score” details show the points it got. The feed
     reorders as you move a slider, and the setting is saved when you let go.</p>
   <p id="formula"></p>
@@ -133,7 +133,7 @@ let playing = null;  // url of the video playing on this page
 
 // Fields that change when you open or color an item, or when its subscription gets a new post. They're
 // updated in place, not by rebuilding the card, so a video you just started keeps playing.
-const VIEW_FIELDS = ["color", "last_viewed", "next_after", "sub_last_viewed", "newer", "score", "reasons"];
+const VIEW_FIELDS = ["color", "last_viewed", "next_after", "sub_last_viewed", "newer", "sub_last_newer", "score", "reasons"];
 const contentKey = (item) => JSON.stringify(item, (k, v) => (VIEW_FIELDS.includes(k) ? undefined : v));
 
 async function post(path, body) {
@@ -384,6 +384,8 @@ const SETTINGS = [
     hint: "Hours since you opened any post in the item's subscription, the same for all its posts. Positive means subscriptions you've left alone rise. Not for links; subscriptions you've never opened anything from get the bonus below instead." },
   { key: "sub_newer_weight", label: "Place in subscription", before: "×", after: "per newer post",
     hint: "How many posts in the item's subscription are newer: 0 for its newest post, 1 for the one before, and so on. Negative puts each subscription's latest posts first, however often it posts. Not for links." },
+  { key: "sub_last_newer_weight", label: "Place of last opened", before: "×", after: "per newer post",
+    hint: "How many posts in the item's subscription are newer than the one you opened most recently there: 0 if that was its newest post. The same for all its posts, so positive means subscriptions you're behind in rise. Not for links, or subscriptions you've never opened anything from." },
   { key: "never_seen_bonus", label: "Never opened", before: "+", after: "points",
     hint: "For items you've never opened." },
   { key: "sub_never_seen_bonus", label: "Subscription never opened", before: "+", after: "points",
@@ -394,7 +396,7 @@ const SETTINGS = [
   { key: "red_penalty", label: "Red", before: "−", after: "points",
     hint: "For items you marked red. Make it bigger than everything else adds up to, and red items sink to the bottom." },
 ];
-const SIGNED = ["age_weight", "seen_weight", "sub_seen_weight", "sub_newer_weight"];  // may be negative; the others are amounts added or taken away
+const SIGNED = ["age_weight", "seen_weight", "sub_seen_weight", "sub_newer_weight", "sub_last_newer_weight"];  // may be negative; the others are amounts added or taken away
 const LIMIT = 10_000_000;
 let saved = {};  // as saved on the server
 let draft = {};  // as shown in the panel
@@ -468,6 +470,7 @@ function showFormula() {
     `score = ${fmt(w.age_weight)} × age in hours${plus(w.seen_weight)} × hours since you opened it` +
     `${plus(w.sub_seen_weight)} × hours since you opened anything in its subscription` +
     `${plus(w.sub_newer_weight)} × newer posts in its subscription` +
+    `${plus(w.sub_last_newer_weight)} × posts newer than the one you last opened in its subscription` +
     `${plus(w.never_seen_bonus)} if never opened${plus(w.sub_never_seen_bonus)} if nothing opened in its subscription` +
     `${plus(w.green_bonus)} if green${plus(w.next_bonus)} if next in its subscription − ${fmt(w.red_penalty)} if red`;
 }
