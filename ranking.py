@@ -19,11 +19,8 @@ Each item has its page metadata (url, title, description, domain, ...) plus thes
     next_after   for a post: the title of the post you opened most recently in its subscription,
                  if this post was published right after that one ("what's next"); otherwise None
     sub          for a post: its subscription's address; None for links
-    sub_added    for a post: when the server first saw its subscription
     sub_last_viewed  for a post: unix time you last opened any post in its subscription, or None
                  if you've never opened anything from it
-    newer        for a post: how many posts in its subscription are newer (0 = its newest post);
-                 None for links
 
 Nothing is hidden: items you've opened or marked red are scored differently, not removed.
 
@@ -37,6 +34,7 @@ for age, so the page doesn't redraw every time it checks for changes.
 """
 
 import heapq
+import math
 from typing import Callable
 
 Reasons = list[tuple[str, float]]
@@ -44,18 +42,22 @@ Ranker = Callable[[dict, float, dict], Reasons]
 RANKERS: dict[str, Ranker] = {}
 DEFAULT = "score"
 
-# Settings for the "score" ranker, in points. Rediscovery is points per hour; the head start is
-# points that new things start with and lose one per hour; the rest are added or taken away. These are the defaults; you can change
-# them in the feed's score panel, and server.py keeps your values in settings.json.
+# Settings for the "score" ranker, in points. Every item is in one group: next up, unseen or seen.
+# Times count in steps of ten (see steps), so a time adds at most about 5 × its setting. Settings that
+# may be negative say which way: below 0 puts newer (or more recently opened) first, above 0 older.
+# These are the defaults; you can change them in the feed's score panel, and server.py keeps your
+# values in settings.json.
 DEFAULT_WEIGHTS = {
-    "rediscovery_weight": 0.01,  # points per hour since you opened the item, or anything from its subscription
-    "fresh_start": 100,  # head start for new posts and links, and the newest post of a new subscription
-    "series_bonus": 50,  # for the post after the one you opened most recently in a subscription
-    "repeat_penalty": 100,  # taken off for each post from the same subscription higher up in the feed
-    "green_bonus": 100,
+    "next_up_bonus": 30,  # next up: the post after the one you opened most recently in a subscription
+    "unseen_bonus": 40,  # unseen: items you've never opened (other than next up)
+    "age_per_step": -8,  # unseen: per step of age since published (or added, for links)
+    "rediscovery_per_step": 8,  # seen: per step of time since you last opened the item
+    "new_sub_bonus": 20,  # for posts from a subscription you've never opened anything from
+    "repeat_per_post": 15,  # taken off for each post from the same subscription higher up in the feed
+    "green_bonus_points": 10,
 }
 WEIGHTS = dict(DEFAULT_WEIGHTS)
-SIGNED: set[str] = set()  # settings that may be negative
+SIGNED = {"age_per_step", "rediscovery_per_step"}  # may be negative
 LIMIT = 10_000_000
 RED = 10_000_000  # red items sink below everything else
 
@@ -74,8 +76,12 @@ def check_weights(weights: dict) -> dict:
 
 
 def hours_label(hours: int) -> str:
-    """Such as "5 hours", "1 day", "3 days 4 hours" or, from a week on, "12 days"."""
+    """Such as "5 hours", "3 days 4 hours", "12 days", "5 months" or "3 years"."""
     days, hours = divmod(hours, 24)
+    if days >= 730:
+        return f"{days // 365} years"
+    if days >= 60:
+        return f"{days // 30} months"
     if days >= 7:
         hours = 0
     parts = [f"{n} {unit}{'s' if n != 1 else ''}" for n, unit in ((days, "day"), (hours, "hour")) if n]
@@ -90,13 +96,19 @@ def points(x: float) -> float:
     return int(x) if float(x).is_integer() else round(x, 2)
 
 
+def steps(hours: int) -> float:
+    """Time in steps of ten: 1 hour or less is 0, 10 hours 1, 100 hours (4 days) 2, 1000 hours
+    (6 weeks) 3, 10 000 hours (14 months) 4, 100 000 hours (11 years) 5."""
+    return math.log10(max(hours, 1))
+
+
 def hours_since(now: float, then: float) -> int:
     return max(0, int((now - then) // 3600))  # whole hours, so points don't change every second
 
 
 def ranker(name: str, spread: bool = False):
     """Register a ranker. With spread, the feed is built from the top down and each item loses
-    repeat_penalty for every item from the same subscription above it (see rank)."""
+    repeat_per_post for every item from the same subscription above it (see rank)."""
     def register(fn: Ranker) -> Ranker:
         fn.spread = spread
         RANKERS[name] = fn
@@ -113,43 +125,28 @@ def chronological(item: dict, now: float, weights: dict) -> Reasons:
 
 @ranker("score", spread=True)
 def score(item: dict, now: float, weights: dict) -> Reasons:
-    """Time away (rediscovery) plus a head start for new things, which wears off one point per hour,
-    plus bonuses for the next post in a series and for green. rank() then takes points off repeats from the same subscription."""
+    """Points for the item's group (next up, unseen or seen) and its time in steps of ten, plus new
+    subscription and green. rank() then takes points off repeats from the same subscription."""
     w = weights
     reasons = []
-    # Time away: since you opened the item or anything from its subscription, whichever was later
-    opened = [t for t in (item["last_viewed"], item.get("sub_last_viewed")) if t is not None]
-    if opened:
-        away = hours_since(now, max(opened))
-        if item["last_viewed"] == max(opened):
-            label = f"opened {hours_label(away)} ago"
-        else:
-            label = f"opened something from “{short(item['feed'])}” {hours_label(away)} ago"
+    if item.get("next_after") and "latest" not in item["tags"]:
+        if w["next_up_bonus"]:
+            reasons.append((f"next up after “{short(item['next_after'])}”", w["next_up_bonus"]))
+    elif item["last_viewed"] is None:
+        if w["unseen_bonus"]:
+            reasons.append(("never opened", w["unseen_bonus"]))
+        age = hours_since(now, item["date"])
+        if steps(age) and w["age_per_step"]:
+            label = f"{'added' if item['kind'] == 'link' else 'published'} {hours_label(age)} ago"
+            reasons.append((label, points(w["age_per_step"] * steps(age))))
     else:
-        away = hours_since(now, item["added"])
-        label = f"in the feed {hours_label(away)}, never opened"
-    if away and w["rediscovery_weight"]:
-        reasons.append((label, points(w["rediscovery_weight"] * away)))
-    # Head start, for things you haven't opened; the bigger one counts
-    starts = []
-    if item["last_viewed"] is None:
-        if item["kind"] == "link":
-            age = hours_since(now, item["added"])
-            starts.append((w["fresh_start"] - age, f"added {hours_label(age)} ago"))
-        else:
-            age = hours_since(now, item["date"])
-            starts.append((w["fresh_start"] - age, f"published {hours_label(age)} ago"))
-            if item.get("sub_last_viewed") is None and item.get("newer") == 0:
-                age = hours_since(now, item["sub_added"])
-                starts.append((w["fresh_start"] - age, f"newest from “{short(item['feed'])}”, subscribed {hours_label(age)} ago"))
-    if starts:
-        start, label = max(starts)
-        if start > 0:
-            reasons.append((label, points(start)))
-    if item.get("next_after") and "latest" not in item["tags"] and w["series_bonus"]:
-        reasons.append((f"next after “{short(item['next_after'])}”", w["series_bonus"]))
-    if item["color"] == "green" and w["green_bonus"]:
-        reasons.append(("green", w["green_bonus"]))
+        away = hours_since(now, item["last_viewed"])
+        if steps(away) and w["rediscovery_per_step"]:
+            reasons.append((f"opened {hours_label(away)} ago", points(w["rediscovery_per_step"] * steps(away))))
+    if item["kind"] == "subscription" and item.get("sub_last_viewed") is None and w["new_sub_bonus"]:
+        reasons.append((f"nothing opened from “{short(item['feed'])}” yet", w["new_sub_bonus"]))
+    if item["color"] == "green" and w["green_bonus_points"]:
+        reasons.append(("green", w["green_bonus_points"]))
     elif item["color"] == "red":
         reasons.append(("red", -RED))
     return reasons
@@ -160,8 +157,8 @@ def rank(name: str, items: list[dict], now: float, weights: dict | None = None) 
     saved ones are for previewing them, such as while you move a slider.
 
     For a spread ranker the feed is built from the top down: the next item is always the one with
-    the highest score after taking off repeat_penalty for each item from its subscription already
-    placed above it, so the second post from a subscription loses repeat_penalty, the third twice that."""
+    the highest score after taking off repeat_per_post for each item from its subscription already
+    placed above it, so the second post from a subscription loses repeat_per_post, the third twice that."""
     fn = RANKERS[name]
     weights = weights or WEIGHTS
     scored = []
@@ -170,7 +167,7 @@ def rank(name: str, items: list[dict], now: float, weights: dict | None = None) 
         scored.append({**item, "score": points(sum(r["points"] for r in reasons)), "reasons": reasons})
     # On equal scores: things you haven't opened first, then newest first
     order = lambda it: (it["score"], it["last_viewed"] is None, it["date"], it["position"])
-    penalty = weights.get("repeat_penalty", 0) if fn.spread else 0
+    penalty = weights.get("repeat_per_post", 0) if fn.spread else 0
     if not penalty:
         return sorted(scored, key=order, reverse=True)
     # Each subscription's items, best first; links are each on their own
