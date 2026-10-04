@@ -175,6 +175,8 @@ settings:
 and for every item:
 
 - +20 if nothing from its subscription has been opened yet, such as one you just subscribed to
+- −20 if you opened anything from its subscription in the last 24 hours, so after you watch a video
+  its channel's next one (next up 30 − 20 = 10) waits a day instead of coming straight back
 - +10 if green; red items go to the bottom
 - 0 if published (or added) before 2026-01-01: set **Old** below 0 to push back everything from
   before a date, or above 0 to bring it forward, and pick the date beside it
@@ -206,9 +208,10 @@ Each card's "Score" shows its points, such as
 
 Change the numbers in the score panel: click "Score settings" at the top of the feed. It opens
 beside the feed on a wide screen, or along the bottom on a narrow one, and stays open across reloads
-until you close it. There are nine settings, each with a slider and a box for an exact number:
-Next up, Unseen, Age of unseen, Seen, Rediscovery, New subscription, Repeat penalty, Green and Old
-(which also has a date, at midnight on the server's clock). The
+until you close it. There are ten settings, each with a slider and a box for an exact number:
+Next up, Unseen, Age of unseen, Seen, Rediscovery, New subscription, Repeat penalty, Green,
+Recent subscription (which also has its number of hours) and Old (which also has a date,
+at midnight on the server's clock). The
 sliders go in steps of 1, 1.5, 2, 3, 5 and 7 times a power of ten, so they cover both small and large
 numbers. The feed reorders as
 you move a slider, and the setting is saved when you let go (or when you press Enter in the box). The defaults are at the top of `ranking.py`. Equal scores are ordered unopened first, then newest first. The other ranker,
