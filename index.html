@@ -364,15 +364,26 @@ function load() {
   return loading;
 }
 
+let feedTag = null;  // the ETag of the feed shown: the server answers "not modified" if it's still the same
+let lastPending = 0;
+
 async function fetchFeed() {
   clearTimeout(pollTimer);
   try {
     // Settings you haven't saved yet, such as while you drag a slider, are sent along to preview them.
     const preview = Object.keys(saved).length && !sameWeights(draft, saved)
       ? `&weights=${encodeURIComponent(JSON.stringify(draft))}` : "";
-    const res = await fetch(`/api/feed?limit=${limit}${preview}`);
+    const res = await fetch(`/api/feed?limit=${limit}${preview}`,
+      { cache: "no-store", headers: feedTag ? { "If-None-Match": feedTag } : {} });
+    if (res.status === 304) {
+      render();  // same items, but cards kept in place may now take their place
+      pollTimer = setTimeout(load, lastPending ? 1500 : 30000);
+      return;
+    }
     const data = await res.json();
     if (!res.ok) throw new Error(data.error);
+    feedTag = res.headers.get("ETag");
+    lastPending = data.pending;
     items = data.items;
     render();
     const count = data.total > items.length ? `top ${items.length} of ${data.total}` : `${data.total}`;

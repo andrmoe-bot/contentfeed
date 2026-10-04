@@ -132,9 +132,12 @@ def hours_since(now: float, then: float) -> int:
 # Similarity: how alike an item is to one you opened, from 0 to 100%. Two posts from the same
 # subscription are 100% alike if published at the same time, falling evenly to 0% when published
 # similar_days or more apart. Items from different subscriptions (or links) are tag_similarity alike
-# for each tag they share, other than "latest". At most 100%.
+# for each tag they share, other than "latest". At most 100%. An item is 100% like itself, so one you
+# just opened loses the whole penalty too.
 def similarity(item: dict, other: dict, weights: dict) -> tuple[int, str]:
     """How alike the two items are, in whole percent, and why, such as "same subscription, published 4 days apart"."""
+    if item["url"] == other["url"]:
+        return 100, "itself"
     if item.get("sub") and item.get("sub") == other.get("sub"):
         gap = abs(item["date"] - other["date"]) / 3600
         days = weights["similar_days"]
@@ -148,16 +151,16 @@ def similarity(item: dict, other: dict, weights: dict) -> tuple[int, str]:
 
 def similar_to_recent(items: list[dict], now: float, weights: dict):
     """Set each item's "similar" to the item opened in the last similar_hours that it's most like, as
-    {title, hours (since opened), percent, why}, or None if it's 0% like all of them."""
+    {title, hours (since opened), percent, why}, or None if it's 0% like all of them. An item opened in
+    that time is 100% like itself."""
     recent = [it for it in items if it["last_viewed"] is not None and hours_since(now, it["last_viewed"]) < weights["similar_hours"]]
     for it in items:
         best = None
         if weights["similar_penalty"]:
             for other in recent:
-                if other["url"] == it["url"]:
-                    continue
                 percent, why = similarity(it, other, weights)
-                if percent and (not best or percent > best["percent"]):
+                # On a tie, itself is the clearest reason
+                if percent and (not best or percent > best["percent"] or (percent == best["percent"] and why == "itself")):
                     best = {"title": other["title"], "hours": hours_since(now, other["last_viewed"]), "percent": percent, "why": why}
         it["similar"] = best
 
@@ -207,7 +210,10 @@ def score(item: dict, now: float, weights: dict) -> Reasons:
     like = item.get("similar")
     if like and w["similar_penalty"]:
         when = f"{hours_label(like['hours'])} ago" if like["hours"] else "in the last hour"
-        label = f"{like['percent']}% like “{short(like['title'])}”, opened {when} ({like['why']})"
+        if like["why"] == "itself":
+            label = f"100% like itself, opened {when}"
+        else:
+            label = f"{like['percent']}% like “{short(like['title'])}”, opened {when} ({like['why']})"
         reasons.append((label, points(-w["similar_penalty"] * like["percent"] / 100)))
     if w["old_points"] and item["date"] < day_start(w["old_before"]):
         label = f"{'added' if item['kind'] == 'link' else 'published'} before {w['old_before']}"
