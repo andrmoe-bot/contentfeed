@@ -55,6 +55,8 @@ DEFAULT_WEIGHTS = {
     "seen_bonus": -30,  # seen: items you've opened; below 0 puts them under unseen items at first
     "rediscovery_per_step": 12,  # seen: per step of time since you last opened the item
     "new_sub_bonus": 20,  # for posts from a subscription you've never opened anything from
+    "recent_sub_penalty": 20,  # taken off posts from a subscription you opened anything from recently:
+    "recent_sub_hours": 24,  # within this many hours
     "repeat_per_post": 15,  # taken off for each post from the same subscription higher up in the feed
     "green_bonus_points": 10,
     "old_points": 0,  # for items published (or links added) before old_before; below 0 is a penalty
@@ -142,7 +144,7 @@ def chronological(item: dict, now: float, weights: dict) -> Reasons:
 @ranker("score", spread=True)
 def score(item: dict, now: float, weights: dict) -> Reasons:
     """Points for the item's group (next up, unseen or seen) and its time in steps of ten, plus new
-    subscription, old and green. rank() then takes points off repeats from the same subscription."""
+    subscription, recently opened subscription, old and green. rank() then takes points off repeats from the same subscription."""
     w = weights
     reasons = []
     if item.get("next_after") and "latest" not in item["tags"]:
@@ -163,6 +165,11 @@ def score(item: dict, now: float, weights: dict) -> Reasons:
             reasons.append((f"opened {hours_label(away)} ago", points(w["rediscovery_per_step"] * steps(away))))
     if item["kind"] == "subscription" and item.get("sub_last_viewed") is None and w["new_sub_bonus"]:
         reasons.append((f"nothing opened from “{short(item['feed'])}” yet", w["new_sub_bonus"]))
+    if item["kind"] == "subscription" and item.get("sub_last_viewed") is not None and w["recent_sub_penalty"]:
+        since = hours_since(now, item["sub_last_viewed"])
+        if since < w["recent_sub_hours"]:
+            when = f"{hours_label(since)} ago" if since else "in the last hour"
+            reasons.append((f"opened from “{short(item['feed'])}” {when}", -w["recent_sub_penalty"]))
     if w["old_points"] and item["date"] < day_start(w["old_before"]):
         label = f"{'added' if item['kind'] == 'link' else 'published'} before {w['old_before']}"
         reasons.append((label, w["old_points"]))
