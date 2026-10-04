@@ -33,6 +33,7 @@ Keep points stable between page updates, for example by using whole hours rather
 for age, so the page doesn't redraw every time it checks for changes.
 """
 
+import datetime
 import heapq
 import math
 from typing import Callable
@@ -56,9 +57,12 @@ DEFAULT_WEIGHTS = {
     "new_sub_bonus": 20,  # for posts from a subscription you've never opened anything from
     "repeat_per_post": 15,  # taken off for each post from the same subscription higher up in the feed
     "green_bonus_points": 10,
+    "old_points": 0,  # for items published (or links added) before old_before; below 0 is a penalty
+    "old_before": "2026-01-01",  # a date, YYYY-MM-DD, at midnight on the server's clock
 }
 WEIGHTS = dict(DEFAULT_WEIGHTS)
-SIGNED = {"age_per_step", "seen_bonus", "rediscovery_per_step"}  # may be negative
+SIGNED = {"age_per_step", "seen_bonus", "rediscovery_per_step", "old_points"}  # may be negative
+DATES = {"old_before"}  # dates rather than numbers
 LIMIT = 10_000_000
 RED = 10_000_000  # red items sink below everything else
 
@@ -69,6 +73,12 @@ def check_weights(weights: dict) -> dict:
         raise ValueError(f"expected exactly these settings: {', '.join(DEFAULT_WEIGHTS)}")
     out = {}
     for key, value in weights.items():
+        if key in DATES:
+            try:
+                out[key] = datetime.date.fromisoformat(value).isoformat()
+            except (TypeError, ValueError):
+                raise ValueError(f"{key} must be a date such as 2026-01-01") from None
+            continue
         low = -LIMIT if key in SIGNED else 0
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not low <= value <= LIMIT:
             raise ValueError(f"{key} must be a number from {low} to {LIMIT}")
@@ -87,6 +97,11 @@ def hours_label(hours: int) -> str:
         hours = 0
     parts = [f"{n} {unit}{'s' if n != 1 else ''}" for n, unit in ((days, "day"), (hours, "hour")) if n]
     return " ".join(parts) or "0 hours"
+
+
+def day_start(day: str) -> float:
+    """Unix time of midnight at the start of a YYYY-MM-DD date, on the server's clock."""
+    return datetime.datetime.combine(datetime.date.fromisoformat(day), datetime.time()).timestamp()
 
 
 def short(title: str) -> str:
@@ -127,7 +142,7 @@ def chronological(item: dict, now: float, weights: dict) -> Reasons:
 @ranker("score", spread=True)
 def score(item: dict, now: float, weights: dict) -> Reasons:
     """Points for the item's group (next up, unseen or seen) and its time in steps of ten, plus new
-    subscription and green. rank() then takes points off repeats from the same subscription."""
+    subscription, old and green. rank() then takes points off repeats from the same subscription."""
     w = weights
     reasons = []
     if item.get("next_after") and "latest" not in item["tags"]:
@@ -148,6 +163,9 @@ def score(item: dict, now: float, weights: dict) -> Reasons:
             reasons.append((f"opened {hours_label(away)} ago", points(w["rediscovery_per_step"] * steps(away))))
     if item["kind"] == "subscription" and item.get("sub_last_viewed") is None and w["new_sub_bonus"]:
         reasons.append((f"nothing opened from “{short(item['feed'])}” yet", w["new_sub_bonus"]))
+    if w["old_points"] and item["date"] < day_start(w["old_before"]):
+        label = f"{'added' if item['kind'] == 'link' else 'published'} before {w['old_before']}"
+        reasons.append((label, w["old_points"]))
     if item["color"] == "green" and w["green_bonus_points"]:
         reasons.append(("green", w["green_bonus_points"]))
     elif item["color"] == "red":
