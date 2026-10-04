@@ -170,7 +170,7 @@ settings:
 |---|---|
 | **Next up**: the post right after the one you opened most recently in its subscription | 30 |
 | **Unseen**: never opened (other than next up) | 40 − 8 × steps of age since published (or since you added a link) |
-| **Seen**: opened before | 8 × steps since you last opened it |
+| **Seen**: opened before | −30 + 12 × steps since you last opened it |
 
 and for every item:
 
@@ -178,17 +178,19 @@ and for every item:
 - +10 if green; red items go to the bottom
 - −15 for each post from its subscription higher up in the feed
 
-So a brand-new post gets 40, next up 30, a post you've never opened from 6 weeks ago 16, one you
-opened 6 weeks ago 24, and a favourite you opened over a year ago 32 (42 if it's green). The
+So a brand-new post gets 40, next up 30 and a post you've never opened from 6 weeks ago 16.
+Something you've opened starts at −30, below nearly everything, and climbs back: −13 a day later, 6
+after 6 weeks, 18 after 14 months (28 if it's green) and 30 after 11 years. The
 feed is built from the top down, taking the repeat penalty into account as it goes, so the second
 post from a subscription loses 15, the third 30, and two in a row are rare.
 
-The two settings per step may be negative, and the sign says which way:
+Seen and the two settings per step may be negative, and the sign says which way:
 
 - **Age of unseen** below 0 puts newer posts first, 0 means age doesn't matter, and above 0 puts
   older posts first, such as starting a new subscription from its first video.
-- **Rediscovery** above 0 brings back things you opened long ago; below 0 puts recently opened
-  things first.
+- **Seen** sets where things you've opened start: below 0 puts them under unseen items.
+- **Rediscovery** sets how fast they climb back: above 0 brings back things you opened long ago;
+  below 0 puts recently opened things first.
 
 Because next up is a flat bonus, you can place it relative to everything else: below 40 (the
 default 30) and brand-new posts come first; above 60 and it also beats a new subscription's posts.
@@ -201,8 +203,8 @@ Each card's "Score" shows its points, such as
 
 Change the numbers in the score panel: click "Score settings" at the top of the feed. It opens
 beside the feed on a wide screen, or along the bottom on a narrow one, and stays open across reloads
-until you close it. There are seven settings, each with a slider and a box for an exact number:
-Next up, Unseen, Age of unseen, Rediscovery, New subscription, Repeat penalty and Green. The
+until you close it. There are eight settings, each with a slider and a box for an exact number:
+Next up, Unseen, Age of unseen, Seen, Rediscovery, New subscription, Repeat penalty and Green. The
 sliders go in steps of 1, 1.5, 2, 3, 5 and 7 times a power of ten, so they cover both small and large
 numbers. The feed reorders as
 you move a slider, and the setting is saved when you let go (or when you press Enter in the box). The defaults are at the top of `ranking.py`. Equal scores are ordered unopened first, then newest first. The other ranker,
