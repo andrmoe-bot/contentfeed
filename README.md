@@ -137,8 +137,7 @@ something in Jellyfin doesn't count as opened here; only opening it from the fee
 ## Viewed items
 
 Opening an item (clicking its link, middle-clicking it, or playing its video) records when you
-last viewed it. Scrolling past doesn't count. Nothing is hidden: an item you've opened moves from
-"unseen" to "seen" and comes back the longer ago you opened it (see Ranking). The card says when you
+last viewed it. Scrolling past doesn't count. Nothing is hidden: an item you've opened scores lower (see Ranking). The card says when you
 viewed it.
 
 Cards you open or color stay where they are until you reload the page, so nothing moves away
@@ -157,29 +156,35 @@ yet; for now they change an item's score:
 
 Feed order comes from a ranker in `ranking.py`. Rankers never learn from how you use the
 feed; they only use what you wrote (tags, which file or subscription an item came from, the site,
-the colors you picked), dates (when a post was published, or when a link was added) and when you
+the colors you picked), the numbers in titles, dates (when a post was published, or when a link was added) and when you
 last opened an item. A ranker returns reasons with points, such as
 `("tagged music", 2)`; the score is their sum. Click "Score" on any card to see its reasons.
 
-The default, `score`, puts every item in one of three groups and gives it that group's points.
-Times count in steps of ten: 1 hour (or less) is 0 steps, 10 hours 1, 4 days 2, 6 weeks 3,
-14 months 4 and 11 years 5, so a time adds at most about five times its setting. With the default
-settings:
+The default, `score`, adds up these points. With the default settings:
 
-| Group | Points |
-|---|---|
-| **Next up**: the post right after the one you opened most recently in its subscription | 30 |
-| **Unseen**: never opened (other than next up) | 40 − 8 × steps of age since published (or since you added a link) |
-| **Seen**: opened before | −30 + 12 × steps since you last opened it |
-
-and for every item:
-
+- +30 for **next up**: the post after the one you opened most recently in its subscription. That's
+  the next part of its series (see below) or, if it has none, the post published next. Jellyfin
+  series go in episode order. Tag a subscription `latest` in feeds.txt to turn next up off for it,
+  such as a news feed.
+- −30 for anything you've opened, other than next up
 - +20 if nothing from its subscription has been opened yet, such as one you just subscribed to
+- −30 for a later part of a series when you haven't opened anything before it (see below)
 - −40 × how alike it is to the most similar thing you opened in the last 24 hours (see below)
 - +10 if green; red items go to the bottom
-- 0 if published (or added) before 2026-01-01: set **Old** below 0 to push back everything from
-  before a date, or above 0 to bring it forward, and pick the date beside it
 - −15 for each post from its subscription higher up in the feed
+
+Equal scores are ordered unopened first, then newest first, so with nothing else going on the
+feed is newest first.
+
+A post follows another from the same subscription when their titles have the same numbers, except
+one that's 1 higher: "Making a CPU, part 2: the ALU" follows "Making a CPU, part 1", and "S01E05"
+follows "S01E04". Only the numbers are compared, not the words, and only between posts at most 10
+apart in the subscription; numbers of 1000 or more, such as years, don't count. Posts that follow
+each other make a series, whose first part is the one that follows nothing. So "part 3" is held back
+until you've opened part 1 or 2, and after you open part 2, part 3 is next up. Jellyfin episodes
+are in series by episode order instead. Subscriptions tagged `latest` have no series. Because words aren't compared, unrelated posts are
+sometimes taken for a series, such as "Q&A #2" after "Chapter 1"; the card says which post it
+thinks starts the series.
 
 How alike two items are, from 0 to 100%:
 
@@ -190,44 +195,23 @@ How alike two items are, from 0 to 100%:
 - An item is 100% like itself.
 
 So after you watch a video, its channel's next one (published a week later: next up 30 − 30.8)
-waits a day instead of coming straight back, while the channel's old videos aren't affected. Each
-card says what it's like, such as
-`77% like “Egyptian Fractions”, opened 2 hours ago (same subscription, published 7 days apart) −30.8`.
-
-So a brand-new post gets 40, next up 30 and a post you've never opened from 6 weeks ago 16.
-Something you've opened starts at −70 (−30 for seen and −40 for being like itself) for its first 24
-hours, then −30, below nearly everything, and climbs back: −13 a day later, 6
-after 6 weeks, 18 after 14 months (28 if it's green) and 30 after 11 years. The
-feed is built from the top down, taking the repeat penalty into account as it goes, so the second
-post from a subscription loses 15, the third 30, and two in a row are rare.
-
-Seen, Old and the two settings per step may be negative, and the sign says which way:
-
-- **Age of unseen** below 0 puts newer posts first, 0 means age doesn't matter, and above 0 puts
-  older posts first, such as starting a new subscription from its first video.
-- **Seen** sets where things you've opened start: below 0 puts them under unseen items.
-- **Rediscovery** sets how fast they climb back: above 0 brings back things you opened long ago;
-  below 0 puts recently opened things first.
-- **Old** below 0 is a penalty for things from before its date, and above 0 a bonus.
-
-Because next up is a flat bonus, you can place it relative to everything else: below 40 (the
-default 30) and brand-new posts come first; above 60 and it also beats a new subscription's posts.
-Next up works for channels, playlists and Jellyfin series (in episode order); tag a subscription
-`latest` in feeds.txt to turn it off for that subscription, such as a news feed. Open episode 4 and
-episode 5 is next up; open episode 5 and it moves on to episode 6.
+waits a day instead of coming straight back, while the channel's old videos aren't affected.
+Something you've opened is at −70 (−30 for opened and −40 for being like itself) for 24 hours,
+then −30. The feed is built from the top down, taking the repeat penalty into account as it goes,
+so the second post from a subscription loses 15, the third 30, and two in a row are rare.
 
 Each card's "Score" shows its points, such as
-`never opened +40 · published 6 weeks ago −24 · 1 from “Veritasium” higher up −15`.
+`77% like “Egyptian Fractions”, opened 2 hours ago (same subscription, published 7 days apart) −30.8`
+or `in a series starting “Making a CPU, part 1”, nothing before it opened −30`.
 
 Change the numbers in the score panel: click "Score settings" at the top of the feed. It opens
 beside the feed on a wide screen, or along the bottom on a narrow one, and stays open across reloads
-until you close it. There are twelve settings, each with a slider and a box for an exact number:
-Next up, Unseen, Age of unseen, Seen, Rediscovery, New subscription, Repeat penalty, Green,
-Similar (which also has its number of hours), Same subscription (days), Shared tag (percent) and
-Old (which also has a date, at midnight on the server's clock). The
+until you close it. There are nine settings, each with a slider and a box for an exact number:
+Next up, Seen (which may be negative), New subscription, Series, Repeat penalty, Green, Similar
+(which also has its number of hours), Same subscription (days) and Shared tag (percent). The
 sliders go in steps of 1, 1.5, 2, 3, 5 and 7 times a power of ten, so they cover both small and large
 numbers. The feed reorders as
-you move a slider, and the setting is saved when you let go (or when you press Enter in the box). The defaults are at the top of `ranking.py`. Equal scores are ordered unopened first, then newest first. The other ranker,
+you move a slider, and the setting is saved when you let go (or when you press Enter in the box). The defaults are at the top of `ranking.py`. The other ranker,
 `chronological`, has no rules: everything scores 0 and the newest item is first. To add another ranker, register a
 function with `@ranker("name")`, then select it with `python3 server.py --ranker name`, or try
 it without a restart at `/api/feed?ranker=name`.

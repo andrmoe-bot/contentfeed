@@ -493,23 +493,45 @@ def load_settings():
         print(f"Ignoring {SETTINGS_FILE}: {e}")
 
 
-def next_posts(subs) -> dict[str, str]:
-    """For each subscription, the post published right after the one you opened most recently,
-    as {its url: the opened post's title}. Call with lock held. A subscription whose posts belong to
-    series, such as a Jellyfin server's TV shows, has a next post in each series, in episode order."""
-    out = {}
+def series_state(subs) -> tuple[dict[str, str], dict[str, str]]:
+    """Call with lock held. Returns:
+    - next up, as {its url: the opened post's title}: for each subscription, the post after the one
+      you opened most recently: the next part of its series, or else the next published. A subscription
+      whose posts belong to series of their own, such as a Jellyfin server's TV shows, has a next post
+      in each series, in episode order.
+    - later parts of a series none of whose earlier parts you've opened, as {url: the first part's title}.
+    Series are found from titles (see ranking.title_series), or for Jellyfin from episode order."""
+    next_up, unstarted = {}, {}
     for sub_url in subs:
-        series = {}
+        groups = {}
         for p in subscriptions.get(sub_url, {}).get("items", []):  # newest first
-            series.setdefault(p.get("series"), []).append(p)
-        for posts in series.values():
-            posts.sort(key=lambda p: p.get("episode", []), reverse=True)  # last episode first; stable otherwise
+            groups.setdefault(p.get("series"), []).append(p)
+        for key, posts in groups.items():
+            if key is None:
+                prev = ranking.title_series(posts)
+            else:
+                posts.sort(key=lambda p: p.get("episode", []), reverse=True)  # last episode first; stable otherwise
+                prev = {p["url"]: posts[i + 1] for i, p in enumerate(posts[:-1])}
             opened = [(viewed[p["url"]], i) for i, p in enumerate(posts) if p["url"] in viewed]
             if opened:
                 i = max(opened)[1]
-                if i > 0:
-                    out.setdefault(posts[i - 1]["url"], posts[i]["title"] or posts[i]["url"])
-    return out
+                after = [p for p in posts if prev.get(p["url"]) is posts[i]]
+                nxt = after[0] if after else posts[i - 1] if i > 0 else None
+                if nxt:
+                    next_up.setdefault(nxt["url"], posts[i]["title"] or posts[i]["url"])
+            # For each part: (the series' first part, whether it or anything before it was opened)
+            state = {}
+            for p in posts:
+                chain = [p]
+                while chain[-1]["url"] in prev and prev[chain[-1]["url"]]["url"] not in state:
+                    chain.append(prev[chain[-1]["url"]])
+                for q in reversed(chain):
+                    before = prev.get(q["url"])
+                    first, any_opened = state[before["url"]] if before else (q, False)
+                    state[q["url"]] = (first, any_opened or q["url"] in viewed)
+                    if before and not any_opened:
+                        unstarted.setdefault(q["url"], first["title"] or first["url"])
+    return next_up, unstarted
 
 
 def last_opened(subs) -> dict[str, float]:
@@ -555,7 +577,7 @@ def feed(ranker: str, limit: int = MAX_ITEMS_SHOWN, weights: dict | None = None)
             for i, (url, tags) in enumerate(entries.items())
         ]
         seen = set(entries)
-        next_after = next_posts(subs)
+        next_after, series_first = series_state(subs)
         sub_opened = last_opened(subs)
         for sub_url, tags in subs.items():
             s = subscriptions.get(sub_url, {})
@@ -570,7 +592,8 @@ def feed(ranker: str, limit: int = MAX_ITEMS_SHOWN, weights: dict | None = None)
                     "sub_last_viewed": sub_opened.get(sub_url), "sub": sub_url,
                 })
         for item in items:
-            item.update(view_state(item["url"]), next_after=next_after.get(item["url"]))
+            item.update(view_state(item["url"]), next_after=next_after.get(item["url"]),
+                        series_first=series_first.get(item["url"]))
         n_pending = len(pending)
     if new:
         save_json(ADDED_FILE, added)
