@@ -13,6 +13,8 @@ channels and playlists, older videos than the feed lists are loaded once (see fe
 """
 
 import argparse
+import functools
+import gzip
 import hashlib
 import json
 import re
@@ -174,9 +176,16 @@ def fetch_metadata(url: str) -> dict:
     return item
 
 
+# Bumped whenever anything is saved: every change to links, posts, views, colors or settings is, so
+# the ranked feed is only worked out again when this (or something else it depends on) changes.
+state_version = 0
+
+
 def save_json(path: Path, obj: dict):
+    global state_version
     with lock:
         data = json.dumps(obj, indent=1)
+        state_version += 1
     tmp = path.with_suffix(".tmp")
     tmp.write_text(data, encoding="utf-8")
     tmp.replace(path)
@@ -513,6 +522,17 @@ def last_opened(subs) -> dict[str, float]:
     return out
 
 
+@functools.lru_cache(maxsize=200_000)
+def domain(url: str) -> str:
+    return urlparse(url).netloc.removeprefix("www.")
+
+
+# Recently ranked feeds, so checking for changes or moving a slider back doesn't rank everything again.
+# Each is kept for a minute at most, as points change with the time since things were published or opened.
+RANKED_TTL = 60
+ranked_cache: dict[tuple, tuple[float, list[dict]]] = {}
+
+
 def feed(ranker: str, limit: int = MAX_ITEMS_SHOWN, weights: dict | None = None) -> dict:
     entries = read_entries()
     subs = read_entries(FEEDS_FILE)
@@ -522,6 +542,11 @@ def feed(ranker: str, limit: int = MAX_ITEMS_SHOWN, weights: dict | None = None)
         schedule_subscription(url)
     now = time.time()
     with lock:
+        key = (ranker, json.dumps(weights or ranking.WEIGHTS, sort_keys=True), json.dumps([entries, subs]),
+               state_version, len(pending))
+        hit = ranked_cache.get(key)
+        if hit and now - hit[0] < RANKED_TTL:
+            return {"items": hit[1][:limit], "total": len(hit[1]), "pending": len(pending), "ranker": ranker}
         new = [url for url in entries if url not in added]
         added.update({url: now for url in new})
         items = [
@@ -540,7 +565,7 @@ def feed(ranker: str, limit: int = MAX_ITEMS_SHOWN, weights: dict | None = None)
                 seen.add(post["url"])
                 items.append({
                     **post, "kind": "subscription", "tags": tags, "feed": s["title"], "icon": s.get("icon"),
-                    "domain": urlparse(post["url"]).netloc.removeprefix("www."),
+                    "domain": domain(post["url"]),
                     "added": post["first_seen"], "date": post["published"] or post["first_seen"], "position": -1,
                     "sub_last_viewed": sub_opened.get(sub_url), "sub": sub_url,
                 })
@@ -550,6 +575,12 @@ def feed(ranker: str, limit: int = MAX_ITEMS_SHOWN, weights: dict | None = None)
     if new:
         save_json(ADDED_FILE, added)
     ranked = ranking.rank(ranker, items, now, weights)
+    with lock:
+        for k in [k for k, (t, _) in ranked_cache.items() if now - t >= RANKED_TTL or k[3] != state_version]:
+            del ranked_cache[k]
+        if len(ranked_cache) >= 20:  # such as many slider positions tried
+            ranked_cache.pop(next(iter(ranked_cache)))
+        ranked_cache[key] = (now, ranked)
     return {
         "items": ranked[:limit],
         "total": len(ranked),
@@ -634,6 +665,29 @@ class Handler(BaseHTTPRequestHandler):
     def _json(self, obj, code=200):
         self._send(code, json.dumps(obj).encode(), "application/json")
 
+    def _feed_json(self, obj):
+        """Send the feed compressed, and with an ETag, so the page's checks for changes get a short
+        "not modified" when nothing has changed."""
+        body = json.dumps(obj).encode()
+        tag = '"' + hashlib.sha1(body).hexdigest() + '"'
+        if self.headers.get("If-None-Match") == tag:
+            self.send_response(304)
+            self.send_header("ETag", tag)
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        if "gzip" in self.headers.get("Accept-Encoding", ""):
+            body = gzip.compress(body, compresslevel=5)
+            self.send_header("Content-Encoding", "gzip")
+        self.send_header("Vary", "Accept-Encoding")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("ETag", tag)
+        self.send_header("Cache-Control", "no-cache")  # always asks, but can be answered with "not modified"
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_GET(self):
         parsed = urlparse(self.path)
         path = parsed.path
@@ -657,7 +711,7 @@ class Handler(BaseHTTPRequestHandler):
                     weights = ranking.check_weights(json.loads(query["weights"][0]))
                 except (ValueError, TypeError) as e:
                     return self._json({"error": f"weights: {e}"}, 400)
-            self._json(feed(name, max(int(limit), 1) if limit.isdigit() else MAX_ITEMS_SHOWN, weights))
+            self._feed_json(feed(name, max(int(limit), 1) if limit.isdigit() else MAX_ITEMS_SHOWN, weights))
         elif path == "/api/subscriptions":
             self._json({"subscriptions": subscription_status(), "interval_minutes": feed_interval / 60})
         elif path == "/api/settings":

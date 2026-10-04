@@ -187,6 +187,7 @@ How alike two items are, from 0 to 100%:
   to 0% when published 30 days or more apart: a week apart is 77%, two weeks 53%.
 - Items from different subscriptions (or links) are 30% alike for each tag they share, other than
   `latest`, such as two subscriptions both tagged `math`.
+- An item is 100% like itself.
 
 So after you watch a video, its channel's next one (published a week later: next up 30 − 30.8)
 waits a day instead of coming straight back, while the channel's old videos aren't affected. Each
@@ -194,7 +195,8 @@ card says what it's like, such as
 `77% like “Egyptian Fractions”, opened 2 hours ago (same subscription, published 7 days apart) −30.8`.
 
 So a brand-new post gets 40, next up 30 and a post you've never opened from 6 weeks ago 16.
-Something you've opened starts at −30, below nearly everything, and climbs back: −13 a day later, 6
+Something you've opened starts at −70 (−30 for seen and −40 for being like itself) for its first 24
+hours, then −30, below nearly everything, and climbs back: −13 a day later, 6
 after 6 weeks, 18 after 14 months (28 if it's green) and 30 after 11 years. The
 feed is built from the top down, taking the repeat penalty into account as it goes, so the second
 post from a subscription loses 15, the third 30, and two in a row are rare.
