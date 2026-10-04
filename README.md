@@ -176,6 +176,8 @@ and for every item:
 
 - +20 if nothing from its subscription has been opened yet, such as one you just subscribed to
 - +10 if green; red items go to the bottom
+- 0 if published (or added) before 2026-01-01: set **Old** below 0 to push back everything from
+  before a date, or above 0 to bring it forward, and pick the date beside it
 - −15 for each post from its subscription higher up in the feed
 
 So a brand-new post gets 40, next up 30 and a post you've never opened from 6 weeks ago 16.
@@ -184,13 +186,14 @@ after 6 weeks, 18 after 14 months (28 if it's green) and 30 after 11 years. The
 feed is built from the top down, taking the repeat penalty into account as it goes, so the second
 post from a subscription loses 15, the third 30, and two in a row are rare.
 
-Seen and the two settings per step may be negative, and the sign says which way:
+Seen, Old and the two settings per step may be negative, and the sign says which way:
 
 - **Age of unseen** below 0 puts newer posts first, 0 means age doesn't matter, and above 0 puts
   older posts first, such as starting a new subscription from its first video.
 - **Seen** sets where things you've opened start: below 0 puts them under unseen items.
 - **Rediscovery** sets how fast they climb back: above 0 brings back things you opened long ago;
   below 0 puts recently opened things first.
+- **Old** below 0 is a penalty for things from before its date, and above 0 a bonus.
 
 Because next up is a flat bonus, you can place it relative to everything else: below 40 (the
 default 30) and brand-new posts come first; above 60 and it also beats a new subscription's posts.
@@ -203,8 +206,9 @@ Each card's "Score" shows its points, such as
 
 Change the numbers in the score panel: click "Score settings" at the top of the feed. It opens
 beside the feed on a wide screen, or along the bottom on a narrow one, and stays open across reloads
-until you close it. There are eight settings, each with a slider and a box for an exact number:
-Next up, Unseen, Age of unseen, Seen, Rediscovery, New subscription, Repeat penalty and Green. The
+until you close it. There are nine settings, each with a slider and a box for an exact number:
+Next up, Unseen, Age of unseen, Seen, Rediscovery, New subscription, Repeat penalty, Green and Old
+(which also has a date, at midnight on the server's clock). The
 sliders go in steps of 1, 1.5, 2, 3, 5 and 7 times a power of ten, so they cover both small and large
 numbers. The feed reorders as
 you move a slider, and the setting is saved when you let go (or when you press Enter in the box). The defaults are at the top of `ranking.py`. Equal scores are ordered unopened first, then newest first. The other ranker,
