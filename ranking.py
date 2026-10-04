@@ -17,7 +17,10 @@ Each item has its page metadata (url, title, description, domain, ...) plus thes
     last_viewed  unix time you last opened it, or None
     color        "green", "white" (the default) or "red", as you marked it on the page
     next_after   for a post: the title of the post you opened most recently in its subscription,
-                 if this post was published right after that one ("what's next"); otherwise None
+                 if this post comes right after that one ("what's next"): the next part of its series
+                 (see title_series) or else the next published; otherwise None
+    series_first for a later part of a series of which you haven't opened anything before it: the
+                 first part's title; otherwise None
     sub          for a post: its subscription's address; None for links
     sub_last_viewed  for a post: unix time you last opened any post in its subscription, or None
                  if you've never opened anything from it
@@ -36,9 +39,8 @@ Keep points stable between page updates, for example by using whole hours rather
 for age, so the page doesn't redraw every time it checks for changes.
 """
 
-import datetime
 import heapq
-import math
+import re
 from typing import Callable
 
 Reasons = list[tuple[str, float]]
@@ -46,30 +48,22 @@ Ranker = Callable[[dict, float, dict], Reasons]
 RANKERS: dict[str, Ranker] = {}
 DEFAULT = "score"
 
-# Settings for the "score" ranker, in points. Every item is in one group: next up, unseen or seen.
-# Times count in steps of ten (see steps), so a time adds at most about 5 × its setting. Settings that
-# may be negative say which way: below 0 puts newer (or more recently opened) first, above 0 older.
-# These are the defaults; you can change them in the feed's score panel, and server.py keeps your
+# Settings for the "score" ranker, in points. These are the defaults; you can change them in the feed's score panel, and server.py keeps your
 # values in settings.json.
 DEFAULT_WEIGHTS = {
-    "next_up_bonus": 30,  # next up: the post after the one you opened most recently in a subscription
-    "unseen_bonus": 40,  # unseen: items you've never opened (other than next up)
-    "age_per_step": -8,  # unseen: per step of age since published (or added, for links)
-    "seen_bonus": -30,  # seen: items you've opened; below 0 puts them under unseen items at first
-    "rediscovery_per_step": 12,  # seen: per step of time since you last opened the item
+    "next_up_bonus": 30,  # the post after the one you opened most recently in a subscription
+    "seen_bonus": -30,  # items you've opened (other than next up); below 0 puts them under unopened ones
     "new_sub_bonus": 20,  # for posts from a subscription you've never opened anything from
     "similar_penalty": 40,  # taken off at 100% like something you opened recently (see similarity):
     "similar_hours": 24,  # opened within this many hours
     "similar_days": 30,  # posts from the same subscription are alike if published within this many days
     "tag_similarity": 30,  # percent alike per shared tag, for items from different subscriptions
+    "series_penalty": 30,  # taken off a later part of a series when you haven't opened anything before it
     "repeat_per_post": 15,  # taken off for each post from the same subscription higher up in the feed
     "green_bonus_points": 10,
-    "old_points": 0,  # for items published (or links added) before old_before; below 0 is a penalty
-    "old_before": "2026-01-01",  # a date, YYYY-MM-DD, at midnight on the server's clock
 }
 WEIGHTS = dict(DEFAULT_WEIGHTS)
-SIGNED = {"age_per_step", "seen_bonus", "rediscovery_per_step", "old_points"}  # may be negative
-DATES = {"old_before"}  # dates rather than numbers
+SIGNED = {"seen_bonus"}  # may be negative
 LIMIT = 10_000_000
 RED = 10_000_000  # red items sink below everything else
 
@@ -80,12 +74,6 @@ def check_weights(weights: dict) -> dict:
         raise ValueError(f"expected exactly these settings: {', '.join(DEFAULT_WEIGHTS)}")
     out = {}
     for key, value in weights.items():
-        if key in DATES:
-            try:
-                out[key] = datetime.date.fromisoformat(value).isoformat()
-            except (TypeError, ValueError):
-                raise ValueError(f"{key} must be a date such as 2026-01-01") from None
-            continue
         low = -LIMIT if key in SIGNED else 0
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not low <= value <= LIMIT:
             raise ValueError(f"{key} must be a number from {low} to {LIMIT}")
@@ -106,23 +94,12 @@ def hours_label(hours: int) -> str:
     return " ".join(parts) or "0 hours"
 
 
-def day_start(day: str) -> float:
-    """Unix time of midnight at the start of a YYYY-MM-DD date, on the server's clock."""
-    return datetime.datetime.combine(datetime.date.fromisoformat(day), datetime.time()).timestamp()
-
-
 def short(title: str) -> str:
     return title if len(title) <= 60 else title[:59] + "…"
 
 
 def points(x: float) -> float:
     return int(x) if float(x).is_integer() else round(x, 2)
-
-
-def steps(hours: int) -> float:
-    """Time in steps of ten: 1 hour or less is 0, 10 hours 1, 100 hours (4 days) 2, 1000 hours
-    (6 weeks) 3, 10 000 hours (14 months) 4, 100 000 hours (11 years) 5."""
-    return math.log10(max(hours, 1))
 
 
 def hours_since(now: float, then: float) -> int:
@@ -165,6 +142,37 @@ def similar_to_recent(items: list[dict], now: float, weights: dict):
         it["similar"] = best
 
 
+# Series: a post follows another from the same subscription when their titles have the same numbers
+# except one, which is 1 higher, such as "Making a CPU, part 2" after "Making a CPU, part 1", or
+# "S01E05" after "S01E04". Only the numbers are compared, not the words around them, and only between
+# posts at most SERIES_NEAR apart in the subscription. Numbers of 1000 or more, such as years, don't count.
+SERIES_NEAR = 10
+
+
+def title_numbers(title: str) -> tuple[int, ...]:
+    return tuple(n for n in map(int, re.findall(r"\d+", title)) if n < 1000)
+
+
+def follows(before: tuple[int, ...], after: tuple[int, ...]) -> bool:
+    """Whether numbers after come right after before: all the same but one, which is 1 higher."""
+    return len(before) == len(after) and sum(a != b for a, b in zip(before, after)) == 1 and sum(after) == sum(before) + 1
+
+
+def title_series(posts: list[dict]) -> dict[str, dict]:
+    """For a subscription's posts, in feed order: {a post's url: the post it follows}, the nearest one if several."""
+    numbers = [title_numbers(p["title"] or "") for p in posts]
+    out = {}
+    for i, p in enumerate(posts):
+        if not numbers[i]:
+            continue
+        near = sorted(range(max(0, i - SERIES_NEAR), min(len(posts), i + SERIES_NEAR + 1)), key=lambda j: abs(j - i))
+        for j in near:
+            if follows(numbers[j], numbers[i]):
+                out[p["url"]] = posts[j]
+                break
+    return out
+
+
 def ranker(name: str, spread: bool = False):
     """Register a ranker. With spread, the feed is built from the top down and each item loses
     repeat_per_post for every item from the same subscription above it (see rank)."""
@@ -184,29 +192,20 @@ def chronological(item: dict, now: float, weights: dict) -> Reasons:
 
 @ranker("score", spread=True)
 def score(item: dict, now: float, weights: dict) -> Reasons:
-    """Points for the item's group (next up, unseen or seen) and its time in steps of ten, plus new
-    subscription, like something opened recently, old and green. rank() then takes points off repeats
-    from the same subscription."""
+    """Points for next up or opened before, a new subscription, a later part of a series, being like
+    something opened recently, and green. rank() then takes points off repeats from the same subscription."""
     w = weights
     reasons = []
     if item.get("next_after") and "latest" not in item["tags"]:
         if w["next_up_bonus"]:
             reasons.append((f"next up after “{short(item['next_after'])}”", w["next_up_bonus"]))
-    elif item["last_viewed"] is None:
-        if w["unseen_bonus"]:
-            reasons.append(("never opened", w["unseen_bonus"]))
-        age = hours_since(now, item["date"])
-        if steps(age) and w["age_per_step"]:
-            label = f"{'added' if item['kind'] == 'link' else 'published'} {hours_label(age)} ago"
-            reasons.append((label, points(w["age_per_step"] * steps(age))))
-    else:
-        if w["seen_bonus"]:
-            reasons.append(("opened before", w["seen_bonus"]))
+    elif item["last_viewed"] is not None and w["seen_bonus"]:
         away = hours_since(now, item["last_viewed"])
-        if steps(away) and w["rediscovery_per_step"]:
-            reasons.append((f"opened {hours_label(away)} ago", points(w["rediscovery_per_step"] * steps(away))))
+        reasons.append((f"opened {hours_label(away)} ago" if away else "opened in the last hour", w["seen_bonus"]))
     if item["kind"] == "subscription" and item.get("sub_last_viewed") is None and w["new_sub_bonus"]:
         reasons.append((f"nothing opened from “{short(item['feed'])}” yet", w["new_sub_bonus"]))
+    if item.get("series_first") and "latest" not in item["tags"] and w["series_penalty"]:
+        reasons.append((f"in a series starting “{short(item['series_first'])}”, nothing before it opened", -w["series_penalty"]))
     like = item.get("similar")
     if like and w["similar_penalty"]:
         when = f"{hours_label(like['hours'])} ago" if like["hours"] else "in the last hour"
@@ -215,9 +214,6 @@ def score(item: dict, now: float, weights: dict) -> Reasons:
         else:
             label = f"{like['percent']}% like “{short(like['title'])}”, opened {when} ({like['why']})"
         reasons.append((label, points(-w["similar_penalty"] * like["percent"] / 100)))
-    if w["old_points"] and item["date"] < day_start(w["old_before"]):
-        label = f"{'added' if item['kind'] == 'link' else 'published'} before {w['old_before']}"
-        reasons.append((label, w["old_points"]))
     if item["color"] == "green" and w["green_bonus_points"]:
         reasons.append(("green", w["green_bonus_points"]))
     elif item["color"] == "red":
