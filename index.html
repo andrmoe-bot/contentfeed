@@ -406,9 +406,13 @@ const SETTINGS = [
   { key: "repeat_per_post", label: "Repeat penalty", before: "−", after: "per post",
     hint: "Taken off a post for each post from its subscription higher up in the feed: once for the second, twice for the third, and so on. Up: subscriptions are mixed more." },
   { key: "green_bonus_points", label: "Green", before: "+", after: "points", hint: "For items you marked green." },
-  { key: "recent_sub_penalty", label: "Recent subscription", before: "−", after: "points if opened in the last",
-    extra: { key: "recent_sub_hours", type: "number", after: "hours" },
-    hint: "Taken off every post from a subscription you opened anything from within that many hours, so the next post doesn't come straight back. 0 points: off." },
+  { key: "similar_penalty", label: "Similar", before: "−", after: "points at 100% alike, within",
+    extra: { key: "similar_hours", type: "number", after: "hours" },
+    hint: "Taken off items alike to something you opened within that many hours, in proportion: 50% alike takes off half. Only the most alike counts. 0 points: off." },
+  { key: "similar_days", label: "Same subscription", before: "alike within", after: "days",
+    hint: "Two posts from the same subscription are 100% alike if published at the same time, falling evenly to 0% this many days apart." },
+  { key: "tag_similarity", label: "Shared tag", before: "+", after: "% alike",
+    hint: "For items from different subscriptions (or links): how alike they are per tag they share, other than “latest”." },
   { key: "old_points", label: "Old", before: "", after: "points if before", extra: { key: "old_before", type: "date" },
     hint: "For every item published (or link added) before the date. Below 0: a penalty for old things. Above 0: a bonus." },
 ];
@@ -505,7 +509,7 @@ function showFormula() {
   document.getElementById("formula").textContent =
     `next up: ${fmt(w.next_up_bonus)} · unseen: ${fmt(w.unseen_bonus)}${plus(w.age_per_step)} × steps of age` +
     ` · seen: ${fmt(w.seen_bonus)}${plus(w.rediscovery_per_step)} × steps since opened · all:${plus(w.new_sub_bonus)} if nothing opened from` +
-    ` its subscription − ${fmt(w.recent_sub_penalty)} if anything from it opened in the last ${fmt(w.recent_sub_hours)} hours` +
+    ` its subscription − ${fmt(w.similar_penalty)} × % like anything opened in the last ${fmt(w.similar_hours)} hours` +
     `${plus(w.green_bonus_points)} if green${plus(w.old_points)} if published before ${w.old_before} − ${fmt(w.repeat_per_post)} × posts from its subscription` +
     ` higher up; red at the bottom`;
 }

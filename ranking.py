@@ -22,6 +22,9 @@ Each item has its page metadata (url, title, description, domain, ...) plus thes
     sub_last_viewed  for a post: unix time you last opened any post in its subscription, or None
                  if you've never opened anything from it
 
+rank() adds one more, "similar": the item you opened recently that this one is most like (see
+similarity), or None.
+
 Nothing is hidden: items you've opened or marked red are scored differently, not removed.
 
 A ranker registered with spread=True gets its repeats spread out after scoring (see rank).
@@ -55,8 +58,10 @@ DEFAULT_WEIGHTS = {
     "seen_bonus": -30,  # seen: items you've opened; below 0 puts them under unseen items at first
     "rediscovery_per_step": 12,  # seen: per step of time since you last opened the item
     "new_sub_bonus": 20,  # for posts from a subscription you've never opened anything from
-    "recent_sub_penalty": 20,  # taken off posts from a subscription you opened anything from recently:
-    "recent_sub_hours": 24,  # within this many hours
+    "similar_penalty": 40,  # taken off at 100% like something you opened recently (see similarity):
+    "similar_hours": 24,  # opened within this many hours
+    "similar_days": 30,  # posts from the same subscription are alike if published within this many days
+    "tag_similarity": 30,  # percent alike per shared tag, for items from different subscriptions
     "repeat_per_post": 15,  # taken off for each post from the same subscription higher up in the feed
     "green_bonus_points": 10,
     "old_points": 0,  # for items published (or links added) before old_before; below 0 is a penalty
@@ -124,6 +129,39 @@ def hours_since(now: float, then: float) -> int:
     return max(0, int((now - then) // 3600))  # whole hours, so points don't change every second
 
 
+# Similarity: how alike an item is to one you opened, from 0 to 100%. Two posts from the same
+# subscription are 100% alike if published at the same time, falling evenly to 0% when published
+# similar_days or more apart. Items from different subscriptions (or links) are tag_similarity alike
+# for each tag they share, other than "latest". At most 100%.
+def similarity(item: dict, other: dict, weights: dict) -> tuple[int, str]:
+    """How alike the two items are, in whole percent, and why, such as "same subscription, published 4 days apart"."""
+    if item.get("sub") and item.get("sub") == other.get("sub"):
+        gap = abs(item["date"] - other["date"]) / 3600
+        days = weights["similar_days"]
+        percent = max(0.0, 1 - gap / 24 / days) if days else 0.0
+        apart = f"published {hours_label(int(gap))} apart" if gap >= 1 else "published within the hour"
+        return round(100 * percent), f"same subscription, {apart}"
+    shared = sorted(set(item["tags"]) & set(other["tags"]) - {"latest"})
+    percent = min(100, weights["tag_similarity"] * len(shared))
+    return round(percent), f"tag{'s' if len(shared) > 1 else ''} {', '.join(shared)}"
+
+
+def similar_to_recent(items: list[dict], now: float, weights: dict):
+    """Set each item's "similar" to the item opened in the last similar_hours that it's most like, as
+    {title, hours (since opened), percent, why}, or None if it's 0% like all of them."""
+    recent = [it for it in items if it["last_viewed"] is not None and hours_since(now, it["last_viewed"]) < weights["similar_hours"]]
+    for it in items:
+        best = None
+        if weights["similar_penalty"]:
+            for other in recent:
+                if other["url"] == it["url"]:
+                    continue
+                percent, why = similarity(it, other, weights)
+                if percent and (not best or percent > best["percent"]):
+                    best = {"title": other["title"], "hours": hours_since(now, other["last_viewed"]), "percent": percent, "why": why}
+        it["similar"] = best
+
+
 def ranker(name: str, spread: bool = False):
     """Register a ranker. With spread, the feed is built from the top down and each item loses
     repeat_per_post for every item from the same subscription above it (see rank)."""
@@ -144,7 +182,8 @@ def chronological(item: dict, now: float, weights: dict) -> Reasons:
 @ranker("score", spread=True)
 def score(item: dict, now: float, weights: dict) -> Reasons:
     """Points for the item's group (next up, unseen or seen) and its time in steps of ten, plus new
-    subscription, recently opened subscription, old and green. rank() then takes points off repeats from the same subscription."""
+    subscription, like something opened recently, old and green. rank() then takes points off repeats
+    from the same subscription."""
     w = weights
     reasons = []
     if item.get("next_after") and "latest" not in item["tags"]:
@@ -165,11 +204,11 @@ def score(item: dict, now: float, weights: dict) -> Reasons:
             reasons.append((f"opened {hours_label(away)} ago", points(w["rediscovery_per_step"] * steps(away))))
     if item["kind"] == "subscription" and item.get("sub_last_viewed") is None and w["new_sub_bonus"]:
         reasons.append((f"nothing opened from “{short(item['feed'])}” yet", w["new_sub_bonus"]))
-    if item["kind"] == "subscription" and item.get("sub_last_viewed") is not None and w["recent_sub_penalty"]:
-        since = hours_since(now, item["sub_last_viewed"])
-        if since < w["recent_sub_hours"]:
-            when = f"{hours_label(since)} ago" if since else "in the last hour"
-            reasons.append((f"opened from “{short(item['feed'])}” {when}", -w["recent_sub_penalty"]))
+    like = item.get("similar")
+    if like and w["similar_penalty"]:
+        when = f"{hours_label(like['hours'])} ago" if like["hours"] else "in the last hour"
+        label = f"{like['percent']}% like “{short(like['title'])}”, opened {when} ({like['why']})"
+        reasons.append((label, points(-w["similar_penalty"] * like["percent"] / 100)))
     if w["old_points"] and item["date"] < day_start(w["old_before"]):
         label = f"{'added' if item['kind'] == 'link' else 'published'} before {w['old_before']}"
         reasons.append((label, w["old_points"]))
@@ -189,6 +228,8 @@ def rank(name: str, items: list[dict], now: float, weights: dict | None = None) 
     placed above it, so the second post from a subscription loses repeat_per_post, the third twice that."""
     fn = RANKERS[name]
     weights = weights or WEIGHTS
+    items = [dict(it) for it in items]
+    similar_to_recent(items, now, weights)
     scored = []
     for item in items:
         reasons = [{"label": label, "points": points} for label, points in fn(item, now, weights)]
