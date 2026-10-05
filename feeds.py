@@ -1,7 +1,9 @@
 """Subscriptions: finding, fetching and parsing public feeds (RSS 2.0, RSS 1.0 and Atom).
 
 A subscription can be given as the feed itself or as a page that has one: a YouTube channel,
-handle or playlist, a subreddit, a blog, a Mastodon profile, and so on.
+handle or playlist, a subreddit, a blog, a Mastodon profile, and so on. Many sites have a feed without
+linking to it, so discover() also tries the usual addresses, such as /feed and /rss.xml. Pages with no
+feed at all are read by pages.py instead.
 """
 
 import json
@@ -17,14 +19,20 @@ from urllib.parse import parse_qs, urljoin, urlparse
 
 USER_AGENT = "Mozilla/5.0 (compatible; ContentFeed/1.0)"
 FETCH_TIMEOUT = 10
-MAX_FEED_BYTES = 5_000_000
+MAX_FEED_BYTES = 20_000_000  # some blogs put every whole post in their feed
 MAX_ITEMS_PER_FEED = 50
 MAX_OLDER_VIDEOS = 3000  # per YouTube channel or playlist, see older_videos()
 FEED_TYPES = ("application/rss+xml", "application/atom+xml", "application/feed+xml", "application/rdf+xml")
+# Where feeds usually are when a page doesn't link to one, tried under the page and then the site
+USUAL_FEEDS = ("feed", "rss.xml", "feed.xml", "index.xml", "atom.xml", "rss")
 
 
 class FeedError(Exception):
     pass
+
+
+class NoFeed(FeedError):
+    """The page has no feed, so pages.py can read its posts from the page itself."""
 
 
 def open_url(url: str, accept: str, headers: dict | None = None):
@@ -63,6 +71,54 @@ def known_feed_url(url: str) -> str | None:
     if host == "reddit.com" and re.match(r"^/(r|user|u)/[^/]+/?$", p.path):
         return f"https://www.reddit.com{p.path.rstrip('/')}/.rss"
     return None
+
+
+class MetaParser(HTMLParser):
+    """A page's title, icon, <meta> tags, first <time datetime>, JSON-LD data and the start of its text."""
+
+    MAX_TEXT = 20_000
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.meta: dict[str, str] = {}
+        self.icon: str | None = None
+        self.time: str | None = None
+        self.json_ld: list[str] = []
+        self._in = None  # "title", "json_ld", "script" or "style" while inside one
+        self.title = ""
+        self.text: list[str] = []  # the page's visible text, up to MAX_TEXT characters
+        self._text_length = 0
+
+    def handle_starttag(self, tag, attrs):
+        a = {k.lower(): (v or "") for k, v in attrs}
+        if tag == "meta":
+            key = (a.get("property") or a.get("name") or a.get("itemprop") or "").lower()
+            if key and "content" in a and key not in self.meta:
+                self.meta[key] = a["content"].strip()
+        elif tag == "link" and "icon" in a.get("rel", "").lower() and not self.icon:
+            self.icon = a.get("href")
+        elif tag == "title":
+            self._in = "title"
+        elif tag == "script" and a.get("type", "").lower() == "application/ld+json":
+            self._in = "json_ld"
+            self.json_ld.append("")
+        elif tag in ("script", "style"):
+            self._in = tag
+        elif tag == "time" and a.get("datetime") and not self.time:
+            self.time = a["datetime"]
+
+    def handle_endtag(self, tag):
+        if tag in ("title", "script", "style"):
+            self._in = None
+
+    def handle_data(self, data):
+        if self._in == "title":
+            self.title += data
+        elif self._in == "json_ld":
+            self.json_ld[-1] += data
+        elif self._in is None and self._text_length < self.MAX_TEXT:
+            self.text.append(data)
+            self._text_length += len(data)
 
 
 class LinkFinder(HTMLParser):
@@ -111,6 +167,9 @@ def discover(url: str) -> str:
             body = r.read(MAX_FEED_BYTES)
             final_url = r.geturl()
     except urllib.error.HTTPError as e:
+        usual = usual_feed(url) if e.code in (401, 403, 429) else None  # sites that turn away robots may allow their feed
+        if usual:
+            return usual
         raise FeedError(f"HTTP {e.code} from {url}") from e
     except OSError as e:
         raise FeedError(f"couldn't fetch {url}: {e}") from e
@@ -130,7 +189,23 @@ def discover(url: str) -> str:
     )
     if m:
         return known_feed_url(f"https://www.youtube.com/channel/{m.group(1)}")
-    raise FeedError(f"no RSS or Atom feed found at {url}")
+    usual = usual_feed(final_url)
+    if usual:
+        return usual
+    raise NoFeed(f"no RSS or Atom feed found at {url}")
+
+
+def usual_feed(page_url: str) -> str | None:
+    """A feed at one of the usual addresses under the page, or else under the site, that has posts."""
+    base = page_url.split("?")[0].split("#")[0].rstrip("/") + "/"
+    for candidate in dict.fromkeys([base + name for name in USUAL_FEEDS] + [urljoin(base, "/" + name) for name in USUAL_FEEDS]):
+        try:
+            with open_url(candidate, "application/rss+xml, application/atom+xml, application/xml;q=0.9, */*;q=0.5") as r:
+                if parse(r.read(MAX_FEED_BYTES), r.geturl())["items"]:
+                    return r.geturl()
+        except (OSError, FeedError):  # not there, or not a feed
+            pass
+    return None
 
 
 def local(tag) -> str:
