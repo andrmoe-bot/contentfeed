@@ -67,6 +67,7 @@ starting with `#` are comments.
 
 A subscription can be an RSS or Atom feed, or a page that has one: a YouTube channel
 (`youtube.com/@handle`, `/channel/…`) or playlist, a subreddit, a blog, a Mastodon profile and so on.
+It can also be a series on NRK TV (see NRK TV) or a Jellyfin server (see Jellyfin).
 The server finds the feed, checks it every 30 minutes (`--feed-interval MINUTES`), and adds
 its posts to the feed.
 
@@ -134,6 +135,24 @@ Jellyfin instead.
 next one in season and episode order gets the bonus. Movies don't get it. Whether you've watched
 something in Jellyfin doesn't count as opened here; only opening it from the feed does.
 
+## NRK TV
+
+You can subscribe to a series on [NRK TV](https://tv.nrk.no): copy its address from the browser, such
+as `https://tv.nrk.no/serie/skam`. An address of one of its seasons or episodes subscribes to the whole
+series. The feed gets the episodes you can watch now, from NRK's public catalogue API (`psapi.nrk.no`),
+which needs no login. It isn't documented, so it can break when NRK changes it; the Subscriptions page
+then shows the error.
+
+A series with seasons, such as a drama, is a series in the feed too: open an episode and the next
+one in season and episode order is next up, and later episodes are held back until you've opened an
+earlier one. Episodes that are no longer available leave the feed. Other series, such as the news or
+talk shows, list their episodes by date; the feed reads up to the 1000 newest, and next up is the
+episode published after the one you opened. Their titles say the date ("5. oktober"), even where NRK
+says "I dag" or "Fredag". Episodes are dated by when they came out on NRK TV.
+
+Clicking a card opens the episode on tv.nrk.no; it doesn't play in the card. Many programs can only
+be watched in Norway.
+
 ## Viewed items
 
 Opening an item (clicking its link, middle-clicking it, or playing its video) records when you
@@ -182,7 +201,7 @@ follows "S01E04". Only the numbers are compared, not the words, and only between
 apart in the subscription; numbers of 1000 or more, such as years, don't count. Posts that follow
 each other make a series, whose first part is the one that follows nothing. So "part 3" is held back
 until you've opened part 1 or 2, and after you open part 2, part 3 is next up. Jellyfin episodes
-are in series by episode order instead. Subscriptions tagged `latest` have no series. Because words aren't compared, unrelated posts are
+and NRK TV episodes are in series by episode order instead, and NRK TV's news and other dated programs have no series. Subscriptions tagged `latest` have no series. Because words aren't compared, unrelated posts are
 sometimes taken for a series, such as "Q&A #2" after "Chapter 1"; the card says which post it
 thinks starts the series.
 

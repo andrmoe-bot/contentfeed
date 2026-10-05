@@ -29,6 +29,7 @@ from urllib.parse import parse_qs, urljoin, urlparse
 
 import feeds
 import jellyfin
+import nrk
 import ranking
 
 ROOT = Path(__file__).resolve().parent  # code and pages; the server never writes here
@@ -46,6 +47,7 @@ TEMPLATES = {
 # A line can be an RSS/Atom feed, or a page that has one: a YouTube channel (@handle, /channel/…)
 # or playlist, a subreddit, a blog, a Mastodon profile, and so on. Lines starting with # are ignored.
 # A Jellyfin server, or a library or series on one, needs its login in jellyfin.json; see the README.
+# A series on NRK TV is its address, such as https://tv.nrk.no/serie/skam.
 #
 # https://www.youtube.com/@veritasium science video
 # https://www.reddit.com/r/python programming
@@ -239,7 +241,9 @@ def refresh_subscription(url: str, force: bool = False):
         try:
             logins, problem = jellyfin.read_logins(JELLYFIN_FILE)
             login = jellyfin.login_for(url, logins)
-            if login is not None:
+            if nrk.series_id(url):
+                fresh = nrk.fetch(url, {p["url"] for p in old.get("items", [])})
+            elif login is not None:
                 fresh = jellyfin.fetch(url, login)
             else:
                 try:
@@ -500,7 +504,8 @@ def series_state(subs) -> tuple[dict[str, str], dict[str, str]]:
       whose posts belong to series of their own, such as a Jellyfin server's TV shows, has a next post
       in each series, in episode order.
     - later parts of a series none of whose earlier parts you've opened, as {url: the first part's title}.
-    Series are found from titles (see ranking.title_series), or for Jellyfin from episode order."""
+    Series are found from titles (see ranking.title_series), or for Jellyfin and NRK TV from episode order.
+    Posts marked no_series, such as NRK TV's news, have no series."""
     next_up, unstarted = {}, {}
     for sub_url in subs:
         groups = {}
@@ -508,7 +513,7 @@ def series_state(subs) -> tuple[dict[str, str], dict[str, str]]:
             groups.setdefault(p.get("series"), []).append(p)
         for key, posts in groups.items():
             if key is None:
-                prev = ranking.title_series(posts)
+                prev = {} if posts[0].get("no_series") else ranking.title_series(posts)
             else:
                 posts.sort(key=lambda p: p.get("episode", []), reverse=True)  # last episode first; stable otherwise
                 prev = {p["url"]: posts[i + 1] for i, p in enumerate(posts[:-1])}

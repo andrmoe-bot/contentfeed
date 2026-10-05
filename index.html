@@ -93,7 +93,7 @@
   <form class="bar" id="add">
     <input id="url" type="text" autocomplete="off" placeholder="Paste a link or feed, optionally followed by tags" required>
     <button class="primary" type="submit" value="link" title="Add this page to links.txt">Add link</button>
-    <button type="submit" value="subscribe" title="Follow a feed, YouTube channel, subreddit, blog, Jellyfin server… (feeds.txt)">Subscribe</button>
+    <button type="submit" value="subscribe" title="Follow a feed, YouTube channel, subreddit, blog, NRK TV series, Jellyfin server… (feeds.txt)">Subscribe</button>
     <button type="button" id="refresh" title="Re-fetch every link and check every subscription now">Refresh all</button>
     <p id="message" role="status"></p>
   </form>
@@ -407,7 +407,7 @@ const SETTINGS = [
   { key: "new_sub_bonus", label: "New subscription", before: "+", after: "points",
     hint: "For posts from a subscription you've never opened anything from, such as one you just subscribed to." },
   { key: "series_penalty", label: "Series", before: "−", after: "points",
-    hint: "Taken off a later part of a series when you haven't opened anything before it. A post follows another from its subscription when their titles have the same numbers but one, 1 higher, such as “part 2” after “part 1”; Jellyfin episodes go in episode order. Not for subscriptions tagged “latest”." },
+    hint: "Taken off a later part of a series when you haven't opened anything before it. A post follows another from its subscription when their titles have the same numbers but one, 1 higher, such as “part 2” after “part 1”; Jellyfin and NRK TV episodes go in episode order. Not for subscriptions tagged “latest”." },
   { key: "repeat_per_post", label: "Repeat penalty", before: "−", after: "per post",
     hint: "Taken off a post for each post from its subscription higher up in the feed: once for the second, twice for the third, and so on. Up: subscriptions are mixed more." },
   { key: "green_bonus_points", label: "Green", before: "+", after: "points", hint: "For items you marked green." },
