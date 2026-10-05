@@ -3,7 +3,7 @@
 
 All personal data lives in the data directory (--data-dir, default ./data), never in the code:
 links.txt holds single links and feeds.txt holds subscriptions (RSS/Atom feeds, or pages that have
-one, such as YouTube channels). Both have one URL per line, optionally followed by tags; lines
+one, such as YouTube channels, or blogs without a feed). Both have one URL per line, optionally followed by tags; lines
 starting with "#" are comments. They are created with instructions on first run.
 
 For each link the server fetches the page once and extracts title, description, image and site
@@ -22,7 +22,6 @@ import threading
 import urllib.error
 import time
 from concurrent.futures import ThreadPoolExecutor
-from html.parser import HTMLParser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urljoin, urlparse
@@ -30,6 +29,7 @@ from urllib.parse import parse_qs, urljoin, urlparse
 import feeds
 import jellyfin
 import nrk
+import pages
 import ranking
 
 ROOT = Path(__file__).resolve().parent  # code and pages; the server never writes here
@@ -45,7 +45,8 @@ TEMPLATES = {
     "feeds.txt": """\
 # Subscriptions: one per line, optionally followed by tags, like links.txt.
 # A line can be an RSS/Atom feed, or a page that has one: a YouTube channel (@handle, /channel/…)
-# or playlist, a subreddit, a blog, a Mastodon profile, and so on. Lines starting with # are ignored.
+# or playlist, a subreddit, a blog, a Mastodon profile, and so on. A blog or news page without a feed
+# works too: its posts are read from the page. Lines starting with # are ignored.
 # A Jellyfin server, or a library or series on one, needs its login in jellyfin.json; see the README.
 # A series on NRK TV is its address, such as https://tv.nrk.no/serie/skam.
 #
@@ -74,34 +75,6 @@ subscriptions: dict[str, dict] = {}  # feeds.txt url -> resolved feed, its posts
 pending: set[str] = set()
 feed_interval = 30 * 60  # seconds between checks of each subscription; set by --feed-interval
 executor = ThreadPoolExecutor(max_workers=8)
-
-
-class MetaParser(HTMLParser):
-    def __init__(self):
-        super().__init__(convert_charrefs=True)
-        self.meta: dict[str, str] = {}
-        self.icon: str | None = None
-        self._in_title = False
-        self.title = ""
-
-    def handle_starttag(self, tag, attrs):
-        a = {k.lower(): (v or "") for k, v in attrs}
-        if tag == "meta":
-            key = (a.get("property") or a.get("name") or "").lower()
-            if key and "content" in a and key not in self.meta:
-                self.meta[key] = a["content"].strip()
-        elif tag == "link" and "icon" in a.get("rel", "").lower() and not self.icon:
-            self.icon = a.get("href")
-        elif tag == "title":
-            self._in_title = True
-
-    def handle_endtag(self, tag):
-        if tag == "title":
-            self._in_title = False
-
-    def handle_data(self, data):
-        if self._in_title:
-            self.title += data
 
 
 def set_data_dir(path: Path):
@@ -159,7 +132,7 @@ def fetch_metadata(url: str) -> dict:
                 item["image"] = final_url
             elif "html" in ctype:
                 charset = resp.headers.get_content_charset() or "utf-8"
-                parser = MetaParser()
+                parser = feeds.MetaParser()
                 parser.feed(resp.read(MAX_BYTES).decode(charset, errors="replace"))
                 m = parser.meta
                 item["title"] = m.get("og:title") or m.get("twitter:title") or parser.title.strip()
@@ -245,6 +218,8 @@ def refresh_subscription(url: str, force: bool = False):
                 fresh = nrk.fetch(url, {p["url"] for p in old.get("items", [])})
             elif login is not None:
                 fresh = jellyfin.fetch(url, login)
+            elif old.get("page"):  # a page without a feed, read before
+                fresh = pages.fetch(url, {p["url"] for p in old.get("items", [])})
             else:
                 try:
                     feed_url = old.get("feed_url") or feeds.discover(url)
@@ -252,7 +227,9 @@ def refresh_subscription(url: str, force: bool = False):
                 except feeds.FeedError as e:
                     if jellyfin.is_jellyfin(url):
                         raise feeds.FeedError(jellyfin.missing_login(url, logins, problem, JELLYFIN_FILE)) from e
-                    raise
+                    if not isinstance(e, feeds.NoFeed):
+                        raise
+                    fresh = pages.fetch(url)  # no feed, so read the posts from the page
         except Exception as e:  # keep the old posts; show the error in the subscriptions list
             with lock:
                 subscriptions[url] = {**old, "error": str(e)[:600], "fetched": time.time()}
@@ -363,6 +340,7 @@ def subscription_status() -> list[dict]:
                 "site": s.get("site"),
                 "icon": s.get("icon"),
                 "feed_url": s.get("feed_url"),
+                "page": bool(s.get("page")),
                 "posts": len(s.get("items", [])),
                 "latest": max(dates, default=None),
                 "fetched": s.get("fetched"),

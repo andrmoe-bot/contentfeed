@@ -67,8 +67,11 @@ starting with `#` are comments.
 
 A subscription can be an RSS or Atom feed, or a page that has one: a YouTube channel
 (`youtube.com/@handle`, `/channel/…`) or playlist, a subreddit, a blog, a Mastodon profile and so on.
-It can also be a series on NRK TV (see NRK TV) or a Jellyfin server (see Jellyfin).
-The server finds the feed, checks it every 30 minutes (`--feed-interval MINUTES`), and adds
+It can also be a blog or news page without a feed (see Pages without a feed), a series on NRK TV
+(see NRK TV) or a Jellyfin server (see Jellyfin).
+The server finds the feed, also where a page doesn't link to it: it tries the usual addresses, such as
+`/feed`, `/rss.xml` and `/index.xml`, under the page and at the top of the site. It also tries them when a
+site turns away the server but not its feed (OpenAI's news page, say). The server checks it every 30 minutes (`--feed-interval MINUTES`), and adds
 its posts to the feed.
 
 Posts stay in the feed after they drop out of the subscription's feed (up to 5000 per subscription).
@@ -95,6 +98,31 @@ within about 30 seconds.
 
 Page details for links are fetched once; subscription posts are kept between checks. "Refresh all"
 re-fetches links and checks every subscription now.
+
+## Pages without a feed
+
+Many company and research blogs have no RSS or Atom feed. Subscribe to the page that lists their posts,
+such as `https://www.anthropic.com/news`, and the feed reads the posts from the page instead:
+
+- The posts are the page's links to pages under it, such as `/news/some-post`, at the depth most of them
+  are (so not `/research/team/alignment` on a page of `/research/…` posts). Links in the page's navigation,
+  header and footer don't count, and nor do tags, categories, authors and social media.
+- If there are fewer than two of those, they are the links to the folder the page links to most, first on
+  its own site (such as `/post/…` on Eleos AI's `/research`), then on others (such as `arxiv.org/abs/…` on a
+  page listing papers).
+- A page that adds its links with JavaScript has none of these. Then the posts are the pages under it in
+  the site's sitemap, if it has one.
+
+Each new post's own page is read once, for its title, description and picture, the way a link in
+links.txt is, and the site's name is taken off the end of its title. Its date is the first of: the one
+in the page's metadata, the one by its link in the list, and the first date written in the post. A post
+with none is dated by when the feed first saw it, so the first check puts such posts at the top.
+
+Only the first page of the list is read (up to 50 posts), not those behind "Load more" or page 2, but
+posts stay in the feed once seen. The Subscriptions page says "No feed; posts are read from the page" for
+these. This is guesswork that suits most blogs, but it can pick the wrong links, such as team pages on a
+page whose posts are added by JavaScript; check what a new subscription shows. If the site has a
+Substack or a newsletter with a feed, subscribing to that is more reliable.
 
 ## Jellyfin
 

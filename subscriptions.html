@@ -42,7 +42,7 @@
     <nav><a href="/">← Back to feed</a></nav>
   </div>
   <form class="bar" id="add">
-    <input id="url" type="text" autocomplete="off" placeholder="Feed, YouTube channel, subreddit, blog, NRK TV series, Jellyfin… optionally followed by tags" required>
+    <input id="url" type="text" autocomplete="off" placeholder="Feed, YouTube channel, subreddit, blog or news page, NRK TV series, Jellyfin… optionally followed by tags" required>
     <button class="primary" type="submit">Subscribe</button>
     <p id="message" role="status"></p>
   </form>
@@ -122,7 +122,9 @@ function row(s) {
     : "Not checked yet";
 
   const addr = el("div", { class: "addr" }, el("a", { href: s.url, target: "_blank", rel: "noopener noreferrer" }, s.url));
-  if (s.feed_url && s.feed_url !== s.url) {
+  if (s.page) {
+    addr.append(el("br"), "No feed; posts are read from the page");
+  } else if (s.feed_url && s.feed_url !== s.url) {
     addr.append(el("br"), "Feed: ", el("a", { href: s.feed_url, target: "_blank", rel: "noopener noreferrer" }, s.feed_url));
   }
 
