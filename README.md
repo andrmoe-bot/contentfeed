@@ -26,6 +26,7 @@ It holds:
 - `links.txt` and `feeds.txt`: your links and subscriptions (created with instructions on first run)
 - `added.json`: when each link or post was first seen
 - `viewed.json`: when you last opened each item
+- `skipped.json`: when you last skipped each item (the white dot)
 - `colors.json`: the items you marked green or red
 - `settings.json`: your score settings from the feed's score panel, if you changed them
 - `jellyfin.json`: logins for Jellyfin servers you subscribe to (see Jellyfin), if any
@@ -196,7 +197,9 @@ Each card has three dots in its bottom corner: green, white and red. They don't 
 yet; for now they change an item's score:
 
 - **green**: +10 by default; you can change it in the score panel (see Ranking)
-- **white**: the default, no change. Clicking white also marks the item viewed: a quick "seen it".
+- **white**: the default, no change. Clicking white also skips the item: it counts as viewed (the card
+  says "Skipped"), except that it doesn't make anything next up. Neither the item nor the post after it
+  gets the next-up bonus, so you can pass over an episode without the feed pushing the following one.
 - **red**: puts it at the bottom, below everything else
 
 ## Ranking
@@ -209,11 +212,11 @@ last opened an item. A ranker returns reasons with points, such as
 
 The default, `score`, adds up these points. With the default settings:
 
-- +30 for **next up**: the post after the one you opened most recently in its subscription. That's
+- +30 for **next up**: the post after the one you opened (not skipped) most recently in its subscription. That's
   the next part of its series (see below) or, if it has none, the post published next. Jellyfin
   series go in episode order. Tag a subscription `latest` in feeds.txt to turn next up off for it,
   such as a news feed.
-- −30 for anything you've opened, other than next up
+- −30 for anything you've opened or skipped, other than next up
 - +20 if nothing from its subscription has been opened yet, such as one you just subscribed to
 - −30 for a later part of a series when you haven't opened anything before it (see below)
 - −40 × how alike it is to the most similar thing you opened in the last 24 hours (see below)
