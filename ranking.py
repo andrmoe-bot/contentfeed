@@ -14,16 +14,17 @@ Each item has its page metadata (url, title, description, domain, ...) plus thes
     tags         words written after the URL on its line in links.txt or feeds.txt, lowercased
     feed         the subscription's title (posts only)
     position     index in links.txt (0 = first line); -1 for posts
-    last_viewed  unix time you last opened it, or None
+    last_viewed  unix time you last opened or skipped it (the white dot), or None
+    skipped      True if the last of those was a skip
     color        "green", "white" (the default) or "red", as you marked it on the page
-    next_after   for a post: the title of the post you opened most recently in its subscription,
+    next_after   for a post: the title of the post you opened (not skipped) most recently in its subscription,
                  if this post comes right after that one ("what's next"): the next part of its series
                  (see title_series) or else the next published; otherwise None
     series_first for a later part of a series of which you haven't opened anything before it: the
                  first part's title; otherwise None
     sub          for a post: its subscription's address; None for links
-    sub_last_viewed  for a post: unix time you last opened any post in its subscription, or None
-                 if you've never opened anything from it
+    sub_last_viewed  for a post: unix time you last opened or skipped any post in its subscription,
+                 or None if you've done neither
 
 rank() adds one more, "similar": the item you opened recently that this one is most like (see
 similarity), or None.
@@ -142,7 +143,8 @@ def similar_to_recent(items: list[dict], now: float, weights: dict):
                 percent, why = similarity(it, other, weights)
                 # On a tie, itself is the clearest reason
                 if percent and (not best or percent > best["percent"] or (percent == best["percent"] and why == "itself")):
-                    best = {"title": other["title"], "hours": hours_since(now, other["last_viewed"]), "percent": percent, "why": why}
+                    best = {"title": other["title"], "hours": hours_since(now, other["last_viewed"]), "percent": percent, "why": why,
+                            "skipped": other.get("skipped", False)}
         it["similar"] = best
 
 
@@ -214,18 +216,20 @@ def score(item: dict, now: float, weights: dict) -> Reasons:
             reasons.append((f"next up after “{short(item['next_after'])}”", w["next_up_bonus"]))
     elif item["last_viewed"] is not None and w["seen_bonus"]:
         away = hours_since(now, item["last_viewed"])
-        reasons.append((f"opened {hours_label(away)} ago" if away else "opened in the last hour", w["seen_bonus"]))
+        verb = "skipped" if item.get("skipped") else "opened"
+        reasons.append((f"{verb} {hours_label(away)} ago" if away else f"{verb} in the last hour", w["seen_bonus"]))
     if item["kind"] == "subscription" and item.get("sub_last_viewed") is None and w["new_sub_bonus"]:
         reasons.append((f"nothing opened from “{short(item['feed'])}” yet", w["new_sub_bonus"]))
     if item.get("series_first") and "latest" not in item["tags"] and w["series_penalty"]:
         reasons.append((f"in a series starting “{short(item['series_first'])}”, nothing before it opened", -w["series_penalty"]))
     like = item.get("similar")
     if like and w["similar_penalty"]:
-        when = f"{hours_label(like['hours'])} ago" if like["hours"] else "in the last hour"
+        verb = "skipped" if like.get("skipped") else "opened"
+        when = f"{verb} {hours_label(like['hours'])} ago" if like["hours"] else f"{verb} in the last hour"
         if like["why"] == "itself":
-            label = f"100% like itself, opened {when}"
+            label = f"100% like itself, {when}"
         else:
-            label = f"{like['percent']}% like “{short(like['title'])}”, opened {when} ({like['why']})"
+            label = f"{like['percent']}% like “{short(like['title'])}”, {when} ({like['why']})"
         reasons.append((label, points(-w["similar_penalty"] * like["percent"] / 100)))
     kind = media_type(item)
     if w[f"{kind}_bonus"]:

@@ -133,7 +133,7 @@ let playing = null;  // url of the video playing on this page
 
 // Fields that change when you open or color an item, or when its subscription gets a new post. They're
 // updated in place, not by rebuilding the card, so a video you just started keeps playing.
-const VIEW_FIELDS = ["color", "last_viewed", "next_after", "sub_last_viewed", "score", "reasons"];
+const VIEW_FIELDS = ["color", "last_viewed", "skipped", "next_after", "sub_last_viewed", "score", "reasons"];
 const contentKey = (item) => JSON.stringify(item, (k, v) => (VIEW_FIELDS.includes(k) ? undefined : v));
 
 async function post(path, body) {
@@ -149,6 +149,7 @@ async function opened(item) {
   item = latest(item);
   stay.add(item.url);
   item.last_viewed = Date.now() / 1000;
+  item.skipped = false;
   const c = cards.get(item.url);
   if (c) showViewState(c.el, item);
   await post("/api/viewed", { url: item.url }).catch(() => {});
@@ -160,22 +161,22 @@ async function opened(item) {
 const COLORS = ["green", "white", "red"];
 const COLOR_TITLES = {
   green: "Green: ranked higher",
-  white: "White (default): mark as viewed",
+  white: "White (default): skip, like viewing it but without making what comes after it next up",
   red: "Red: ranked at the bottom",
 };
 
-// White also marks the item viewed, so it's a quick "seen it".
+// White also skips the item: it scores as if you'd viewed it, but neither it nor what comes after it is next up.
 async function setColor(item, color) {
   item = latest(item);
-  const seen = color === "white";
-  if (item.color === color && !seen) return;
+  const skip = color === "white";
+  if (item.color === color && !skip) return;
   item.color = color;
   stay.add(item.url);
-  if (seen) item.last_viewed = Date.now() / 1000;
+  if (skip) Object.assign(item, { last_viewed: Date.now() / 1000, skipped: true });
   const c = cards.get(item.url);
   if (c) showViewState(c.el, item);  // show the new color right away
   await post("/api/color", { url: item.url, color }).catch(() => {});
-  if (seen) await post("/api/viewed", { url: item.url }).catch(() => {});
+  if (skip) await post("/api/skipped", { url: item.url }).catch(() => {});
   load();
 }
 
@@ -270,7 +271,7 @@ function card(item) {
 
 // The score, color and last-viewed line change without rebuilding the card, so a playing video keeps playing.
 function showViewState(art, item) {
-  const text = item.last_viewed ? `Viewed ${ago(item.last_viewed)}` : "";
+  const text = item.last_viewed ? `${item.skipped ? "Skipped" : "Viewed"} ${ago(item.last_viewed)}` : "";
   art.querySelector(".viewed").replaceChildren(el("span", {}, text), colorDots(item));
   const old = art.querySelector(".why"), details = why(item);
   if (old.outerHTML === details.outerHTML) return;
@@ -401,9 +402,9 @@ async function fetchFeed() {
 // in steps of 1, 1.5, 2, 3, 5 and 7 times a power of ten, so one slider covers small and huge numbers.
 const SETTINGS = [
   { key: "next_up_bonus", label: "Next up", before: "+", after: "points",
-    hint: "Next up is the post after the one you opened most recently in a subscription: the next part of its series, or else the next published. Not for subscriptions tagged “latest”." },
+    hint: "Next up is the post after the one you opened most recently in a subscription: the next part of its series, or else the next published. Skipping (the white dot) doesn't make anything next up. Not for subscriptions tagged “latest”." },
   { key: "seen_bonus", label: "Seen", before: "", after: "points",
-    hint: "For items you've opened, other than next up. Below 0: they go under things you haven't opened." },
+    hint: "For items you've opened or skipped (the white dot), other than next up. Below 0: they go under things you haven't opened." },
   { key: "new_sub_bonus", label: "New subscription", before: "+", after: "points",
     hint: "For posts from a subscription you've never opened anything from, such as one you just subscribed to." },
   { key: "series_penalty", label: "Series", before: "−", after: "points",

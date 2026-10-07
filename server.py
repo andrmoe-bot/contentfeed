@@ -35,7 +35,7 @@ import ranking
 ROOT = Path(__file__).resolve().parent  # code and pages; the server never writes here
 DEFAULT_DATA_DIR = ROOT / "data"
 # Data files; set_data_dir() points these into the data directory at startup.
-LINKS_FILE = FEEDS_FILE = CACHE_FILE = ADDED_FILE = FEED_CACHE_FILE = VIEWED_FILE = COLORS_FILE = SETTINGS_FILE = JELLYFIN_FILE = Path()
+LINKS_FILE = FEEDS_FILE = CACHE_FILE = ADDED_FILE = FEED_CACHE_FILE = VIEWED_FILE = SKIPPED_FILE = COLORS_FILE = SETTINGS_FILE = JELLYFIN_FILE = Path()
 TEMPLATES = {
     "links.txt": """\
 # One link per line, optionally followed by tags: https://example.com music longread
@@ -70,6 +70,7 @@ lock = threading.Lock()
 cache: dict[str, dict] = {}
 added: dict[str, float] = {}  # url -> unix time the server first saw the link
 viewed: dict[str, float] = {}  # url -> unix time you last opened it
+skipped: dict[str, float] = {}  # url -> unix time you last skipped it (the white dot)
 colors: dict[str, str] = {}  # url -> color you gave it; items without one are white
 subscriptions: dict[str, dict] = {}  # feeds.txt url -> resolved feed, its posts and fetch status
 pending: set[str] = set()
@@ -79,11 +80,11 @@ executor = ThreadPoolExecutor(max_workers=8)
 
 def set_data_dir(path: Path):
     """Use path for all data files, creating it and the starter lists if they don't exist yet."""
-    global LINKS_FILE, FEEDS_FILE, CACHE_FILE, ADDED_FILE, FEED_CACHE_FILE, VIEWED_FILE, COLORS_FILE, SETTINGS_FILE, JELLYFIN_FILE
+    global LINKS_FILE, FEEDS_FILE, CACHE_FILE, ADDED_FILE, FEED_CACHE_FILE, VIEWED_FILE, SKIPPED_FILE, COLORS_FILE, SETTINGS_FILE, JELLYFIN_FILE
     path.mkdir(parents=True, exist_ok=True)
     LINKS_FILE, FEEDS_FILE = path / "links.txt", path / "feeds.txt"
     CACHE_FILE, ADDED_FILE, FEED_CACHE_FILE = path / "cache.json", path / "added.json", path / "feeds.json"
-    VIEWED_FILE, COLORS_FILE = path / "viewed.json", path / "colors.json"
+    VIEWED_FILE, SKIPPED_FILE, COLORS_FILE = path / "viewed.json", path / "skipped.json", path / "colors.json"
     SETTINGS_FILE, JELLYFIN_FILE = path / "settings.json", path / "jellyfin.json"
     for name, text in TEMPLATES.items():
         if not (path / name).exists():
@@ -372,7 +373,7 @@ def set_subscription_tags(url: str, tags: list[str]) -> bool:
 
 
 def unsubscribe(url: str) -> bool:
-    """Remove the subscription, with its posts and when you opened or colored them, so subscribing
+    """Remove the subscription, with its posts and when you opened, skipped or colored them, so subscribing
     again starts afresh. Posts that are also in links.txt or another subscription keep theirs."""
     if not replace_line(FEEDS_FILE, url, None):
         return False
@@ -381,9 +382,11 @@ def unsubscribe(url: str) -> bool:
         posts = {p["url"] for p in subscriptions.pop(url, {}).get("items", [])} - elsewhere
         for post in posts:
             viewed.pop(post, None)
+            skipped.pop(post, None)
             colors.pop(post, None)
     save_json(FEED_CACHE_FILE, subscriptions)
     save_json(VIEWED_FILE, viewed)
+    save_json(SKIPPED_FILE, skipped)
     save_json(COLORS_FILE, colors)
     return True
 
@@ -410,9 +413,23 @@ def poll_subscriptions():
 COLORS = ("green", "white", "red")
 
 
+# Skipping an item (the white dot) counts as viewing it, except for next up: what comes after a post you
+# skipped isn't next up, and nor is a post you skipped. Whichever you did last counts.
+def seen_at(url: str) -> float | None:
+    """When you last opened or skipped url. Call with lock held."""
+    return max(viewed.get(url, 0), skipped.get(url, 0)) or None
+
+
+def opened_at(url: str) -> float | None:
+    """When you last opened url, unless you skipped it after that. Call with lock held."""
+    return viewed[url] if url in viewed and viewed[url] > skipped.get(url, 0) else None
+
+
 def view_state(url: str) -> dict:
-    """The item's color and when you last opened it. Call with lock held."""
-    return {"color": colors.get(url, "white"), "last_viewed": viewed.get(url)}
+    """The item's color, when you last opened or skipped it, and whether that was a skip. Call with lock held."""
+    last = seen_at(url)
+    return {"color": colors.get(url, "white"), "last_viewed": last,
+            "skipped": last is not None and opened_at(url) is None}
 
 
 def known_urls() -> set[str]:
@@ -431,6 +448,16 @@ def set_viewed(url: str) -> bool:
     with lock:
         viewed[url] = time.time()
     save_json(VIEWED_FILE, viewed)
+    return True
+
+
+def set_skipped(url: str) -> bool:
+    """Record that you skipped url now. Only for items in the feed."""
+    if url not in known_urls():
+        return False
+    with lock:
+        skipped[url] = time.time()
+    save_json(SKIPPED_FILE, skipped)
     return True
 
 
@@ -478,7 +505,8 @@ def load_settings():
 def series_state(subs) -> tuple[dict[str, str], dict[str, str]]:
     """Call with lock held. Returns:
     - next up, as {its url: the opened post's title}: for each subscription, the post after the one
-      you opened most recently: the next part of its series, or else the next published. A subscription
+      you opened most recently: the next part of its series, or else the next published. Skipped posts
+      don't count as opened here, and a post you skipped isn't next up. A subscription
       whose posts belong to series of their own, such as a Jellyfin server's TV shows, has a next post
       in each series, in episode order.
     - later parts of a series none of whose earlier parts you've opened, as {url: the first part's title}.
@@ -495,12 +523,12 @@ def series_state(subs) -> tuple[dict[str, str], dict[str, str]]:
             else:
                 posts.sort(key=lambda p: p.get("episode", []), reverse=True)  # last episode first; stable otherwise
                 prev = {p["url"]: posts[i + 1] for i, p in enumerate(posts[:-1])}
-            opened = [(viewed[p["url"]], i) for i, p in enumerate(posts) if p["url"] in viewed]
+            opened = [(t, i) for i, p in enumerate(posts) if (t := opened_at(p["url"]))]
             if opened:
                 i = max(opened)[1]
                 after = [p for p in posts if prev.get(p["url"]) is posts[i]]
                 nxt = after[0] if after else posts[i - 1] if i > 0 else None
-                if nxt:
+                if nxt and not view_state(nxt["url"])["skipped"]:
                     next_up.setdefault(nxt["url"], posts[i]["title"] or posts[i]["url"])
             # For each part: (the series' first part, whether it or anything before it was opened)
             state = {}
@@ -511,17 +539,17 @@ def series_state(subs) -> tuple[dict[str, str], dict[str, str]]:
                 for q in reversed(chain):
                     before = prev.get(q["url"])
                     first, any_opened = state[before["url"]] if before else (q, False)
-                    state[q["url"]] = (first, any_opened or q["url"] in viewed)
+                    state[q["url"]] = (first, any_opened or seen_at(q["url"]) is not None)
                     if before and not any_opened:
                         unstarted.setdefault(q["url"], first["title"] or first["url"])
     return next_up, unstarted
 
 
 def last_opened(subs) -> dict[str, float]:
-    """For each subscription you've opened a post of, when you last opened one. Call with lock held."""
+    """For each subscription you've opened or skipped a post of, when you last did. Call with lock held."""
     out = {}
     for sub_url in subs:
-        times = [viewed[p["url"]] for p in subscriptions.get(sub_url, {}).get("items", []) if p["url"] in viewed]
+        times = [t for p in subscriptions.get(sub_url, {}).get("items", []) if (t := seen_at(p["url"]))]
         if times:
             out[sub_url] = max(times)
     return out
@@ -784,6 +812,9 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/viewed":
             ok = set_viewed(str(body.get("url", "")))
             self._json({"ok": ok}, 200 if ok else 404)
+        elif path == "/api/skipped":
+            ok = set_skipped(str(body.get("url", "")))
+            self._json({"ok": ok}, 200 if ok else 404)
         elif path == "/api/color":
             ok = set_color(str(body.get("url", "")), str(body.get("color", "")))
             self._json({"ok": ok}, 200 if ok else 404)
@@ -840,6 +871,7 @@ def main():
     added.update(load_json(ADDED_FILE))
     subscriptions.update(load_json(FEED_CACHE_FILE))
     viewed.update(load_json(VIEWED_FILE))
+    skipped.update(load_json(SKIPPED_FILE))
     colors.update(load_json(COLORS_FILE))
     load_settings()
     try:
