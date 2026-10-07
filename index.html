@@ -410,6 +410,12 @@ const SETTINGS = [
     hint: "Taken off a later part of a series when you haven't opened anything before it. A post follows another from its subscription when their titles have the same numbers but one, 1 higher, such as “part 2” after “part 1”; Jellyfin and NRK TV episodes go in episode order. Not for subscriptions tagged “latest”." },
   { key: "repeat_per_post", label: "Repeat penalty", before: "−", after: "per post",
     hint: "Taken off a post for each post from its subscription higher up in the feed: once for the second, twice for the third, and so on. Up: subscriptions are mixed more." },
+  { key: "video_bonus", label: "Video", before: "", after: "points",
+    hint: "For YouTube, Jellyfin and NRK TV videos. Below 0: a penalty." },
+  { key: "image_bonus", label: "Image", before: "", after: "points",
+    hint: "For links straight to a picture. Below 0: a penalty." },
+  { key: "article_bonus", label: "Article", before: "", after: "points",
+    hint: "For everything else: articles, blog posts and other pages. Below 0: a penalty." },
   { key: "green_bonus_points", label: "Green", before: "+", after: "points", hint: "For items you marked green." },
   { key: "similar_penalty", label: "Similar", before: "−", after: "points at 100% alike, within",
     extra: { key: "similar_hours", type: "number", after: "hours" },
@@ -421,7 +427,7 @@ const SETTINGS = [
 ];
 // Every setting, including the second box some have, such as Similar's hours
 const KEYS = SETTINGS.flatMap(({ key, extra }) => (extra ? [key, extra.key] : [key]));
-const SIGNED = ["seen_bonus"];  // may be negative: the sign says which way
+const SIGNED = ["seen_bonus", "video_bonus", "image_bonus", "article_bonus"];  // may be negative: the sign says which way
 const LIMIT = 10_000_000;
 let saved = {};  // as saved on the server
 let draft = {};  // as shown in the panel
@@ -509,6 +515,7 @@ function showFormula() {
     `next up: ${fmt(w.next_up_bonus)} · opened: ${fmt(w.seen_bonus)} · all:${plus(w.new_sub_bonus)} if nothing opened from` +
     ` its subscription − ${fmt(w.series_penalty)} if nothing opened before it in its series` +
     ` − ${fmt(w.similar_penalty)} × % like anything opened in the last ${fmt(w.similar_hours)} hours` +
+    `${plus(w.video_bonus)} if video${plus(w.image_bonus)} if image${plus(w.article_bonus)} if article` +
     `${plus(w.green_bonus_points)} if green − ${fmt(w.repeat_per_post)} × posts from its subscription` +
     ` higher up; red at the bottom`;
 }
