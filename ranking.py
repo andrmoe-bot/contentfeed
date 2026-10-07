@@ -42,6 +42,7 @@ for age, so the page doesn't redraw every time it checks for changes.
 import heapq
 import re
 from typing import Callable
+from urllib.parse import urlparse
 
 Reasons = list[tuple[str, float]]
 Ranker = Callable[[dict, float, dict], Reasons]
@@ -61,9 +62,12 @@ DEFAULT_WEIGHTS = {
     "series_penalty": 30,  # taken off a later part of a series when you haven't opened anything before it
     "repeat_per_post": 15,  # taken off for each post from the same subscription higher up in the feed
     "green_bonus_points": 10,
+    "video_bonus": 0,  # for each media type (see media_type); below 0 is a penalty
+    "image_bonus": 0,
+    "article_bonus": 0,
 }
 WEIGHTS = dict(DEFAULT_WEIGHTS)
-SIGNED = {"seen_bonus"}  # may be negative
+SIGNED = {"seen_bonus", "video_bonus", "image_bonus", "article_bonus"}  # may be negative
 LIMIT = 10_000_000
 RED = 10_000_000  # red items sink below everything else
 
@@ -173,6 +177,15 @@ def title_series(posts: list[dict]) -> dict[str, dict]:
     return out
 
 
+def media_type(item: dict) -> str:
+    """"video" for YouTube, Jellyfin and NRK TV, "image" for a link straight to a picture, otherwise "article"."""
+    if item.get("youtube") or item.get("jellyfin") or urlparse(item["url"]).netloc.lower().removeprefix("www.") == "tv.nrk.no":
+        return "video"
+    if item.get("image") and item.get("image") == item["url"]:
+        return "image"
+    return "article"
+
+
 def ranker(name: str, spread: bool = False):
     """Register a ranker. With spread, the feed is built from the top down and each item loses
     repeat_per_post for every item from the same subscription above it (see rank)."""
@@ -193,7 +206,7 @@ def chronological(item: dict, now: float, weights: dict) -> Reasons:
 @ranker("score", spread=True)
 def score(item: dict, now: float, weights: dict) -> Reasons:
     """Points for next up or opened before, a new subscription, a later part of a series, being like
-    something opened recently, and green. rank() then takes points off repeats from the same subscription."""
+    something opened recently, its media type, and green. rank() then takes points off repeats from the same subscription."""
     w = weights
     reasons = []
     if item.get("next_after") and "latest" not in item["tags"]:
@@ -214,6 +227,9 @@ def score(item: dict, now: float, weights: dict) -> Reasons:
         else:
             label = f"{like['percent']}% like “{short(like['title'])}”, opened {when} ({like['why']})"
         reasons.append((label, points(-w["similar_penalty"] * like["percent"] / 100)))
+    kind = media_type(item)
+    if w[f"{kind}_bonus"]:
+        reasons.append((kind, w[f"{kind}_bonus"]))
     if item["color"] == "green" and w["green_bonus_points"]:
         reasons.append(("green", w["green_bonus_points"]))
     elif item["color"] == "red":

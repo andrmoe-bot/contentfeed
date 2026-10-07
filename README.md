@@ -217,6 +217,8 @@ The default, `score`, adds up these points. With the default settings:
 - +20 if nothing from its subscription has been opened yet, such as one you just subscribed to
 - −30 for a later part of a series when you haven't opened anything before it (see below)
 - −40 × how alike it is to the most similar thing you opened in the last 24 hours (see below)
+- 0 for its media type: video (YouTube, Jellyfin, NRK TV), image (a link straight to a picture) or
+  article (anything else). Each has its own setting, which may be negative, to favor or hold back that type.
 - +10 if green; red items go to the bottom
 - −15 for each post from its subscription higher up in the feed
 
@@ -253,8 +255,9 @@ or `in a series starting “Making a CPU, part 1”, nothing before it opened �
 
 Change the numbers in the score panel: click "Score settings" at the top of the feed. It opens
 beside the feed on a wide screen, or along the bottom on a narrow one, and stays open across reloads
-until you close it. There are nine settings, each with a slider and a box for an exact number:
-Next up, Seen (which may be negative), New subscription, Series, Repeat penalty, Green, Similar
+until you close it. There are twelve settings, each with a slider and a box for an exact number:
+Next up, Seen, New subscription, Series, Repeat penalty, Video, Image and Article (these four may be
+negative), Green, Similar
 (which also has its number of hours), Same subscription (days) and Shared tag (percent). The
 sliders go in steps of 1, 1.5, 2, 3, 5 and 7 times a power of ten, so they cover both small and large
 numbers. The feed reorders as
