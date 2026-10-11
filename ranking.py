@@ -180,8 +180,9 @@ def title_series(posts: list[dict]) -> dict[str, dict]:
 
 
 def media_type(item: dict) -> str:
-    """"video" for YouTube, Jellyfin and NRK TV, "image" for a link straight to a picture, otherwise "article"."""
-    if item.get("youtube") or item.get("jellyfin") or urlparse(item["url"]).netloc.lower().removeprefix("www.") == "tv.nrk.no":
+    """"video" for YouTube, Jellyfin, NRK TV and pages with a video file, "image" for a link straight to a picture,
+    otherwise "article"."""
+    if item.get("youtube") or item.get("jellyfin") or item.get("video") or urlparse(item["url"]).netloc.lower().removeprefix("www.") == "tv.nrk.no":
         return "video"
     if item.get("image") and item.get("image") == item["url"]:
         return "image"

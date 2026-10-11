@@ -136,7 +136,8 @@ let playing = null;  // url of the video playing on this page
 
 // Fields that change when you open or color an item, or when its subscription gets a new post. They're
 // updated in place, not by rebuilding the card, so a video you just started keeps playing.
-const VIEW_FIELDS = ["color", "last_viewed", "skipped", "next_after", "sub_last_viewed", "score", "reasons"];
+const VIEW_FIELDS = ["color", "last_viewed", "skipped", "next_after", "series_first", "similar", "sub_last_viewed",
+  "score", "reasons"];
 const contentKey = (item) => JSON.stringify(item, (k, v) => (VIEW_FIELDS.includes(k) ? undefined : v));
 
 async function post(path, body) {
@@ -238,12 +239,30 @@ function jellyfinVideo(item) {
   return btn;
 }
 
+// A page with a video file, such as an episode on a site without YouTube: the same, playing the file itself.
+function pageVideo(item) {
+  const img = el("img", { class: "media", loading: "lazy", alt: "", src: item.image });
+  const btn = el("button", { class: "play", type: "button", "aria-label": `Play ${item.title}` }, img);
+  img.onerror = () => btn.remove();
+  btn.addEventListener("click", () => {
+    const video = el("video", { class: "media", controls: "", autoplay: "", playsinline: "", src: item.video });
+    video.addEventListener("error", () => video.replaceWith(el("div", { class: "media unplayable" }, "Couldn't play this here.",
+      el("a", { href: item.url, target: "_blank", rel: "noopener noreferrer" }, "Open its page"))));
+    btn.replaceWith(video);
+    if (playing && playing !== item.url) cards.delete(playing);
+    playing = item.url;
+    opened(item);
+  });
+  return btn;
+}
+
 function card(item) {
   const title = item.loading ? "Loading…" : item.title;
   const domain = item.domain || new URL(item.url).hostname;
   let media = null;
   if (item.youtube) media = youtube(item);
   else if (item.jellyfin && item.image) media = jellyfinVideo(item);
+  else if (item.video && item.image) media = pageVideo(item);
   else if (item.image) {
     media = el("img", { class: "media", loading: "lazy", alt: "", src: item.image });
     media.onerror = () => media.remove();
@@ -266,7 +285,7 @@ function card(item) {
   link.addEventListener("click", () => opened(item));
   link.addEventListener("auxclick", (e) => { if (e.button === 1) opened(item); });  // middle-click
   const art = el("article", item.loading ? { class: "loading" } : {});
-  if (media && !item.youtube && !item.jellyfin) link.prepend(media);
+  if (media && !item.youtube && !item.jellyfin && !item.video) link.prepend(media);
   else if (media) art.append(media);
   art.append(link, why(item), el("div", { class: "viewed" }));
   return art;

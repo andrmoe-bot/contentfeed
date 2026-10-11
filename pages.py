@@ -8,22 +8,27 @@ on another site it links to most, such as arxiv.org/abs/… on a page listing pa
 A page whose links are all added by JavaScript has none of these; then the posts are the pages under it
 in the site's sitemap.
 
-Each new post's own page is read once, for its title, description, picture and date, the way a link in
-links.txt is. The date is the first of: the one in the page's metadata, the one by its link in the list,
-and the first date written in the post. A post with none is dated by when the feed first saw it.
+Each new post's own page is read once, for its title, description, picture, video and date, the way a link in
+links.txt is. Where several posts' pages have the same title, such as a series' name, they keep the title
+from the list instead, and a description several share, such as the site's, is left out. A post whose
+page has a <video> plays in its card. The date is the first of: the one in the page's metadata, the one
+by its link in the list, and the first date written in the post. A post with none is dated by when the
+feed first saw it.
 """
 
 import re
 import time
 import xml.etree.ElementTree as ET
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from html.parser import HTMLParser
 from urllib.parse import urljoin, urlparse
 
-from feeds import MAX_FEED_BYTES, MAX_ITEMS_PER_FEED, FeedError, MetaParser, html_to_text, local, open_url, parse_date
+from feeds import MAX_FEED_BYTES, FeedError, MetaParser, html_to_text, local, open_url, parse_date
 
 MIN_POSTS = 2
+MAX_POSTS = 200  # read from the page; some list a whole series at once, oldest first
 SKIPPED_TAGS = {"nav", "header", "footer"}
 # Paths to lists rather than posts, such as /blog/category/news or /blog/page/2
 LIST_PARTS = {"tag", "tags", "category", "categories", "topic", "topics", "author", "authors", "page", "search", "feed"}
@@ -223,8 +228,8 @@ def card(url: str, links: list[dict], page_url: str) -> dict:
 
 def read_post(post: dict) -> dict:
     """The post with its own page's title, description, picture and date, where it has them."""
-    item = {"url": post["url"], "title": post["title"][:300], "description": "", "image": post["image"],
-            "youtube": None, "published": post["published"]}
+    item = {"url": post["url"], "title": post["title"][:300], "list_title": post["title"][:300], "description": "",
+            "image": post["image"], "youtube": None, "published": post["published"]}
     try:
         with open_url(post["url"], "text/html") as r:
             if "html" not in r.headers.get_content_type():
@@ -246,7 +251,22 @@ def read_post(post: dict) -> dict:
                    or text_date(description)),
         site_name=m.get("og:site_name"),
     )
+    if parser.video and not parser.video.startswith("blob:"):
+        item["video"] = urljoin(post["url"], parser.video)
     return item
+
+
+def without_shared(items: list[dict]):
+    """Posts whose pages share a title, such as each episode's page being titled with the series' name,
+    get the title the list gives them instead. A description they share, such as the site's, is dropped."""
+    titles = Counter(it["title"] for it in items)
+    descriptions = Counter(it["description"] for it in items)
+    for it in items:
+        list_title = it.pop("list_title")
+        if titles[it["title"]] > 1 and list_title != it["url"]:
+            it["title"] = list_title
+        if descriptions[it["description"]] > 1:
+            it["description"] = ""
 
 
 def without_site_name(items: list[dict]):
@@ -284,9 +304,10 @@ def fetch(url: str, known: set[str] = frozenset()) -> dict:
     if not cards:
         raise FeedError(f"no RSS or Atom feed found at {url}, and no posts on the page or under it in the "
                         "site's sitemap. The page may add its links with JavaScript, which the feed doesn't run.")
-    new = [c for c in cards[:MAX_ITEMS_PER_FEED] if c["url"] not in known]
+    new = [c for c in cards[:MAX_POSTS] if c["url"] not in known]
     with ThreadPoolExecutor(WORKERS) as pool:
         items = list(pool.map(read_post, new))
+    without_shared(items)
     without_site_name(items)
     title = html_to_text(meta.title.strip() or meta.meta.get("og:site_name") or "")[0]
     return {
