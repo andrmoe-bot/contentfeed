@@ -120,11 +120,15 @@ such as `https://www.anthropic.com/news`, and the feed reads the posts from the 
   the site's sitemap, if it has one.
 
 Each new post's own page is read once, for its title, description and picture, the way a link in
-links.txt is, and the site's name is taken off the end of its title. Its date is the first of: the one
+links.txt is, and the site's name is taken off the end of its title. Where several posts' pages have the
+same title, such as each episode's page being titled with the series' name, they keep the title from the
+list instead, and a description several share, such as the site's, is left out. A post whose page has a
+video file (an HTML `<video>`) plays in its card like a YouTube video, and counts as a video for its media
+type. Its date is the first of: the one
 in the page's metadata, the one by its link in the list, and the first date written in the post. A post
 with none is dated by when the feed first saw it, so the first check puts such posts at the top.
 
-Only the first page of the list is read (up to 50 posts), not those behind "Load more" or page 2, but
+Only the first page of the list is read (up to 200 posts), not those behind "Load more" or page 2, but
 posts stay in the feed once seen. The Subscriptions page says "No feed; posts are read from the page" for
 these. This is guesswork that suits most blogs, but it can pick the wrong links, such as team pages on a
 page whose posts are added by JavaScript; check what a new subscription shows. If the site has a
@@ -225,7 +229,7 @@ The default, `score`, adds up these points. With the default settings:
 - 0 if nothing from its subscription has been opened yet, such as one you just subscribed to
 - −30 for a later part of a series when you haven't opened anything before it (see below)
 - −40 × how alike it is to the most similar thing you opened in the last 24 hours (see below)
-- 0 for its media type: video (YouTube, Jellyfin, NRK TV), image (a link straight to a picture) or
+- 0 for its media type: video (YouTube, Jellyfin, NRK TV, pages with a video file), image (a link straight to a picture) or
   article (anything else). Each has its own setting, which may be negative, to favor or hold back that type.
 - 0 if green; red items go to the bottom
 - −15 for each post from its subscription higher up in the feed

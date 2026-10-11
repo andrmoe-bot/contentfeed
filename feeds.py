@@ -75,7 +75,7 @@ def known_feed_url(url: str) -> str | None:
 
 
 class MetaParser(HTMLParser):
-    """A page's title, icon, <meta> tags, first <time datetime>, JSON-LD data and the start of its text."""
+    """A page's title, icon, <meta> tags, first <time datetime>, first <video> file, JSON-LD data and the start of its text."""
 
     MAX_TEXT = 20_000
 
@@ -84,6 +84,8 @@ class MetaParser(HTMLParser):
         self.meta: dict[str, str] = {}
         self.icon: str | None = None
         self.time: str | None = None
+        self.video: str | None = None  # the src of the first <video>, or of a <source> in it
+        self._in_video = False
         self.json_ld: list[str] = []
         self._in = None  # "title", "json_ld", "script" or "style" while inside one
         self.title = ""
@@ -107,10 +109,17 @@ class MetaParser(HTMLParser):
             self._in = tag
         elif tag == "time" and a.get("datetime") and not self.time:
             self.time = a["datetime"]
+        elif tag == "video":
+            self._in_video = True
+            self.video = self.video or a.get("src") or None
+        elif tag == "source" and self._in_video and not self.video:
+            self.video = a.get("src") or None
 
     def handle_endtag(self, tag):
         if tag in ("title", "script", "style"):
             self._in = None
+        elif tag == "video":
+            self._in_video = False
 
     def handle_data(self, data):
         if self._in == "title":
