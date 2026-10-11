@@ -55,14 +55,14 @@ DEFAULT = "score"
 DEFAULT_WEIGHTS = {
     "next_up_bonus": 30,  # the post after the one you opened most recently in a subscription
     "seen_bonus": -30,  # items you've opened (other than next up); below 0 puts them under unopened ones
-    "new_sub_bonus": 20,  # for posts from a subscription you've never opened anything from
+    "new_sub_bonus": 0,  # for posts from a subscription you've never opened anything from
     "similar_penalty": 40,  # taken off at 100% like something you opened recently (see similarity):
     "similar_hours": 24,  # opened within this many hours
     "similar_days": 30,  # posts from the same subscription are alike if published within this many days
     "tag_similarity": 30,  # percent alike per shared tag, for items from different subscriptions
     "series_penalty": 30,  # taken off a later part of a series when you haven't opened anything before it
     "repeat_per_post": 15,  # taken off for each post from the same subscription higher up in the feed
-    "green_bonus_points": 10,
+    "green_bonus_points": 0,
     "video_bonus": 0,  # for each media type (see media_type); below 0 is a penalty
     "image_bonus": 0,
     "article_bonus": 0,

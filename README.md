@@ -201,7 +201,7 @@ while you're looking at it. Playing a video stops the one playing in another car
 Each card has three dots in its bottom corner: green, white and red. They don't have proper names
 yet; for now they change an item's score:
 
-- **green**: +10 by default; you can change it in the score panel (see Ranking)
+- **green**: 0 by default; give it points in the score panel (see Ranking)
 - **white**: the default, no change. Clicking white also skips the item: it counts as viewed (the card
   says "Skipped"), except that it doesn't make anything next up. Neither the item nor the post after it
   gets the next-up bonus, so you can pass over an episode without the feed pushing the following one.
@@ -222,12 +222,12 @@ The default, `score`, adds up these points. With the default settings:
   series go in episode order. Tag a subscription `latest` in feeds.txt to turn next up off for it,
   such as a news feed.
 - −30 for anything you've opened or skipped, other than next up
-- +20 if nothing from its subscription has been opened yet, such as one you just subscribed to
+- 0 if nothing from its subscription has been opened yet, such as one you just subscribed to
 - −30 for a later part of a series when you haven't opened anything before it (see below)
 - −40 × how alike it is to the most similar thing you opened in the last 24 hours (see below)
 - 0 for its media type: video (YouTube, Jellyfin, NRK TV), image (a link straight to a picture) or
   article (anything else). Each has its own setting, which may be negative, to favor or hold back that type.
-- +10 if green; red items go to the bottom
+- 0 if green; red items go to the bottom
 - −15 for each post from its subscription higher up in the feed
 
 Equal scores are ordered unopened first, then newest first, so with nothing else going on the
@@ -269,7 +269,10 @@ negative), Green, Similar
 (which also has its number of hours), Same subscription (days) and Shared tag (percent). The
 sliders go in steps of 1, 1.5, 2, 3, 5 and 7 times a power of ten, so they cover both small and large
 numbers. The feed reorders as
-you move a slider, and the setting is saved when you let go (or when you press Enter in the box). The defaults are at the top of `ranking.py`. The other ranker,
+you move a slider, and the setting is saved when you let go (or when you press Enter in the box).
+Settings that are 0 when the page loads are hidden, along with their part of the formula, to keep the
+panel short; add one back with "Add a term" below the others. Similar's hours, Same subscription and
+Shared tag come and go with Similar. The defaults are at the top of `ranking.py`. The other ranker,
 `chronological`, has no rules: everything scores 0 and the newest item is first. To add another ranker, register a
 function with `@ranker("name")`, then select it with `python3 server.py --ranker name`, or try
 it without a restart at `/api/feed?ranker=name`.
