@@ -444,7 +444,7 @@ const SETTINGS = [
   { key: "green_bonus_points", label: "Green", before: "+", after: "points", hint: "For items you marked green." },
   { key: "similar_penalty", label: "Similar", before: "−", after: "points at 100% alike, within",
     extra: { key: "similar_hours", type: "number", after: "hours" },
-    hint: "Taken off items alike to something you opened within that many hours, in proportion: 50% alike takes off half. Only the most alike counts. 0 points: off." },
+    hint: "Taken off items alike to something you opened, in proportion: 50% alike takes off half. The penalty fades linearly to zero over this many hours, updated in whole hours. Only the strongest remaining penalty counts. 0 points or 0 hours: off." },
   { key: "similar_days", term: "similar_penalty", label: "Same subscription", before: "alike within", after: "days",
     hint: "Two posts from the same subscription are 100% alike if published at the same time, falling evenly to 0% this many days apart." },
   { key: "tag_similarity", term: "similar_penalty", label: "Shared tag", before: "+", after: "% alike",
@@ -564,7 +564,7 @@ function showFormula() {
   const terms = [
     ["new_sub_bonus", `${plus(w.new_sub_bonus)} if nothing opened from its subscription`],
     ["series_penalty", ` − ${fmt(w.series_penalty)} if nothing opened before it in its series`],
-    ["similar_penalty", ` − ${fmt(w.similar_penalty)} × % like anything opened in the last ${fmt(w.similar_hours)} hours`],
+    ["similar_penalty", ` − ${fmt(w.similar_penalty)} × similarity × time remaining (fades to zero over ${fmt(w.similar_hours)} hours; strongest match)`],
     ["video_bonus", `${plus(w.video_bonus)} if video`],
     ["image_bonus", `${plus(w.image_bonus)} if image`],
     ["article_bonus", `${plus(w.article_bonus)} if article`],
