@@ -228,7 +228,7 @@ The default, `score`, adds up these points. With the default settings:
 - −30 for anything you've opened or skipped, other than next up
 - 0 if nothing from its subscription has been opened yet, such as one you just subscribed to
 - −30 for a later part of a series when you haven't opened anything before it (see below)
-- −40 × how alike it is to the most similar thing you opened in the last 24 hours (see below)
+- −40 × similarity × the fraction of the 24-hour window remaining since opening, using the strongest remaining penalty (see below)
 - 0 for its media type: video (YouTube, Jellyfin, NRK TV, pages with a video file), image (a link straight to a picture) or
   article (anything else). Each has its own setting, which may be negative, to favor or hold back that type.
 - 0 if green; red items go to the bottom
@@ -255,14 +255,15 @@ How alike two items are, from 0 to 100%:
   `latest`, such as two subscriptions both tagged `math`.
 - An item is 100% like itself.
 
-So after you watch a video, its channel's next one (published a week later: next up 30 − 30.8)
-waits a day instead of coming straight back, while the channel's old videos aren't affected.
-Something you've opened is at −70 (−30 for opened and −40 for being like itself) for 24 hours,
-then −30. The feed is built from the top down, taking the repeat penalty into account as it goes,
+The similarity penalty fades linearly to zero over 24 hours, updated in whole hours. After you
+watch a video, its channel's next one (published a week later) starts at next up 30 − 30.8;
+after 12 hours, that penalty is only 15.4. The channel's old videos aren't affected.
+Something you've opened starts at −70 (−30 for opened and −40 for being like itself),
+reaches −50 after 12 hours, and −30 after 24 hours. The feed is built from the top down, taking the repeat penalty into account as it goes,
 so the second post from a subscription loses 15, the third 30, and two in a row are rare.
 
 Each card's "Score" shows its points, such as
-`77% like “Egyptian Fractions”, opened 2 hours ago (same subscription, published 7 days apart) −30.8`
+`77% like “Egyptian Fractions”, opened 2 hours ago (same subscription, published 7 days apart), 91.67% penalty remaining −28.23`
 or `in a series starting “Making a CPU, part 1”, nothing before it opened −30`.
 
 Change the numbers in the score panel: click "Score settings" at the top of the feed. It opens

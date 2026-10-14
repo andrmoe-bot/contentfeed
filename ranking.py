@@ -57,7 +57,7 @@ DEFAULT_WEIGHTS = {
     "seen_bonus": -30,  # items you've opened (other than next up); below 0 puts them under unopened ones
     "new_sub_bonus": 0,  # for posts from a subscription you've never opened anything from
     "similar_penalty": 40,  # taken off at 100% like something you opened recently (see similarity):
-    "similar_hours": 24,  # opened within this many hours
+    "similar_hours": 24,  # penalty fades linearly to zero this many hours after opening
     "similar_days": 30,  # posts from the same subscription are alike if published within this many days
     "tag_similarity": 30,  # percent alike per shared tag, for items from different subscriptions
     "series_penalty": 30,  # taken off a later part of a series when you haven't opened anything before it
@@ -132,18 +132,20 @@ def similarity(item: dict, other: dict, weights: dict) -> tuple[int, str]:
 
 
 def similar_to_recent(items: list[dict], now: float, weights: dict):
-    """Set each item's "similar" to the item opened in the last similar_hours that it's most like, as
-    {title, hours (since opened), percent, why}, or None if it's 0% like all of them. An item opened in
-    that time is 100% like itself."""
+    """Set each item's "similar" to the strongest match after linear recency decay, as
+    {title, hours (since opened), percent, strength, why}, or None if all strengths are zero.
+    Strength is similarity percent times the fraction of similar_hours remaining."""
     recent = [it for it in items if it["last_viewed"] is not None and hours_since(now, it["last_viewed"]) < weights["similar_hours"]]
     for it in items:
         best = None
         if weights["similar_penalty"]:
             for other in recent:
                 percent, why = similarity(it, other, weights)
+                hours = hours_since(now, other["last_viewed"])
+                strength = percent * (1 - hours / weights["similar_hours"])
                 # On a tie, itself is the clearest reason
-                if percent and (not best or percent > best["percent"] or (percent == best["percent"] and why == "itself")):
-                    best = {"title": other["title"], "hours": hours_since(now, other["last_viewed"]), "percent": percent, "why": why,
+                if strength and (not best or strength > best["strength"] or (strength == best["strength"] and why == "itself")):
+                    best = {"title": other["title"], "hours": hours, "percent": percent, "strength": strength, "why": why,
                             "skipped": other.get("skipped", False)}
         it["similar"] = best
 
@@ -231,7 +233,8 @@ def score(item: dict, now: float, weights: dict) -> Reasons:
             label = f"100% like itself, {when}"
         else:
             label = f"{like['percent']}% like “{short(like['title'])}”, {when} ({like['why']})"
-        reasons.append((label, points(-w["similar_penalty"] * like["percent"] / 100)))
+        label += f", {points(100 * (1 - like['hours'] / w['similar_hours']))}% penalty remaining"
+        reasons.append((label, points(-w["similar_penalty"] * like["strength"] / 100)))
     kind = media_type(item)
     if w[f"{kind}_bonus"]:
         reasons.append((kind, w[f"{kind}_bonus"]))
