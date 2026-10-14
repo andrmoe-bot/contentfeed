@@ -447,8 +447,6 @@ const SETTINGS = [
     hint: "Taken off items alike to something you opened, in proportion: 50% alike takes off half. The penalty fades linearly to zero over this many hours, updated in whole hours. Only the strongest remaining penalty counts. 0 points or 0 hours: off." },
   { key: "similar_days", term: "similar_penalty", label: "Same subscription", before: "alike within", after: "days",
     hint: "Two posts from the same subscription are 100% alike if published at the same time, falling evenly to 0% this many days apart." },
-  { key: "tag_similarity", term: "similar_penalty", label: "Shared tag", before: "+", after: "% alike",
-    hint: "For items from different subscriptions (or links): how alike they are per tag they share, other than “latest”." },
 ];
 // Every setting, including the second box some have, such as Similar's hours
 const KEYS = SETTINGS.flatMap(({ key, extra }) => (extra ? [key, extra.key] : [key]));
