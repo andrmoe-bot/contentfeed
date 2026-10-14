@@ -13,6 +13,13 @@ The default port is 80, so the service is reachable at plain `http://<lan-ip>`. 
 doesn't run as root. For development, pick a port of 1024 or above as shown, and open the
 printed address from any device on the network.
 
+## Tests
+
+Run the standard-library regression tests and Python syntax checks:
+
+    python3 -m unittest -v
+    python3 -m py_compile *.py
+
 ## Your data
 
 Everything personal is kept in the data directory, never in the code. Where that is depends on
@@ -251,8 +258,7 @@ How alike two items are, from 0 to 100%:
 
 - Two posts from the same subscription are 100% alike if published at the same time, falling evenly
   to 0% when published 30 days or more apart: a week apart is 77%, two weeks 53%.
-- Items from different subscriptions (or links) are 30% alike for each tag they share, other than
-  `latest`, such as two subscriptions both tagged `math`.
+- Items from different subscriptions aren't alike. Tags don't affect similarity.
 - An item is 100% like itself.
 
 The similarity penalty fades linearly to zero over 24 hours, updated in whole hours. After you
@@ -268,16 +274,16 @@ or `in a series starting “Making a CPU, part 1”, nothing before it opened �
 
 Change the numbers in the score panel: click "Score settings" at the top of the feed. It opens
 beside the feed on a wide screen, or along the bottom on a narrow one, and stays open across reloads
-until you close it. There are twelve settings, each with a slider and a box for an exact number:
+until you close it. There are eleven settings, each with a slider and a box for an exact number:
 Next up, Seen, New subscription, Series, Repeat penalty, Video, Image and Article (these four may be
 negative), Green, Similar
-(which also has its number of hours), Same subscription (days) and Shared tag (percent). The
+(which also has its number of hours) and Same subscription (days). The
 sliders go in steps of 1, 1.5, 2, 3, 5 and 7 times a power of ten, so they cover both small and large
 numbers. The feed reorders as
 you move a slider, and the setting is saved when you let go (or when you press Enter in the box).
 Settings that are 0 when the page loads are hidden, along with their part of the formula, to keep the
-panel short; add one back with "Add a term" below the others. Similar's hours, Same subscription and
-Shared tag come and go with Similar. The defaults are at the top of `ranking.py`. The other ranker,
+panel short; add one back with "Add a term" below the others. Similar's hours and Same subscription
+come and go with Similar. The defaults are at the top of `ranking.py`. The other ranker,
 `chronological`, has no rules: everything scores 0 and the newest item is first. To add another ranker, register a
 function with `@ranker("name")`, then select it with `python3 server.py --ranker name`, or try
 it without a restart at `/api/feed?ranker=name`.

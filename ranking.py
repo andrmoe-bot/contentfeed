@@ -59,7 +59,6 @@ DEFAULT_WEIGHTS = {
     "similar_penalty": 40,  # taken off at 100% like something you opened recently (see similarity):
     "similar_hours": 24,  # penalty fades linearly to zero this many hours after opening
     "similar_days": 30,  # posts from the same subscription are alike if published within this many days
-    "tag_similarity": 30,  # percent alike per shared tag, for items from different subscriptions
     "series_penalty": 30,  # taken off a later part of a series when you haven't opened anything before it
     "repeat_per_post": 15,  # taken off for each post from the same subscription higher up in the feed
     "green_bonus_points": 0,
@@ -113,8 +112,7 @@ def hours_since(now: float, then: float) -> int:
 
 # Similarity: how alike an item is to one you opened, from 0 to 100%. Two posts from the same
 # subscription are 100% alike if published at the same time, falling evenly to 0% when published
-# similar_days or more apart. Items from different subscriptions (or links) are tag_similarity alike
-# for each tag they share, other than "latest". At most 100%. An item is 100% like itself, so one you
+# similar_days or more apart. Items from different subscriptions aren't alike. An item is 100% like itself, so one you
 # just opened loses the whole penalty too.
 def similarity(item: dict, other: dict, weights: dict) -> tuple[int, str]:
     """How alike the two items are, in whole percent, and why, such as "same subscription, published 4 days apart"."""
@@ -126,27 +124,45 @@ def similarity(item: dict, other: dict, weights: dict) -> tuple[int, str]:
         percent = max(0.0, 1 - gap / 24 / days) if days else 0.0
         apart = f"published {hours_label(int(gap))} apart" if gap >= 1 else "published within the hour"
         return round(100 * percent), f"same subscription, {apart}"
-    shared = sorted(set(item["tags"]) & set(other["tags"]) - {"latest"})
-    percent = min(100, weights["tag_similarity"] * len(shared))
-    return round(percent), f"tag{'s' if len(shared) > 1 else ''} {', '.join(shared)}"
+    return 0, "different subscriptions"
 
 
 def similar_to_recent(items: list[dict], now: float, weights: dict):
     """Set each item's "similar" to the strongest match after linear recency decay, as
     {title, hours (since opened), percent, strength, why}, or None if all strengths are zero.
     Strength is similarity percent times the fraction of similar_hours remaining."""
-    recent = [it for it in items if it["last_viewed"] is not None and hours_since(now, it["last_viewed"]) < weights["similar_hours"]]
+    for it in items:
+        it["similar"] = None
+    window = weights["similar_hours"]
+    if not weights["similar_penalty"] or not window:
+        return
+    # Only posts from the same subscription can match. Links can only match themselves.
+    # Compute recency once per viewed item, rather than once per comparison.
+    recent_by_sub: dict[str, list[tuple[dict, int, float]]] = {}
+    recent_by_url = {}
+    for other in items:
+        if other["last_viewed"] is None:
+            continue
+        hours = hours_since(now, other["last_viewed"])
+        if hours >= window:
+            continue
+        entry = (other, hours, 1 - hours / window)
+        recent_by_url[other["url"]] = entry
+        if other.get("sub"):
+            recent_by_sub.setdefault(other["sub"], []).append(entry)
     for it in items:
         best = None
-        if weights["similar_penalty"]:
-            for other in recent:
-                percent, why = similarity(it, other, weights)
-                hours = hours_since(now, other["last_viewed"])
-                strength = percent * (1 - hours / weights["similar_hours"])
-                # On a tie, itself is the clearest reason
-                if strength and (not best or strength > best["strength"] or (strength == best["strength"] and why == "itself")):
-                    best = {"title": other["title"], "hours": hours, "percent": percent, "strength": strength, "why": why,
-                            "skipped": other.get("skipped", False)}
+        candidates = recent_by_sub.get(it.get("sub"), [])
+        own = recent_by_url.get(it["url"])
+        if not it.get("sub"):
+            candidates = [own] if own else []
+        for other, hours, remaining in candidates:
+            percent, why = similarity(it, other, weights)
+            strength = percent * remaining
+            # On a tie, itself is the clearest reason
+            if strength and (not best or strength > best["strength"] or (strength == best["strength"] and why == "itself")):
+                best = {"title": other["title"], "hours": hours, "percent": percent, "strength": strength, "why": why,
+                        "skipped": other.get("skipped", False)}
         it["similar"] = best
 
 

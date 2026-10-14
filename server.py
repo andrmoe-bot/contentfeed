@@ -152,16 +152,16 @@ def fetch_metadata(url: str) -> dict:
     return item
 
 
-# Bumped whenever anything is saved: every change to links, posts, views, colors or settings is, so
-# the ranked feed is only worked out again when this (or something else it depends on) changes.
+# Bumped when saved data changes the ranked feed. Fetch status alone doesn't affect ranking.
 state_version = 0
 
 
-def save_json(path: Path, obj: dict):
+def save_json(path: Path, obj: dict, *, affects_feed: bool = True):
     global state_version
     with lock:
         data = json.dumps(obj, indent=1)
-        state_version += 1
+        if affects_feed:
+            state_version += 1
     tmp = path.with_suffix(".tmp")
     tmp.write_text(data, encoding="utf-8")
     tmp.replace(path)
@@ -238,7 +238,7 @@ def refresh_subscription(url: str, force: bool = False):
         except Exception as e:  # keep the old posts; show the error in the subscriptions list
             with lock:
                 subscriptions[url] = {**old, "error": str(e)[:600], "fetched": time.time()}
-            save_json(FEED_CACHE_FILE, subscriptions)
+            save_json(FEED_CACHE_FILE, subscriptions, affects_feed=False)
             return
         now = time.time()
         if fresh is None:  # not modified since last check
@@ -251,8 +251,9 @@ def refresh_subscription(url: str, force: bool = False):
             entry = {**old, **fresh, "items": merge_posts(kept, fresh["items"], now)}
         entry.pop("error", None)
         with lock:
+            affects_feed = any(old.get(field) != entry.get(field) for field in ("items", "title", "icon"))
             subscriptions[url] = entry
-        save_json(FEED_CACHE_FILE, subscriptions)
+        save_json(FEED_CACHE_FILE, subscriptions, affects_feed=affects_feed)
     finally:
         with lock:
             pending.discard("feed:" + url)
@@ -279,7 +280,7 @@ def load_older(url: str):
             with lock:
                 if url in subscriptions:
                     subscriptions[url]["older_error"] = {"error": str(e)[:300], "time": time.time()}
-            save_json(FEED_CACHE_FILE, subscriptions)
+            save_json(FEED_CACHE_FILE, subscriptions, affects_feed=False)
             return
         now = time.time()
         with lock:
@@ -628,7 +629,7 @@ def feed(ranker: str, limit: int = MAX_ITEMS_SHOWN, weights: dict | None = None)
     now = time.time()
     with lock:
         key = (ranker, json.dumps(weights or ranking.WEIGHTS, sort_keys=True), json.dumps([entries, subs]),
-               state_version, len(pending))
+               state_version)
         hit = ranked_cache.get(key)
         if hit and now - hit[0] < RANKED_TTL:
             return {"items": hit[1][:limit], "total": len(hit[1]), "pending": len(pending), "ranker": ranker}
@@ -659,14 +660,16 @@ def feed(ranker: str, limit: int = MAX_ITEMS_SHOWN, weights: dict | None = None)
                         series_first=series_first.get(item["url"]))
         n_pending = len(pending)
     if new:
-        save_json(ADDED_FILE, added)
+        save_json(ADDED_FILE, added, affects_feed=False)
     ranked = ranking.rank(ranker, items, now, weights)
     with lock:
         for k in [k for k, (t, _) in ranked_cache.items() if now - t >= RANKED_TTL or k[3] != state_version]:
             del ranked_cache[k]
         if len(ranked_cache) >= 20:  # such as many slider positions tried
             ranked_cache.pop(next(iter(ranked_cache)))
-        ranked_cache[key] = (now, ranked)
+        if key[3] == state_version:
+            ranked_cache[key] = (now, ranked)
+        n_pending = len(pending)
     return {
         "items": ranked[:limit],
         "total": len(ranked),
