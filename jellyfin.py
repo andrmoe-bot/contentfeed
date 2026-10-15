@@ -193,6 +193,7 @@ def post(server: str, item: dict) -> dict:
         "youtube": None,
         "published": parse_date(added),
         "jellyfin": True,
+        "estimated_minutes": (item.get("RunTimeTicks") or 0) / 600_000_000 or None,
         # A series' episodes follow each other in season and episode order; a movie is a series of its own.
         "series": item.get("SeriesId") or item["Id"],
     }
@@ -226,7 +227,7 @@ def fetch(url: str, login: dict) -> dict:
         info = request(server, "/System/Info/Public")
         params = {"recursive": "true", "includeItemTypes": "Movie,Episode", "sortBy": "DateCreated",
                   "sortOrder": "Descending", "limit": MAX_ITEMS,
-                  "fields": "Overview,DateCreated,PremiereDate,ProductionYear"}
+                  "fields": "Overview,DateCreated,PremiereDate,ProductionYear,RunTimeTicks"}
         name = info.get("ServerName") or urlparse(server).netloc
         if parent:
             folder = get(server, login, f"/Items/{parent}", {})

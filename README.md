@@ -238,6 +238,7 @@ The default, `score`, adds up these points. With the default settings:
 - −40 × similarity × the fraction of the 24-hour window remaining since opening, using the strongest remaining penalty (see below)
 - 0 for its media type: video (YouTube, Jellyfin, NRK TV, pages with a video file), image (a link straight to a picture) or
   article (anything else). Each has its own setting, which may be negative, to favor or hold back that type.
+- 0 per **estimated minute of content** by default. Set Content length to positive points per minute to favor longer content, or negative to favor shorter content. Runtime metadata is used where available; text is estimated at 200 words per minute (at least one minute). Feed text may be only an excerpt, and page estimates can include surrounding text. Unknown lengths have no adjustment. Existing cached items gain estimates when fetched again (use Refresh all for links).
 - 0 if green; red items go to the bottom
 - −15 for each post from its subscription higher up in the feed
 
@@ -274,8 +275,8 @@ or `in a series starting “Making a CPU, part 1”, nothing before it opened �
 
 Change the numbers in the score panel: click "Score settings" at the top of the feed. It opens
 beside the feed on a wide screen, or along the bottom on a narrow one, and stays open across reloads
-until you close it. There are eleven settings, each with a slider and a box for an exact number:
-Next up, Seen, New subscription, Series, Repeat penalty, Video, Image and Article (these four may be
+until you close it. Each setting comes with a slider and a box for an exact number:
+Next up, Seen, New subscription, Series, Repeat penalty, Video, Image, Article, Content length (Seen, Video, Image, Article and Content length may be
 negative), Green, Similar
 (which also has its number of hours) and Same subscription (days). The
 sliders go in steps of 1, 1.5, 2, 3, 5 and 7 times a power of ten, so they cover both small and large

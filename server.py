@@ -30,6 +30,8 @@ import feeds
 import jellyfin
 import nrk
 import pages
+from content_length import page_minutes
+
 import ranking
 
 ROOT = Path(__file__).resolve().parent  # code and pages; the server never writes here
@@ -135,6 +137,7 @@ def fetch_metadata(url: str) -> dict:
                 charset = resp.headers.get_content_charset() or "utf-8"
                 parser = feeds.MetaParser()
                 parser.feed(resp.read(MAX_BYTES).decode(charset, errors="replace"))
+                item["estimated_minutes"] = page_minutes(parser, video=bool(yt))
                 m = parser.meta
                 item["title"] = m.get("og:title") or m.get("twitter:title") or parser.title.strip()
                 item["description"] = (

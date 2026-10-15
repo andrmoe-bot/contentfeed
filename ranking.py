@@ -41,6 +41,7 @@ for age, so the page doesn't redraw every time it checks for changes.
 """
 
 import heapq
+import math
 import re
 from typing import Callable
 from urllib.parse import urlparse
@@ -65,9 +66,10 @@ DEFAULT_WEIGHTS = {
     "video_bonus": 0,  # for each media type (see media_type); below 0 is a penalty
     "image_bonus": 0,
     "article_bonus": 0,
+    "length_per_minute": 0,  # signed points per estimated minute of content
 }
 WEIGHTS = dict(DEFAULT_WEIGHTS)
-SIGNED = {"seen_bonus", "video_bonus", "image_bonus", "article_bonus"}  # may be negative
+SIGNED = {"seen_bonus", "video_bonus", "image_bonus", "article_bonus", "length_per_minute"}  # may be negative
 LIMIT = 10_000_000
 RED = 10_000_000  # red items sink below everything else
 
@@ -254,6 +256,10 @@ def score(item: dict, now: float, weights: dict) -> Reasons:
     kind = media_type(item)
     if w[f"{kind}_bonus"]:
         reasons.append((kind, w[f"{kind}_bonus"]))
+    minutes = item.get("estimated_minutes")
+    if (w["length_per_minute"] and isinstance(minutes, (int, float))
+            and not isinstance(minutes, bool) and math.isfinite(minutes) and minutes > 0):
+        reasons.append((f"estimated {points(minutes)} minutes", points(minutes * w["length_per_minute"])))
     if item["color"] == "green" and w["green_bonus_points"]:
         reasons.append(("green", w["green_bonus_points"]))
     elif item["color"] == "red":

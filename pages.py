@@ -25,6 +25,8 @@ from datetime import datetime, timezone
 from html.parser import HTMLParser
 from urllib.parse import urljoin, urlparse
 
+from content_length import page_minutes
+
 from feeds import MAX_FEED_BYTES, FeedError, MetaParser, html_to_text, local, open_url, parse_date
 
 MIN_POSTS = 2
@@ -238,6 +240,7 @@ def read_post(post: dict) -> dict:
             parser.feed(r.read(MAX_FEED_BYTES).decode(r.headers.get_content_charset() or "utf-8", errors="replace"))
     except (OSError, ValueError):  # keep what the list said
         return item
+    item["estimated_minutes"] = page_minutes(parser)
     m = parser.meta
     title = m.get("og:title") or m.get("twitter:title") or m.get("citation_title") or parser.title.strip()
     image = m.get("og:image") or m.get("og:image:url") or m.get("twitter:image")
