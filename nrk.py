@@ -17,6 +17,8 @@ import urllib.error
 from datetime import datetime
 from urllib.parse import quote, urlparse
 
+from content_length import duration_minutes
+
 from feeds import MAX_FEED_BYTES, FeedError, open_url
 
 API = "https://psapi.nrk.no"
@@ -77,6 +79,7 @@ def post(series: str, season: str, episode: dict, number: list[int] | None) -> d
         "description": (titles.get("subtitle") or "")[:500],
         "image": image(episode.get("image")),
         "youtube": None,
+        "estimated_minutes": duration_minutes(episode.get("duration")),
         "published": published.timestamp() if published else None,
     }
     if number:  # episodes follow each other in season and episode order

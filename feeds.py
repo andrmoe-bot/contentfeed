@@ -17,6 +17,8 @@ from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
 from urllib.parse import parse_qs, urljoin, urlparse
 
+from content_length import duration_minutes, reading_minutes
+
 USER_AGENT = "Mozilla/5.0 (compatible; ContentFeed/1.0)"
 FETCH_TIMEOUT = 10
 MAX_FEED_BYTES = 20_000_000  # some blogs put every whole post in their feed
@@ -343,6 +345,10 @@ def parse(body: bytes, base_url: str) -> dict:
             "description": description[:500],
             "image": urljoin(link, image) if image else None,
             "youtube": video or None,
+            "estimated_minutes": (duration_minutes(text_of(entry, "duration"))
+                                  or next((d for el in entry.iter()
+                                           if (d := duration_minutes(el.get("duration"))) is not None), None)
+                                  or (reading_minutes(description) if not video else None)),
             "published": parse_date(text_of(entry, "published", "pubDate", "date", "updated", "issued")),
         })
     items.sort(key=lambda it: it["published"] or 0, reverse=True)
@@ -402,7 +408,11 @@ def videos_on_page(data) -> tuple[list[dict], str | None]:
         meta = lockup.get("metadata", {})
         title = next(find_all(meta, "title"), {}).get("content", "")
         labels = [p.get("accessibilityLabel", "") for p in find_all(meta, "metadataParts") for p in p]
-        videos.append({"id": vid, "title": title, "ago": next((l for l in labels if l.endswith(" ago")), "")})
+        duration = next((d for text in find_all(lockup.get("contentImage", {}), "text")
+                         if isinstance(text, str) and ':' in text
+                         and (d := duration_minutes(text)) is not None), None)
+        videos.append({"id": vid, "title": title, "ago": next((l for l in labels if l.endswith(" ago")), ""),
+                       "estimated_minutes": duration})
     token = next((c["token"] for c in find_all(data, "continuationCommand") if isinstance(c, dict) and "token" in c), None)
     return videos, token
 
@@ -442,6 +452,7 @@ def older_videos(feed_url: str, limit: int = MAX_OLDER_VIDEOS) -> list[dict]:
             "description": "",
             "image": f"https://i.ytimg.com/vi/{v['id']}/hqdefault.jpg",
             "youtube": v["id"],
+            "estimated_minutes": v.get("estimated_minutes"),
             "published": date,
             "date_approx": True,
         })
