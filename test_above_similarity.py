@@ -4,6 +4,8 @@ import copy
 from fractions import Fraction
 import math
 import random
+import re
+import unicodedata
 import unittest
 from unittest.mock import patch
 
@@ -26,6 +28,15 @@ def reference_similarity(first, second, weights):
     if all(isinstance(n, (int, float)) and not isinstance(n, bool) and math.isfinite(n) and n > 0 for n in (a, b)):
         total += length * Fraction(str(min(a, b))) / Fraction(str(max(a, b)))
         normalizer += length
+    title_weight = Fraction(str(weights['similar_title_weight']))
+    def words(title):
+        if not isinstance(title, str):
+            return set()
+        return set(re.findall(r"[^\W_]+", unicodedata.normalize('NFKC', title).casefold())) - ranking.TITLE_STOP_WORDS
+    first_words, second_words = words(first.get('title')), words(second.get('title'))
+    if first_words and second_words:
+        total += title_weight * Fraction(2 * len(first_words & second_words), len(first_words) + len(second_words))
+        normalizer += title_weight
     return round(100 * total / normalizer) if normalizer else 0
 
 
@@ -35,7 +46,7 @@ def greedy_reference(items, weights):
     positions = {it['url']: i for i, it in enumerate(items)}
     remaining, out = copy.deepcopy(base), []
     amount = weights['above_similarity_penalty']
-    if not (weights['similar_publish_weight'] or weights['similar_length_weight']):
+    if not (weights['similar_publish_weight'] or weights['similar_length_weight'] or weights['similar_title_weight']):
         amount = 0
     while remaining:
         candidates = []

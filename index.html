@@ -438,7 +438,7 @@ const SETTINGS = [
   { key: "series_penalty", label: "Series", before: "−", after: "points",
     hint: "Taken off a later part of a series when you haven't opened anything before it. A post follows another from its subscription when their titles have the same numbers but one, 1 higher, such as “part 2” after “part 1”; Jellyfin and NRK TV episodes go in episode order. Not for subscriptions tagged “latest”." },
   { key: "above_similarity_penalty", label: "Similar posts above", before: "−", after: "points per 100% similarity",
-    hint: "Adds a penalty for similarity to each post already above it, using the publish-time and content-length similarity weights below. Two 50% matches add up to one full penalty. Different subscriptions do not match. No viewing-time fade." },
+    hint: "Adds a penalty for similarity to each post already above it, using the publish-time, content-length and title similarity weights below. Two 50% matches add up to one full penalty. Different subscriptions do not match. No viewing-time fade." },
   { key: "video_bonus", label: "Video", before: "", after: "points",
     hint: "For YouTube, Jellyfin and NRK TV videos. Below 0: a penalty." },
   { key: "image_bonus", label: "Image", before: "", after: "points",
@@ -454,9 +454,11 @@ const SETTINGS = [
   { key: "similar_days", term: "similarity", label: "Publish time window", before: "alike within", after: "days",
     hint: "Publish-time similarity is 100% for posts published together, falling evenly to 0% this many days apart. Only posts from the same subscription are compared." },
   { key: "similar_publish_weight", term: "similarity", label: "Publish time similarity", before: "", after: "weight",
-    hint: "How much publish time contributes compared with content length. Equal weights give each half the say; only their ratio matters. Both weights at 0 turn both similarity penalties off." },
+    hint: "How much publish time contributes compared with content length and titles. Equal weights give components equal influence; only their ratios matter. All three weights at 0 turn both similarity penalties off." },
+  { key: "similar_title_weight", term: "similarity", label: "Title similarity", before: "", after: "weight",
+    hint: "Twice the shared meaningful title words divided by the total words in both titles. Ignores case, punctuation and common English words; keeps numbers. Adds to publish-time and length similarity, normalized by the available weights. Empty titles are left out. Comparisons stay within the same subscription." },
   { key: "similar_length_weight", term: "similarity", label: "Content length similarity", before: "", after: "weight",
-    hint: "Length similarity is shorter minutes divided by longer minutes: equal lengths are 100%, 10 and 20 minutes are 50%. Its contribution adds to publish time and is normalized by the weights. Unknown lengths use publish time alone. Every item is 100% similar to itself." },
+    hint: "Length similarity is shorter minutes divided by longer minutes: equal lengths are 100%, 10 and 20 minutes are 50%. Its contribution adds to publish time and is normalized by the weights. Unknown lengths are left out of the weighted average. Every item is 100% similar to itself." },
 ];
 // Every setting, including the second box some have, such as Similar's hours
 const KEYS = SETTINGS.flatMap(({ key, extra }) => (extra ? [key, extra.key] : [key]));
@@ -574,7 +576,7 @@ function showFormula() {
   const terms = [
     ["new_sub_bonus", `${plus(w.new_sub_bonus)} if nothing opened from its subscription`],
     ["series_penalty", ` − ${fmt(w.series_penalty)} if nothing opened before it in its series`],
-    ["similar_penalty", ` − ${fmt(w.similar_penalty)} × similarity (publish time ${fmt(w.similar_publish_weight)} : length ${fmt(w.similar_length_weight)}) × time remaining (fades to zero over ${fmt(w.similar_hours)} hours; strongest match)`],
+    ["similar_penalty", ` − ${fmt(w.similar_penalty)} × similarity (publish time ${fmt(w.similar_publish_weight)} : length ${fmt(w.similar_length_weight)} : title ${fmt(w.similar_title_weight)}) × time remaining (fades to zero over ${fmt(w.similar_hours)} hours; strongest match)`],
     ["video_bonus", `${plus(w.video_bonus)} if video`],
     ["image_bonus", `${plus(w.image_bonus)} if image`],
     ["article_bonus", `${plus(w.article_bonus)} if article`],

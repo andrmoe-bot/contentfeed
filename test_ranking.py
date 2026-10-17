@@ -23,7 +23,7 @@ def brute_force(items, weights):
               and ranking.hours_since(NOW, it["last_viewed"]) < weights["similar_hours"]]
     for it in items:
         best = None
-        if weights["similar_penalty"] and (weights["similar_publish_weight"] or weights["similar_length_weight"]):
+        if weights["similar_penalty"] and (weights["similar_publish_weight"] or weights["similar_length_weight"] or weights["similar_title_weight"]):
             for other in recent:
                 percent, why = ranking.similarity(it, other, weights)
                 hours = ranking.hours_since(NOW, other["last_viewed"])

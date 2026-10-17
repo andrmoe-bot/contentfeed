@@ -45,6 +45,7 @@ import heapq
 import math
 import re
 import threading
+import unicodedata
 from typing import Callable, Iterator
 from urllib.parse import urlparse
 
@@ -62,6 +63,7 @@ DEFAULT_WEIGHTS = {
     "similar_penalty": 40,  # taken off at 100% like something you opened recently (see similarity):
     "similar_hours": 24,  # penalty fades linearly to zero this many hours after opening
     "similar_publish_weight": 1,  # relative weight of publication-time similarity
+    "similar_title_weight": 0,  # relative weight of meaningful title-word overlap
     "similar_length_weight": 0,  # relative weight of duration similarity; 0 keeps the old behavior
     "similar_days": 30,  # posts from the same subscription are alike if published within this many days
     "series_penalty": 30,  # taken off a later part of a series when you haven't opened anything before it
@@ -107,7 +109,8 @@ def hours_label(hours: int) -> str:
     return " ".join(parts) or "0 hours"
 
 
-def short(title: str) -> str:
+def short(title: str | None) -> str:
+    title = title if isinstance(title, str) and title else "Untitled"
     return title if len(title) <= 60 else title[:59] + "…"
 
 
@@ -125,15 +128,40 @@ def valid_minutes(value) -> bool:
             and math.isfinite(value) and value > 0)
 
 
+TITLE_STOP_WORDS = frozenset("a an the and or but of for to in on at by with from is are be as it its this that these those how what why when where who".split())
+
+
+@functools.lru_cache(maxsize=50_000)
+def title_tokens(title: str | None) -> frozenset[str]:
+    """Unique Unicode words; keep numbers, omit common English function words."""
+    if not isinstance(title, str):
+        return frozenset()
+    normalized = unicodedata.normalize("NFKC", title).casefold()
+    return frozenset(re.findall(r"[^\W_]+", normalized)) - TITLE_STOP_WORDS
+
+
+def title_fraction(first: frozenset[str], second: frozenset[str]) -> float:
+    """Sørensen–Dice overlap; empty titles are missing data, not a match."""
+    return 2 * len(first & second) / (len(first) + len(second)) if first and second else 0
+
+
 class SimilarityMetric:
     """Numeric similarity shared by recent views and feed spreading."""
-    def __init__(self, days: float, publish_weight: float, length_weight: float):
+    def __init__(self, days: float, publish_weight: float, length_weight: float, title_weight: float = 0):
         self.days = days
         self.date_scale = 100 / (days * 86400) if days else 0
         self.publish_weight = publish_weight
         self.length_weight = length_weight
+        self.title_weight = title_weight
         total = publish_weight + length_weight
-        self.enabled = bool(total)
+        self.enabled = bool(total + title_weight)
+        full = total + title_weight
+        self.full_publish_share = publish_weight / full if full else 0
+        self.full_length_share = length_weight / full if full else 0
+        self.full_title_share = title_weight / full if full else 0
+        no_length = publish_weight + title_weight
+        self.title_publish_share = publish_weight / no_length if no_length else 0
+        self.title_share = title_weight / no_length if no_length else 0
         self.publish_share = publish_weight / total if total else 0
         self.length_share = length_weight / total if total else 0
 
@@ -141,10 +169,20 @@ class SimilarityMetric:
         return max(0.0, 1 - abs(first_date - second_date) / 3600 / 24 / self.days) if self.days else 0.0
 
     def percent(self, first_date: float, first_minutes: float | None,
-                second_date: float, second_minutes: float | None) -> int:
-        """Lengths must already be sanitized with valid_minutes()."""
+                second_date: float, second_minutes: float | None,
+                first_title: frozenset[str] | None = None, second_title: frozenset[str] | None = None) -> int:
+        """Lengths are sanitized; titles are pre-tokenized once per item."""
         published = max(0.0, 100 - abs(first_date - second_date) * self.date_scale) if self.publish_weight and self.days else 0
-        if self.length_weight and first_minutes is not None and second_minutes is not None:
+        has_length = self.length_weight and first_minutes is not None and second_minutes is not None
+        if self.title_weight and first_title and second_title:
+            title = title_fraction(first_title, second_title)
+            if has_length:
+                length = min(first_minutes, second_minutes) / max(first_minutes, second_minutes)
+                percent = (self.full_publish_share * published + self.full_length_share * 100 * length
+                           + self.full_title_share * 100 * title)
+            else:
+                percent = self.title_publish_share * published + self.title_share * 100 * title
+        elif has_length:
             length = min(first_minutes, second_minutes) / max(first_minutes, second_minutes)
             percent = self.publish_share * published + self.length_share * 100 * length
         else:
@@ -157,12 +195,12 @@ class SimilarityMetric:
 
 
 @functools.lru_cache(maxsize=128)
-def similarity_metric(days: float, publish_weight: float, length_weight: float) -> SimilarityMetric:
-    return SimilarityMetric(days, publish_weight, length_weight)
+def similarity_metric(days: float, publish_weight: float, length_weight: float, title_weight: float = 0) -> SimilarityMetric:
+    return SimilarityMetric(days, publish_weight, length_weight, title_weight)
 
 
 # Only posts from the same subscription match; an item always matches itself.
-# Missing/invalid lengths are omitted from the normalized weighted average.
+# Missing lengths and empty titles are omitted from the normalized weighted average.
 def similarity(item: dict, other: dict, weights: dict) -> tuple[int, str]:
     """Whole-percent similarity, plus the components that explain it."""
     if item["url"] == other["url"]:
@@ -171,11 +209,12 @@ def similarity(item: dict, other: dict, weights: dict) -> tuple[int, str]:
         return 0, "different subscriptions"
 
     metric = similarity_metric(weights["similar_days"], weights["similar_publish_weight"],
-                               weights["similar_length_weight"])
+                               weights["similar_length_weight"], weights["similar_title_weight"])
     first, second = item.get("estimated_minutes"), other.get("estimated_minutes")
     first = first if valid_minutes(first) else None
     second = second if valid_minutes(second) else None
-    percent = metric.percent(item["date"], first, other["date"], second)
+    titles = (title_tokens(item.get("title")), title_tokens(other.get("title"))) if metric.title_weight else (None, None)
+    percent = metric.percent(item["date"], first, other["date"], second, *titles)
     return percent, similarity_reason(item, other, metric, first, second)
 
 
@@ -190,13 +229,22 @@ def similarity_reason(item: dict, other: dict, metric: SimilarityMetric, first, 
             length = min(first, second) / max(first, second)
             details.append(f"publish time {points(100 * published)}% × {points(metric.publish_weight)}, "
                            f"length {points(100 * length)}% × {points(metric.length_weight)} "
-                           f"({points(first)} and {points(second)} minutes), normalized")
+                           f"({points(first)} and {points(second)} minutes)" + (", normalized" if not metric.title_weight else ""))
         else:
-            details.append("length unknown; using publish time only")
+            details.append("length unknown; using other enabled components" if metric.title_weight else "length unknown; using publish time only")
+    if metric.title_weight:
+        if metric.publish_weight and not (metric.length_weight and first is not None and second is not None):
+            details.append(f"publish time {points(100 * metric.published(item['date'], other['date']))}% × {points(metric.publish_weight)}")
+        first_title, second_title = title_tokens(item.get("title")), title_tokens(other.get("title"))
+        if first_title and second_title:
+            details.append(f"title {points(100 * title_fraction(first_title, second_title))}% × {points(metric.title_weight)}")
+        else:
+            details.append("title unknown; using other enabled components")
+        details.append("normalized")
     return ", ".join(details)
 
 
-def similar_to_recent(items: list[dict], now: float, weights: dict):
+def similar_to_recent(items: list[dict], now: float, weights: dict, title_words: dict | None = None):
     """Set each item's "similar" to the strongest match after linear recency decay, as
     {title, hours (since opened), percent, strength, why}, or None if all strengths are zero.
     Strength is similarity percent times the fraction of similar_hours remaining."""
@@ -204,13 +252,15 @@ def similar_to_recent(items: list[dict], now: float, weights: dict):
         it["similar"] = None
     window = weights["similar_hours"]
     if (not weights["similar_penalty"] or not window
-            or not (weights["similar_publish_weight"] or weights["similar_length_weight"])):
+            or not (weights["similar_publish_weight"] or weights["similar_length_weight"] or weights["similar_title_weight"])):
         return
     metric = similarity_metric(weights["similar_days"], weights["similar_publish_weight"],
-                               weights["similar_length_weight"])
+                               weights["similar_length_weight"], weights["similar_title_weight"])
     # Only posts from the same subscription can match. Links can only match themselves.
     # Compute recency once per viewed item, rather than once per comparison.
-    recent_by_sub: dict[str, list[tuple[dict, int, float, float | None]]] = {}
+    title_words = title_words if title_words is not None else (
+        {it["url"]: title_tokens(it.get("title")) for it in items} if metric.title_weight else {})
+    recent_by_sub: dict[str, list[tuple]] = {}
     recent_by_url = {}
     for other in items:
         if other["last_viewed"] is None:
@@ -219,7 +269,7 @@ def similar_to_recent(items: list[dict], now: float, weights: dict):
         if hours >= window:
             continue
         minutes = other.get("estimated_minutes")
-        entry = (other, hours, 1 - hours / window, minutes if valid_minutes(minutes) else None)
+        entry = (other, hours, 1 - hours / window, minutes if valid_minutes(minutes) else None, title_words.get(other["url"]))
         recent_by_url[other["url"]] = entry
         if other.get("sub"):
             recent_by_sub.setdefault(other["sub"], []).append(entry)
@@ -231,9 +281,10 @@ def similar_to_recent(items: list[dict], now: float, weights: dict):
         own = recent_by_url.get(it["url"])
         if not it.get("sub"):
             candidates = [own] if own else []
-        for other, hours, remaining, second in candidates:
+        first_title = title_words.get(it["url"])
+        for other, hours, remaining, second, second_title in candidates:
             itself = it["url"] == other["url"]
-            percent = 100 if itself else metric.percent(it["date"], first, other["date"], second)
+            percent = 100 if itself else metric.percent(it["date"], first, other["date"], second, first_title, second_title)
             strength = percent * remaining
             if strength and (not best or strength > best["strength"] or (strength == best["strength"] and itself)):
                 # Delay explanation strings until the strongest match is known.
@@ -389,7 +440,8 @@ def rank(name: str, items: list[dict], now: float, weights: dict | None = None,
     fn = RANKERS[name]
     weights = weights or WEIGHTS
     items = [dict(it) for it in items]
-    similar_to_recent(items, now, weights)
+    title_words = {it["url"]: title_tokens(it.get("title")) for it in items} if weights["similar_title_weight"] else {}
+    similar_to_recent(items, now, weights, title_words)
     scored = []
     for item in items:
         reasons = [{"label": label, "points": points} for label, points in fn(item, now, weights)]
@@ -398,13 +450,13 @@ def rank(name: str, items: list[dict], now: float, weights: dict | None = None,
     order = lambda it: (it["score"], it["last_viewed"] is None, it["date"], it["position"])
     penalty = weights.get("above_similarity_penalty", 0) if fn.spread else 0
     metric = similarity_metric(weights["similar_days"], weights["similar_publish_weight"],
-                               weights["similar_length_weight"])
+                               weights["similar_length_weight"], weights["similar_title_weight"])
     iterator = (iter(sorted(scored, key=order, reverse=True)) if not penalty or not metric.enabled
-                else spread_by_similarity(scored, penalty, metric))
+                else spread_by_similarity(scored, penalty, metric, title_words))
     return RankedItems(scored, iterator) if lazy else list(iterator)
 
 
-def spread_by_similarity(scored: list[dict], penalty: float, metric: SimilarityMetric) -> Iterator[dict]:
+def spread_by_similarity(scored: list[dict], penalty: float, metric: SimilarityMetric, title_words: dict | None = None) -> Iterator[dict]:
     """Exact greedy ordering with subscription-local heap updates.
 
     Other subscriptions cannot affect a group's scores. Keep only each group's current best
@@ -415,6 +467,8 @@ def spread_by_similarity(scored: list[dict], penalty: float, metric: SimilarityM
     dates = [it["date"] for it in scored]
     minutes = [it.get("estimated_minutes") for it in scored]
     minutes = [value if valid_minutes(value) else None for value in minutes]
+    title_words = title_words or {}
+    titles = [title_words.get(it["url"]) for it in scored]
     base_cents = [round(it["score"] * 100) for it in scored]
     totals = [0] * len(scored)  # sums of whole percentages, avoiding accumulated rounding
     matches = [0] * len(scored)
@@ -431,7 +485,7 @@ def spread_by_similarity(scored: list[dict], penalty: float, metric: SimilarityM
     heap = [(*queue[0], group) for group, queue in enumerate(queues)]
     heapq.heapify(heap)
     window = metric.days * 86400
-    for_date_only = not metric.length_weight
+    for_date_only = not (metric.length_weight or metric.title_weight)
     percent_for = metric.percent
     while heap:
         *_, i, group = heapq.heappop(heap)
@@ -453,7 +507,7 @@ def spread_by_similarity(scored: list[dict], penalty: float, metric: SimilarityM
             j = previous[-1]
             if for_date_only and abs(first_date - dates[j]) > window:
                 continue
-            percent = percent_for(first_date, first_minutes, dates[j], minutes[j])
+            percent = percent_for(first_date, first_minutes, dates[j], minutes[j], titles[i], titles[j])
             if percent:
                 totals[j] += percent
                 matches[j] += 1
