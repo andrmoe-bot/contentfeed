@@ -120,3 +120,47 @@ class FeedCacheTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LengthEnrichmentTests(FeedCacheTests):
+    def test_missing_subscription_length_is_scheduled_and_used(self):
+        ranking.WEIGHTS["length_per_minute"] = -2
+        result = server.feed("score")
+        server.schedule.assert_called_with(self.post["url"], force=True)
+        self.assertEqual(result["items"][0]["score"], 0)
+        server.cache[self.post["url"]] = {"estimated_minutes": 12, "length_version": 1}
+        server.state_version += 1
+        server.schedule.reset_mock()
+        result = server.feed("score")
+        self.assertEqual(result["items"][0]["score"], -24)
+        server.schedule.assert_not_called()
+
+    def test_missing_length_is_not_fetched_with_zero_weight(self):
+        server.feed("score")
+        server.schedule.assert_not_called()
+
+    def test_feed_refresh_preserves_known_runtime(self):
+        old = dict(self.post, estimated_minutes=20)
+        merged = server.merge_posts([old], [dict(self.post, estimated_minutes=None)], 2000000)
+        self.assertEqual(merged[0]["estimated_minutes"], 20)
+
+    def test_playlist_enriches_existing_video_without_replacing_date(self):
+        self.post["youtube"] = "abc"
+        with patch.object(server.feeds, "older_videos", return_value=[
+                dict(self.post, published=1, date_approx=True, estimated_minutes=15)]):
+            server.load_older(self.url)
+        post = server.subscriptions[self.url]["items"][0]
+        self.assertEqual(post["estimated_minutes"], 15)
+        self.assertEqual(post["published"], self.post["published"])
+
+    def test_metadata_fetch_reads_youtube_player_runtime(self):
+        import io
+        from email.message import Message
+        response = io.BytesIO(b'<html><script>{"lengthSeconds":"720"}</script></html>')
+        response.headers = Message()
+        response.headers['Content-Type'] = 'text/html; charset=utf-8'
+        response.geturl = lambda: 'https://www.youtube.com/watch?v=abcdefghijk'
+        with patch.object(server.feeds, "open_url", return_value=response):
+            result = server.fetch_metadata(response.geturl())
+        self.assertEqual(result['estimated_minutes'], 12)
+        self.assertEqual(result['length_version'], 1)

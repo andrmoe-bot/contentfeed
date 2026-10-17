@@ -238,7 +238,7 @@ The default, `score`, adds up these points. With the default settings:
 - −40 × similarity × the fraction of the 24-hour window remaining since opening, using the strongest remaining penalty (see below)
 - 0 for its media type: video (YouTube, Jellyfin, NRK TV, pages with a video file), image (a link straight to a picture) or
   article (anything else). Each has its own setting, which may be negative, to favor or hold back that type.
-- 0 per **estimated minute of content** by default. Set Content length to positive points per minute to favor longer content, or negative to favor shorter content. Runtime metadata is used where available; text is estimated at 200 words per minute (at least one minute). Feed text may be only an excerpt, and page estimates can include surrounding text. Unknown lengths have no adjustment. Existing cached items gain estimates when fetched again (use Refresh all for links).
+- 0 per **estimated minute of content** by default. Set Content length to positive points per minute to favor longer content, or negative to favor shorter content. Runtime metadata is used where available; text is estimated at 200 words per minute (at least one minute). Feed text may be only an excerpt, and page estimates can include surrounding text. Unknown lengths have no adjustment. When Content length is enabled, missing estimates are fetched in the background for existing links and subscription posts, including YouTube watch pages. Requests are limited to eight pending fetches at a time; unavailable runtimes remain unknown.
 - 0 if green; red items go to the bottom
 - −15 for each post from its subscription higher up in the feed
 

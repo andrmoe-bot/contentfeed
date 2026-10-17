@@ -30,7 +30,7 @@ import feeds
 import jellyfin
 import nrk
 import pages
-from content_length import page_minutes
+from content_length import page_minutes, youtube_minutes
 
 import ranking
 
@@ -122,7 +122,7 @@ def read_links() -> list[str]:
 
 
 def fetch_metadata(url: str) -> dict:
-    item = {"url": url, "domain": urlparse(url).netloc.removeprefix("www."), "fetched": time.time()}
+    item = {"url": url, "domain": urlparse(url).netloc.removeprefix("www."), "fetched": time.time(), "length_version": 1}
     yt = feeds.youtube_id(url)
     if yt:
         item["youtube"] = yt
@@ -136,8 +136,10 @@ def fetch_metadata(url: str) -> dict:
             elif "html" in ctype:
                 charset = resp.headers.get_content_charset() or "utf-8"
                 parser = feeds.MetaParser()
-                parser.feed(resp.read(MAX_BYTES).decode(charset, errors="replace"))
-                item["estimated_minutes"] = page_minutes(parser, video=bool(yt))
+                html = resp.read(feeds.MAX_WATCH_PAGE_BYTES if yt else MAX_BYTES).decode(charset, errors="replace")
+                parser.feed(html)
+                item["estimated_minutes"] = (youtube_minutes(html) if yt else None) or page_minutes(
+                    parser, video=bool(yt) or item["domain"] == "tv.nrk.no")
                 m = parser.meta
                 item["title"] = m.get("og:title") or m.get("twitter:title") or parser.title.strip()
                 item["description"] = (
@@ -209,6 +211,8 @@ def merge_posts(old: list[dict], new: list[dict], now: float) -> list[dict]:
     first_seen = {post_key(p): p.get("first_seen", now) for p in old}
     merged = {post_key(p): p for p in old}
     for p in new:
+        if not p.get("estimated_minutes") and merged.get(post_key(p), {}).get("estimated_minutes"):
+            p = {**p, "estimated_minutes": merged[post_key(p)]["estimated_minutes"]}
         merged[post_key(p)] = {**p, "first_seen": first_seen.get(post_key(p), now)}
     posts = sorted(merged.values(), key=post_date, reverse=True)
     return posts[:MAX_POSTS_KEPT]
@@ -291,7 +295,11 @@ def load_older(url: str):
             if s is None or s.get("feed_url") != feed_url:  # unsubscribed meanwhile
                 return
             known = {post_key(p) for p in s.get("items", [])}
-            # Posts already known came from the feed, with exact dates, so they win over these.
+            # Keep exact feed dates while filling runtime from playlist metadata.
+            durations = {post_key(p): p.get("estimated_minutes") for p in older}
+            for post in s.get("items", []):
+                if not post.get("estimated_minutes") and durations.get(post_key(post)):
+                    post["estimated_minutes"] = durations[post_key(post)]
             s["items"] = merge_posts(s.get("items", []), [p for p in older if post_key(p) not in known], now)
             s["older_loaded"] = now
             s.pop("older_error", None)
@@ -629,6 +637,23 @@ def feed(ranker: str, limit: int = MAX_ITEMS_SHOWN, weights: dict | None = None)
         schedule(url)
     for url in subs:
         schedule_subscription(url)
+    # Fill missing runtimes for existing posts too: most RSS feeds (including
+    # YouTube) omit duration, and old caches predate length estimates. Bound the
+    # work across polls so a large subscription doesn't flood the executor.
+    if (weights or ranking.WEIGHTS).get("length_per_minute"):
+        with lock:
+            candidates = list(entries)
+            candidates.extend(p["url"] for sub in subs
+                              for p in subscriptions.get(sub, {}).get("items", [])
+                              if not p.get("estimated_minutes") and not p.get("jellyfin"))
+            missing = [url for url in dict.fromkeys(candidates)
+                       if (cache.get(url, {}).get("length_version") != 1
+                           or (cache.get(url, {}).get("error")
+                               and time.time() - cache[url].get("fetched", 0) >= 6 * 3600))
+                       and url not in pending]
+            capacity = max(0, 8 - len(pending))
+        for url in missing[:capacity]:
+            schedule(url, force=True)
     now = time.time()
     with lock:
         key = (ranker, json.dumps(weights or ranking.WEIGHTS, sort_keys=True), json.dumps([entries, subs]),
@@ -653,7 +678,8 @@ def feed(ranker: str, limit: int = MAX_ITEMS_SHOWN, weights: dict | None = None)
                     continue
                 seen.add(post["url"])
                 items.append({
-                    **post, "kind": "subscription", "tags": tags, "feed": s["title"], "icon": s.get("icon"),
+                    **post, "estimated_minutes": post.get("estimated_minutes") or cache.get(post["url"], {}).get("estimated_minutes"),
+                    "kind": "subscription", "tags": tags, "feed": s["title"], "icon": s.get("icon"),
                     "domain": domain(post["url"]),
                     "added": post["first_seen"], "date": post["published"] or post["first_seen"], "position": -1,
                     "sub_last_viewed": sub_opened.get(sub_url), "sub": sub_url,

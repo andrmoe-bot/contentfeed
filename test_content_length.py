@@ -1,12 +1,17 @@
 import unittest
 
-from content_length import duration_minutes, page_minutes
+from content_length import duration_minutes, page_minutes, youtube_minutes
 from feeds import MetaParser, parse
 import ranking
 from test_ranking import item, NOW
 
 
 class ContentLengthTests(unittest.TestCase):
+    def test_youtube_player_runtime(self):
+        self.assertEqual(youtube_minutes('<script>{"videoDetails":{"lengthSeconds":"750"}}</script>'), 12.5)
+        self.assertEqual(youtube_minutes('{"approxDurationMs":"90000"}'), 1.5)
+        self.assertIsNone(youtube_minutes('{"isLive":true}'))
+
     def test_duration_units(self):
         for value, minutes in [('PT1H30M', 90), ('P1DT30M', 1470), ('1:30', 1.5), (120, 2)]:
             self.assertEqual(duration_minutes(value), minutes)
