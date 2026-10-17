@@ -257,14 +257,26 @@ thinks starts the series.
 
 How alike two items are, from 0 to 100%:
 
-- Two posts from the same subscription are 100% alike if published at the same time, falling evenly
-  to 0% when published 30 days or more apart: a week apart is 77%, two weeks 53%.
-- Items from different subscriptions aren't alike. Tags don't affect similarity.
-- An item is 100% like itself.
+- **Publish time:** 100% for posts published together, falling evenly to 0% at the configured
+  window (30 days by default). A week apart is 77%, two weeks 53%.
+- **Content length:** shorter minutes divided by longer minutes. Equal lengths are 100%;
+  10 and 20 minutes are 50%.
+- The two similarities add according to their relative weights, then divide by the sum of
+  those weights. With equal weights, a 50% publish-time match and a 25% length match give 38%
+  similarity (rounded to whole percent). Doubling both weights leaves similarity unchanged.
+- Settings under Similar control the two weights and the publish-time window. Publish time
+  defaults to weight 1 and content length to weight 0, preserving existing rankings. Set both
+  to 1 for an equal mix. The separate Content length points-per-minute score is unchanged.
+- If either length is unknown or invalid, omit the length component and its weight; use publish
+  time alone. With only length enabled and unknown lengths, distinct posts have no similarity.
+- Only posts from the same subscription match. Tags don't affect similarity. When length is
+  enabled, posts can still match on length beyond the publish-time window.
+- Every item is 100% like itself, even without a known length. Both weights at 0 disable the
+  similarity penalty entirely, including for opened items.
 
 The similarity penalty fades linearly to zero over 24 hours, updated in whole hours. After you
 watch a video, its channel's next one (published a week later) starts at next up 30 − 30.8;
-after 12 hours, that penalty is only 15.4. The channel's old videos aren't affected.
+after 12 hours, that penalty is only 15.4. These examples use the default publish-time-only similarity.
 Something you've opened starts at −70 (−30 for opened and −40 for being like itself),
 reaches −50 after 12 hours, and −30 after 24 hours. The feed is built from the top down, taking the repeat penalty into account as it goes,
 so the second post from a subscription loses 15, the third 30, and two in a row are rare.
@@ -278,13 +290,14 @@ beside the feed on a wide screen, or along the bottom on a narrow one, and stays
 until you close it. Each setting comes with a slider and a box for an exact number:
 Next up, Seen, New subscription, Series, Repeat penalty, Video, Image, Article, Content length (Seen, Video, Image, Article and Content length may be
 negative), Green, Similar
-(which also has its number of hours) and Same subscription (days). The
+(which also has its number of hours), Publish time window (days), Publish time similarity and
+Content length similarity (relative weights), and Update incomplete posts (count). The
 sliders go in steps of 1, 1.5, 2, 3, 5 and 7 times a power of ten, so they cover both small and large
 numbers. The feed reorders as
 you move a slider, and the setting is saved when you let go (or when you press Enter in the box).
 Settings that are 0 when the page loads are hidden, along with their part of the formula, to keep the
-panel short; add one back with "Add a term" below the others. Similar's hours and Same subscription
-come and go with Similar. The defaults are at the top of `ranking.py`. The other ranker,
+panel short; add one back with "Add a term" below the others. Similar's hours, window and component weights
+come and go with Similar. Update incomplete posts always stays visible. The defaults are at the top of `ranking.py`. The other ranker,
 `chronological`, has no rules: everything scores 0 and the newest item is first. To add another ranker, register a
 function with `@ranker("name")`, then select it with `python3 server.py --ranker name`, or try
 it without a restart at `/api/feed?ranker=name`.
