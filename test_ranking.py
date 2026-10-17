@@ -89,9 +89,15 @@ class SimilarityTests(unittest.TestCase):
         items = [item(str(i), str(i // 200)) for i in range(12000)]
         for i in range(100):
             items[i * 113]["last_viewed"] = NOW
-        with patch.object(ranking, "similarity", wraps=ranking.similarity) as compare:
+        original = ranking.SimilarityMetric.percent
+        calls = 0
+        def counted(metric, *args):
+            nonlocal calls
+            calls += 1
+            return original(metric, *args)
+        with patch.object(ranking.SimilarityMetric, "percent", counted):
             ranking.similar_to_recent(items, NOW, ranking.DEFAULT_WEIGHTS)
-        self.assertEqual(compare.call_count, 20_000)  # formerly 1,200,000 comparisons
+        self.assertEqual(calls, 19_900)  # 20,000 same-sub candidates, including 100 self matches
 
 
 class NormalizedSimilarityTests(unittest.TestCase):
@@ -197,7 +203,7 @@ class NormalizedSimilarityTests(unittest.TestCase):
     def test_recency_decay_is_applied_after_combining_components(self):
         first, second = self.pair(days=15)
         second['last_viewed'] = NOW - 12 * 3600
-        weights = self.weights(seen_bonus=0, repeat_per_post=0)
+        weights = self.weights(seen_bonus=0, above_similarity_penalty=0)
         ranked = ranking.rank('score', [first, second], NOW, weights)
         candidate = next(it for it in ranked if it['url'] == first['url'])
         self.assertEqual(candidate['similar']['percent'], 50)
@@ -223,7 +229,7 @@ class NormalizedSimilarityTests(unittest.TestCase):
         same = dict(item('same', 'feed', date=NOW - 30 * 86400), estimated_minutes=10)
         different = dict(item('different', 'feed', date=NOW - 30 * 86400), estimated_minutes=100)
         ranked = ranking.rank('score', [anchor, same, different], NOW,
-                              self.weights(seen_bonus=0, repeat_per_post=0))
+                              self.weights(seen_bonus=0, above_similarity_penalty=0))
         self.assertEqual([(it['url'], it['score']) for it in ranked],
                          [('different', -2), ('same', -20), ('anchor', -40)])
 
