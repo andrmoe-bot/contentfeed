@@ -20,6 +20,9 @@ Run the standard-library regression tests and Python syntax checks:
     python3 -m unittest -v
     python3 -m py_compile *.py
 
+For the 50-subscription, 10,000-item ranking benchmark and measured tradeoffs, see
+[PERFORMANCE.md](PERFORMANCE.md).
+
 ## Your data
 
 Everything personal is kept in the data directory, never in the code. Where that is depends on
@@ -240,7 +243,11 @@ The default, `score`, adds up these points. With the default settings:
   article (anything else). Each has its own setting, which may be negative, to favor or hold back that type.
 - 0 per **estimated minute of content** by default. Set Content length to positive points per minute to favor longer content, or negative to favor shorter content. Runtime metadata is used where available; text is estimated at 200 words per minute (at least one minute). Feed text may be only an excerpt, and page estimates can include surrounding text. Unknown lengths have no adjustment. When the site loads, the five highest-ranked posts with incomplete data are updated in the background, regardless of score weights. YouTube updates fetch runtime and exact publication time together. Change this count with “Update incomplete posts” in Settings (0–100; 0 disables it). Routine polling does not start additional batches; unavailable data stays unknown and recent attempts are skipped for six hours.
 - 0 if green; red items go to the bottom
-- −15 for each post from its subscription higher up in the feed
+- −15 × the **sum of similarities to posts above it**. A 100% match contributes −15,
+  a 50% match contributes −7.5; two 50% matches contribute −15 together. It uses the same
+  publish-time and content-length weights as recent-view similarity, without a viewing-time fade.
+  Different subscriptions do not match. “Similar posts above” replaces the fixed repeat penalty;
+  existing saved repeat amounts are carried over to the new setting.
 
 Equal scores are ordered unopened first, then newest first, so with nothing else going on the
 feed is newest first.
@@ -272,14 +279,24 @@ How alike two items are, from 0 to 100%:
 - Only posts from the same subscription match. Tags don't affect similarity. When length is
   enabled, posts can still match on length beyond the publish-time window.
 - Every item is 100% like itself, even without a known length. Both weights at 0 disable the
-  similarity penalty entirely, including for opened items.
+  similarity penalties entirely, including for opened items.
 
 The similarity penalty fades linearly to zero over 24 hours, updated in whole hours. After you
 watch a video, its channel's next one (published a week later) starts at next up 30 − 30.8;
 after 12 hours, that penalty is only 15.4. These examples use the default publish-time-only similarity.
 Something you've opened starts at −70 (−30 for opened and −40 for being like itself),
-reaches −50 after 12 hours, and −30 after 24 hours. The feed is built from the top down, taking the repeat penalty into account as it goes,
-so the second post from a subscription loses 15, the third 30, and two in a row are rare.
+reaches −50 after 12 hours, and −30 after 24 hours.
+
+The feed is built from the top down, choosing the highest current score after accounting for
+similarity to all posts already placed. Less-similar posts can overtake closer matches from the
+same subscription. All preceding matches add together; this penalty does not depend on whether
+you opened those posts. The cumulative adjustment is rounded to cents, not each match separately.
+Cards show the number of matches and the total similarity, such as “similarity to 2 posts above,
+100% total −15”.
+
+Ranking is computed only as far as the requested page needs, then resumed from cached state for
+“Show more”. Page-load enrichment can extend that prefix to find the configured number of
+incomplete posts; if none are eligible, it does not rank the tail looking for them.
 
 Each card's "Score" shows its points, such as
 `77% like “Egyptian Fractions”, opened 2 hours ago (same subscription, published 7 days apart), 91.67% penalty remaining −28.23`
@@ -288,7 +305,7 @@ or `in a series starting “Making a CPU, part 1”, nothing before it opened �
 Change the numbers in the score panel: click "Settings" at the top of the feed. It opens
 beside the feed on a wide screen, or along the bottom on a narrow one, and stays open across reloads
 until you close it. Each setting comes with a slider and a box for an exact number:
-Next up, Seen, New subscription, Series, Repeat penalty, Video, Image, Article, Content length (Seen, Video, Image, Article and Content length may be
+Next up, Seen, New subscription, Series, Similar posts above, Video, Image, Article, Content length (Seen, Video, Image, Article and Content length may be
 negative), Green, Similar
 (which also has its number of hours), Publish time window (days), Publish time similarity and
 Content length similarity (relative weights), and Update incomplete posts (count). The
@@ -296,8 +313,8 @@ sliders go in steps of 1, 1.5, 2, 3, 5 and 7 times a power of ten, so they cover
 numbers. The feed reorders as
 you move a slider, and the setting is saved when you let go (or when you press Enter in the box).
 Settings that are 0 when the page loads are hidden, along with their part of the formula, to keep the
-panel short; add one back with "Add a term" below the others. Similar's hours, window and component weights
-come and go with Similar. Update incomplete posts always stays visible. The defaults are at the top of `ranking.py`. The other ranker,
+panel short; add one back with "Add a term" below the others. Similar's hours come and go with Similar. The publish window and component weights stay visible
+whenever either similarity penalty is shown. Update incomplete posts always stays visible. The defaults are at the top of `ranking.py`. The other ranker,
 `chronological`, has no rules: everything scores 0 and the newest item is first. To add another ranker, register a
 function with `@ranker("name")`, then select it with `python3 server.py --ranker name`, or try
 it without a restart at `/api/feed?ranker=name`.

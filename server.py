@@ -568,6 +568,9 @@ def load_settings():
         return
     # Settings saved by another version may lack newer weights, which keep their defaults, or have
     # ones that no longer exist, which are dropped.
+    # Preserve the old repeat setting as the new per-100%-similarity amount.
+    if "above_similarity_penalty" not in weights and "repeat_per_post" in weights:
+        weights["above_similarity_penalty"] = weights["repeat_per_post"]
     weights = {k: v for k, v in weights.items() if k in ranking.DEFAULT_WEIGHTS}
     try:
         ranking.WEIGHTS.update(ranking.check_weights({**ranking.DEFAULT_WEIGHTS, **weights}))
@@ -636,48 +639,47 @@ def domain(url: str) -> str:
 # Recently ranked feeds, so checking for changes or moving a slider back doesn't rank everything again.
 # Each is kept for a minute at most, as points change with the time since things were published or opened.
 RANKED_TTL = 60
-ranked_cache: dict[tuple, tuple[float, list[dict]]] = {}
+ranked_cache: dict[tuple, tuple[float, ranking.RankedItems]] = {}
+
+
+def enrichment_key(post: dict, cached: dict, pending_keys: set, now: float) -> str | None:
+    """Identify incomplete posts eligible for enrichment, using one state snapshot."""
+    if post.get("jellyfin") or (post.get("estimated_minutes") and not post.get("date_approx")):
+        return None
+    video = post.get("youtube") if post.get("kind") == "subscription" else None
+    key = "video:" + video if video else post["url"]
+    metadata = cached.get(post["url"], {})
+    checked = post.get("video_metadata_checked", 0) if video else (
+        metadata.get("fetched", 0) if metadata.get("length_version") == 1 else 0)
+    if key in pending_keys or (checked and now - checked < 6 * 3600):
+        return None
+    return key
 
 
 def enrich_posts(ranked: list[dict], count: int):
     """Schedule the highest-ranked incomplete posts once for this page load."""
-    selected = 0
+    with lock:
+        cached, pending_keys = dict(cache), set(pending)
     seen = set()
     now = time.time()
     for post in ranked:
-        if selected >= count:
+        if len(seen) >= count:
             break
-        if post.get("jellyfin") or (post.get("estimated_minutes") and not post.get("date_approx")):
-            continue
-        video = post.get("youtube") if post.get("kind") == "subscription" else None
-        key = "video:" + video if video else post["url"]
-        if key in seen:
+        key = enrichment_key(post, cached, pending_keys, now)
+        if key is None or key in seen:
             continue
         seen.add(key)
-        with lock:
-            cached = cache.get(post["url"], {})
-            checked = post.get("video_metadata_checked", 0) if video else (
-                cached.get("fetched", 0) if cached.get("length_version") == 1 else 0)
-            if key in pending or (checked and now - checked < 6 * 3600):
-                continue
-        if video:
-            schedule_video_metadata(video)
+        if key.startswith("video:"):
+            schedule_video_metadata(key.removeprefix("video:"))
         else:
             schedule(post["url"], force=True)
-        selected += 1
 
 
 def feed(ranker: str, limit: int = MAX_ITEMS_SHOWN, weights: dict | None = None, enrich: bool = False) -> dict:
-    result = ranked_feed(ranker, ranking.LIMIT if enrich else limit, weights)
-    if enrich:
-        enrich_posts(result["items"], (weights or ranking.WEIGHTS)["enrich_count"])
-        with lock:
-            result["pending"] = len(pending)
-        result["items"] = result["items"][:limit]
-    return result
+    return ranked_feed(ranker, limit, weights, enrich=enrich)
 
 
-def ranked_feed(ranker: str, limit: int, weights: dict | None = None) -> dict:
+def ranked_feed(ranker: str, limit: int, weights: dict | None = None, *, enrich: bool = False) -> dict:
     entries = read_entries()
     subs = read_entries(FEEDS_FILE)
     for url in entries:
@@ -690,51 +692,58 @@ def ranked_feed(ranker: str, limit: int, weights: dict | None = None) -> dict:
                state_version)
         hit = ranked_cache.get(key)
         if hit and now - hit[0] < RANKED_TTL:
-            return {"items": hit[1][:limit], "total": len(hit[1]), "pending": len(pending), "ranker": ranker}
-        new = [url for url in entries if url not in added]
-        added.update({url: now for url in new})
-        items = [
-            {**cache.get(url, {"url": url, "loading": True}), "kind": "link", "tags": tags,
-             "added": added[url], "date": added[url], "position": i, "sub": None}
-            for i, (url, tags) in enumerate(entries.items())
-        ]
-        seen = set(entries)
-        next_after, series_first = series_state(subs)
-        sub_opened = last_opened(subs)
-        for sub_url, tags in subs.items():
-            s = subscriptions.get(sub_url, {})
-            for post in s.get("items", []):
-                if post["url"] in seen:
-                    continue
-                seen.add(post["url"])
-                items.append({
-                    **post, "estimated_minutes": post.get("estimated_minutes") or cache.get(post["url"], {}).get("estimated_minutes"),
-                    "kind": "subscription", "tags": tags, "feed": s["title"], "icon": s.get("icon"),
-                    "domain": domain(post["url"]),
-                    "added": post["first_seen"], "date": post["published"] or post["first_seen"], "position": -1,
-                    "sub_last_viewed": sub_opened.get(sub_url), "sub": sub_url,
-                })
-        for item in items:
-            item.update(view_state(item["url"]), next_after=next_after.get(item["url"]),
-                        series_first=series_first.get(item["url"]))
-        n_pending = len(pending)
+            ranked = hit[1]
+            items = None
+            new = []
+        else:
+            new = [url for url in entries if url not in added]
+            added.update({url: now for url in new})
+            items = [
+                {**cache.get(url, {"url": url, "loading": True}), "kind": "link", "tags": tags,
+                 "added": added[url], "date": added[url], "position": i, "sub": None}
+                for i, (url, tags) in enumerate(entries.items())
+            ]
+            seen = set(entries)
+            next_after, series_first = series_state(subs)
+            sub_opened = last_opened(subs)
+            for sub_url, tags in subs.items():
+                s = subscriptions.get(sub_url, {})
+                for post in s.get("items", []):
+                    if post["url"] in seen:
+                        continue
+                    seen.add(post["url"])
+                    items.append({
+                        **post, "estimated_minutes": post.get("estimated_minutes") or cache.get(post["url"], {}).get("estimated_minutes"),
+                        "kind": "subscription", "tags": tags, "feed": s["title"], "icon": s.get("icon"),
+                        "domain": domain(post["url"]),
+                        "added": post["first_seen"], "date": post["published"] or post["first_seen"], "position": -1,
+                        "sub_last_viewed": sub_opened.get(sub_url), "sub": sub_url,
+                    })
+            for item in items:
+                item.update(view_state(item["url"]), next_after=next_after.get(item["url"]),
+                            series_first=series_first.get(item["url"]))
+            n_pending = len(pending)
     if new:
         save_json(ADDED_FILE, added, affects_feed=False)
-    ranked = ranking.rank(ranker, items, now, weights)
+    if items is not None:
+        ranked = ranking.rank(ranker, items, now, weights, lazy=True)
+        with lock:
+            for k in [k for k, (t, _) in ranked_cache.items() if now - t >= RANKED_TTL or k[3] != state_version]:
+                del ranked_cache[k]
+            if len(ranked_cache) >= 20:
+                ranked_cache.pop(next(iter(ranked_cache)))
+            if key[3] == state_version:
+                ranked_cache[key] = (now, ranked)
+    extra_count = (weights or ranking.WEIGHTS)["enrich_count"] if enrich else 0
     with lock:
-        for k in [k for k, (t, _) in ranked_cache.items() if now - t >= RANKED_TTL or k[3] != state_version]:
-            del ranked_cache[k]
-        if len(ranked_cache) >= 20:  # such as many slider positions tried
-            ranked_cache.pop(next(iter(ranked_cache)))
-        if key[3] == state_version:
-            ranked_cache[key] = (now, ranked)
+        cached, pending_keys = dict(cache), set(pending)
+    match_key = lambda post: enrichment_key(post, cached, pending_keys, now)
+    visible, extra = ranked.read(limit, extra_count, match_key)
+    if enrich:
+        enrich_posts(extra, extra_count)
+    with lock:
         n_pending = len(pending)
-    return {
-        "items": ranked[:limit],
-        "total": len(ranked),
-        "pending": n_pending,
-        "ranker": ranker,
-    }
+    return {"items": visible, "total": ranked.total, "pending": n_pending, "ranker": ranker}
 
 
 def append_line(path: Path, url: str, tags: list[str]):

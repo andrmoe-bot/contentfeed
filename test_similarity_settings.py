@@ -125,8 +125,24 @@ class SimilaritySettingsTests(unittest.TestCase):
                     html = response.read().decode()
                 self.assertIn('label: "Publish time similarity"', html)
                 self.assertIn('label: "Content length similarity"', html)
-                self.assertIn('term: "similar_penalty"', html)
+                self.assertIn('term: "similarity"', html)
             finally:
                 httpd.shutdown()
                 thread.join(timeout=5)
                 httpd.server_close()
+
+
+    def test_old_repeat_amount_migrates_to_above_similarity_penalty(self):
+        for amount in [0, 0.5, 75]:
+            weights = dict(ranking.DEFAULT_WEIGHTS, repeat_per_post=amount)
+            del weights['above_similarity_penalty']
+            self.path.write_text(json.dumps({'weights': weights}))
+            server.load_settings()
+            self.assertEqual(ranking.WEIGHTS['above_similarity_penalty'], amount)
+            self.assertNotIn('repeat_per_post', server.settings()['weights'])
+
+    def test_explicit_new_penalty_wins_over_legacy_amount(self):
+        weights = dict(ranking.DEFAULT_WEIGHTS, repeat_per_post=100, above_similarity_penalty=3)
+        self.path.write_text(json.dumps({'weights': weights}))
+        server.load_settings()
+        self.assertEqual(ranking.WEIGHTS['above_similarity_penalty'], 3)

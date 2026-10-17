@@ -117,6 +117,33 @@ class FeedCacheTests(unittest.TestCase):
             server.feed("score")
         self.assertEqual(rank.call_count, 1)
 
+    def test_pagination_resumes_cached_ranking_and_preserves_total(self):
+        server.subscriptions[self.url]['items'] = [dict(self.post, url=f'https://example.com/{i}') for i in range(20)]
+        with patch.object(ranking, 'rank', wraps=ranking.rank) as rank:
+            first = server.feed('score', limit=2)
+            cached = next(iter(server.ranked_cache.values()))[1]
+            self.assertEqual(len(cached.items), 2)
+            self.assertEqual(first['total'], 20)
+            next_page = server.feed('score', limit=5)
+            self.assertEqual(len(cached.items), 5)
+            self.assertEqual(next_page['items'][:2], first['items'])
+            self.assertEqual(server.feed('score', limit=1)['items'], first['items'][:1])
+            self.assertEqual(next_page['total'], 20)
+        rank.assert_called_once()
+
+    def test_enrichment_beyond_visible_prefix_keeps_highest_incomplete_selection(self):
+        server.subscriptions[self.url]['items'] = [
+            dict(self.post, url=f'https://example.com/{i}', estimated_minutes=10 if i < 25 else None)
+            for i in range(40)]
+        result = server.feed('score', limit=10, enrich=True)
+        self.assertEqual(result['total'], 40)
+        self.assertEqual(len(result['items']), 10)
+        cached = next(iter(server.ranked_cache.values()))[1]
+        self.assertEqual(len(cached.items), 30)
+        self.assertEqual([call.args[0] for call in server.schedule.call_args_list],
+                         [f'https://example.com/{i}' for i in range(25, 30)])
+
+
 
 if __name__ == "__main__":
     unittest.main()

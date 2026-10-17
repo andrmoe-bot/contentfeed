@@ -31,7 +31,7 @@ similarity), or None.
 
 Nothing is hidden: items you've opened or marked red are scored differently, not removed.
 
-A ranker registered with spread=True gets its repeats spread out after scoring (see rank).
+A ranker registered with spread=True penalizes similarity to posts above it (see rank).
 
 Register a ranker with @ranker("name") and select it with `server.py --ranker name`, or try it
 without restarting via /api/feed?ranker=name.
@@ -40,10 +40,12 @@ Keep points stable between page updates, for example by using whole hours rather
 for age, so the page doesn't redraw every time it checks for changes.
 """
 
+import functools
 import heapq
 import math
 import re
-from typing import Callable
+import threading
+from typing import Callable, Iterator
 from urllib.parse import urlparse
 
 Reasons = list[tuple[str, float]]
@@ -63,7 +65,7 @@ DEFAULT_WEIGHTS = {
     "similar_length_weight": 0,  # relative weight of duration similarity; 0 keeps the old behavior
     "similar_days": 30,  # posts from the same subscription are alike if published within this many days
     "series_penalty": 30,  # taken off a later part of a series when you haven't opened anything before it
-    "repeat_per_post": 15,  # taken off for each post from the same subscription higher up in the feed
+    "above_similarity_penalty": 15,  # taken off per 100% similarity to each post above it
     "green_bonus_points": 0,
     "video_bonus": 0,  # for each media type (see media_type); below 0 is a penalty
     "image_bonus": 0,
@@ -123,9 +125,44 @@ def valid_minutes(value) -> bool:
             and math.isfinite(value) and value > 0)
 
 
-# Similarity is the weighted average of publication proximity and duration ratio.
+class SimilarityMetric:
+    """Numeric similarity shared by recent views and feed spreading."""
+    def __init__(self, days: float, publish_weight: float, length_weight: float):
+        self.days = days
+        self.date_scale = 100 / (days * 86400) if days else 0
+        self.publish_weight = publish_weight
+        self.length_weight = length_weight
+        total = publish_weight + length_weight
+        self.enabled = bool(total)
+        self.publish_share = publish_weight / total if total else 0
+        self.length_share = length_weight / total if total else 0
+
+    def published(self, first_date: float, second_date: float) -> float:
+        return max(0.0, 1 - abs(first_date - second_date) / 3600 / 24 / self.days) if self.days else 0.0
+
+    def percent(self, first_date: float, first_minutes: float | None,
+                second_date: float, second_minutes: float | None) -> int:
+        """Lengths must already be sanitized with valid_minutes()."""
+        published = max(0.0, 100 - abs(first_date - second_date) * self.date_scale) if self.publish_weight and self.days else 0
+        if self.length_weight and first_minutes is not None and second_minutes is not None:
+            length = min(first_minutes, second_minutes) / max(first_minutes, second_minutes)
+            percent = self.publish_share * published + self.length_share * 100 * length
+        else:
+            percent = published if self.publish_weight else 0
+        rounded = round(percent)
+        # Only half-percent boundaries need extra precision stabilization.
+        if abs(percent - rounded) > 0.499999999999:
+            return round(round(percent, 12))
+        return rounded
+
+
+@functools.lru_cache(maxsize=128)
+def similarity_metric(days: float, publish_weight: float, length_weight: float) -> SimilarityMetric:
+    return SimilarityMetric(days, publish_weight, length_weight)
+
+
 # Only posts from the same subscription match; an item always matches itself.
-# Missing/invalid lengths are omitted from both the sum and its normalizing weight.
+# Missing/invalid lengths are omitted from the normalized weighted average.
 def similarity(item: dict, other: dict, weights: dict) -> tuple[int, str]:
     """Whole-percent similarity, plus the components that explain it."""
     if item["url"] == other["url"]:
@@ -133,28 +170,30 @@ def similarity(item: dict, other: dict, weights: dict) -> tuple[int, str]:
     if not item.get("sub") or item.get("sub") != other.get("sub"):
         return 0, "different subscriptions"
 
+    metric = similarity_metric(weights["similar_days"], weights["similar_publish_weight"],
+                               weights["similar_length_weight"])
+    first, second = item.get("estimated_minutes"), other.get("estimated_minutes")
+    first = first if valid_minutes(first) else None
+    second = second if valid_minutes(second) else None
+    percent = metric.percent(item["date"], first, other["date"], second)
+    return percent, similarity_reason(item, other, metric, first, second)
+
+
+def similarity_reason(item: dict, other: dict, metric: SimilarityMetric, first, second) -> str:
+    """Build text only for a selected match, not every candidate comparison."""
     gap = abs(item["date"] - other["date"]) / 3600
-    days = weights["similar_days"]
-    published = max(0.0, 1 - gap / 24 / days) if days else 0.0
     apart = f"published {hours_label(int(gap))} apart" if gap >= 1 else "published within the hour"
-    publish_weight = weights["similar_publish_weight"]
-    length_weight = weights["similar_length_weight"]
-    components = [(publish_weight, published)]
     details = ["same subscription", apart]
-    if length_weight:
-        first, second = item.get("estimated_minutes"), other.get("estimated_minutes")
-        if valid_minutes(first) and valid_minutes(second):
+    if metric.length_weight:
+        if first is not None and second is not None:
+            published = metric.published(item["date"], other["date"])
             length = min(first, second) / max(first, second)
-            components.append((length_weight, length))
-            details.append(f"publish time {points(100 * published)}% × {points(publish_weight)}, "
-                           f"length {points(100 * length)}% × {points(length_weight)} "
+            details.append(f"publish time {points(100 * published)}% × {points(metric.publish_weight)}, "
+                           f"length {points(100 * length)}% × {points(metric.length_weight)} "
                            f"({points(first)} and {points(second)} minutes), normalized")
         else:
             details.append("length unknown; using publish time only")
-    normalizer = sum(weight for weight, _ in components)
-    # Normalize weights first so rescaling them does not change rounding at ties.
-    percent = sum((weight / normalizer) * value for weight, value in components) if normalizer else 0
-    return round(100 * percent), ", ".join(details)
+    return ", ".join(details)
 
 
 def similar_to_recent(items: list[dict], now: float, weights: dict):
@@ -167,9 +206,11 @@ def similar_to_recent(items: list[dict], now: float, weights: dict):
     if (not weights["similar_penalty"] or not window
             or not (weights["similar_publish_weight"] or weights["similar_length_weight"])):
         return
+    metric = similarity_metric(weights["similar_days"], weights["similar_publish_weight"],
+                               weights["similar_length_weight"])
     # Only posts from the same subscription can match. Links can only match themselves.
     # Compute recency once per viewed item, rather than once per comparison.
-    recent_by_sub: dict[str, list[tuple[dict, int, float]]] = {}
+    recent_by_sub: dict[str, list[tuple[dict, int, float, float | None]]] = {}
     recent_by_url = {}
     for other in items:
         if other["last_viewed"] is None:
@@ -177,23 +218,30 @@ def similar_to_recent(items: list[dict], now: float, weights: dict):
         hours = hours_since(now, other["last_viewed"])
         if hours >= window:
             continue
-        entry = (other, hours, 1 - hours / window)
+        minutes = other.get("estimated_minutes")
+        entry = (other, hours, 1 - hours / window, minutes if valid_minutes(minutes) else None)
         recent_by_url[other["url"]] = entry
         if other.get("sub"):
             recent_by_sub.setdefault(other["sub"], []).append(entry)
     for it in items:
         best = None
+        minutes = it.get("estimated_minutes")
+        first = minutes if valid_minutes(minutes) else None
         candidates = recent_by_sub.get(it.get("sub"), [])
         own = recent_by_url.get(it["url"])
         if not it.get("sub"):
             candidates = [own] if own else []
-        for other, hours, remaining in candidates:
-            percent, why = similarity(it, other, weights)
+        for other, hours, remaining, second in candidates:
+            itself = it["url"] == other["url"]
+            percent = 100 if itself else metric.percent(it["date"], first, other["date"], second)
             strength = percent * remaining
-            # On a tie, itself is the clearest reason
-            if strength and (not best or strength > best["strength"] or (strength == best["strength"] and why == "itself")):
-                best = {"title": other["title"], "hours": hours, "percent": percent, "strength": strength, "why": why,
-                        "skipped": other.get("skipped", False)}
+            if strength and (not best or strength > best["strength"] or (strength == best["strength"] and itself)):
+                # Delay explanation strings until the strongest match is known.
+                best = {"title": other["title"], "hours": hours, "percent": percent, "strength": strength,
+                        "skipped": other.get("skipped", False), "other": other, "minutes": second}
+        if best:
+            other, second = best.pop("other"), best.pop("minutes")
+            best["why"] = "itself" if it["url"] == other["url"] else similarity_reason(it, other, metric, first, second)
         it["similar"] = best
 
 
@@ -231,7 +279,10 @@ def title_series(posts: list[dict]) -> dict[str, dict]:
 def media_type(item: dict) -> str:
     """"video" for YouTube, Jellyfin, NRK TV and pages with a video file, "image" for a link straight to a picture,
     otherwise "article"."""
-    if item.get("youtube") or item.get("jellyfin") or item.get("video") or urlparse(item["url"]).netloc.lower().removeprefix("www.") == "tv.nrk.no":
+    if item.get("youtube") or item.get("jellyfin") or item.get("video"):
+        return "video"
+    domain = item.get("domain") or urlparse(item["url"]).netloc
+    if domain.lower().removeprefix("www.") == "tv.nrk.no":
         return "video"
     if item.get("image") and item.get("image") == item["url"]:
         return "image"
@@ -240,7 +291,7 @@ def media_type(item: dict) -> str:
 
 def ranker(name: str, spread: bool = False):
     """Register a ranker. With spread, the feed is built from the top down and each item loses
-    repeat_per_post for every item from the same subscription above it (see rank)."""
+    above_similarity_penalty times its summed similarity to posts above it (see rank)."""
     def register(fn: Ranker) -> Ranker:
         fn.spread = spread
         RANKERS[name] = fn
@@ -258,7 +309,7 @@ def chronological(item: dict, now: float, weights: dict) -> Reasons:
 @ranker("score", spread=True)
 def score(item: dict, now: float, weights: dict) -> Reasons:
     """Points for next up or opened before, a new subscription, a later part of a series, being like
-    something opened recently, its media type, and green. rank() then takes points off repeats from the same subscription."""
+    something opened recently, its media type, and green. rank() then penalizes similarity to posts above it."""
     w = weights
     reasons = []
     if item.get("next_after") and "latest" not in item["tags"]:
@@ -295,13 +346,46 @@ def score(item: dict, now: float, weights: dict) -> Reasons:
     return reasons
 
 
-def rank(name: str, items: list[dict], now: float, weights: dict | None = None) -> list[dict]:
+class RankedItems:
+    """A resumable exact ranking. Concurrent requests can safely extend its cached prefix."""
+    def __init__(self, source: list[dict], iterator: Iterator[dict]):
+        self.source = source
+        self.iterator = iterator
+        self.items = []
+        self.total = len(source)
+        self.lock = threading.Lock()
+
+    def read(self, limit: int, extra_count: int = 0, match_key=None) -> tuple[list[dict], list[dict]]:
+        """Extend to the page size and, optionally, the highest-ranked eligible matches.
+
+        Count eligible source keys first so a page with no missing metadata never consumes
+        the whole ranking just to discover there is nothing to enrich.
+        """
+        with self.lock:
+            matched = set()
+            target = 0
+            if extra_count and match_key:
+                possible = {key for it in self.source if (key := match_key(it)) is not None}
+                target = min(extra_count, len(possible))
+                matched = {key for it in self.items if (key := match_key(it)) is not None}
+            while len(self.items) < min(limit, self.total) or len(matched) < target:
+                it = next(self.iterator)
+                self.items.append(it)
+                if target and (key := match_key(it)) is not None:
+                    matched.add(key)
+            return self.items[:limit], list(self.items) if extra_count else []
+
+
+def rank(name: str, items: list[dict], now: float, weights: dict | None = None,
+         *, lazy: bool = False) -> list[dict] | RankedItems:
     """Return items sorted by score, each with "score" and "reasons" filled in. Weights other than the
     saved ones are for previewing them, such as while you move a slider.
 
-    For a spread ranker the feed is built from the top down: the next item is always the one with
-    the highest score after taking off repeat_per_post for each item from its subscription already
-    placed above it, so the second post from a subscription loses repeat_per_post, the third twice that."""
+    For a spread ranker, repeatedly choose the item with the highest current score, after
+    subtracting above_similarity_penalty times its summed similarity to all items already
+    placed above it. Similarity is the same normalized measure used for recent views, without
+    viewing-time decay. Penalties are cumulative; different subscriptions don't match.
+    """
     fn = RANKERS[name]
     weights = weights or WEIGHTS
     items = [dict(it) for it in items]
@@ -312,27 +396,69 @@ def rank(name: str, items: list[dict], now: float, weights: dict | None = None) 
         scored.append({**item, "score": points(sum(r["points"] for r in reasons)), "reasons": reasons})
     # On equal scores: things you haven't opened first, then newest first
     order = lambda it: (it["score"], it["last_viewed"] is None, it["date"], it["position"])
-    penalty = weights.get("repeat_per_post", 0) if fn.spread else 0
-    if not penalty:
-        return sorted(scored, key=order, reverse=True)
-    # Each subscription's items, best first; links are each on their own
-    groups: dict[str, list[dict]] = {}
-    for it in sorted(scored, key=order, reverse=True):
-        groups.setdefault(it.get("sub") or it["url"], []).append(it)
-    queues = list(groups.values())
-    # Heap of each subscription's best item still to place, by score with its repeats taken off
-    heap = [(-q[0]["score"], q[0]["last_viewed"] is not None, -q[0]["date"], -q[0]["position"], i, 0) for i, q in enumerate(queues)]
+    penalty = weights.get("above_similarity_penalty", 0) if fn.spread else 0
+    metric = similarity_metric(weights["similar_days"], weights["similar_publish_weight"],
+                               weights["similar_length_weight"])
+    iterator = (iter(sorted(scored, key=order, reverse=True)) if not penalty or not metric.enabled
+                else spread_by_similarity(scored, penalty, metric))
+    return RankedItems(scored, iterator) if lazy else list(iterator)
+
+
+def spread_by_similarity(scored: list[dict], penalty: float, metric: SimilarityMetric) -> Iterator[dict]:
+    """Exact greedy ordering with subscription-local heap updates.
+
+    Other subscriptions cannot affect a group's scores. Keep only each group's current best
+    item in the global heap. After placing it, update the remaining items in that group and
+    heapify once in C, rather than repeatedly refreshing stale entries. Any remaining item can
+    overtake its former leader. Memory is linear; no pair matrix or per-pair reasons.
+    """
+    dates = [it["date"] for it in scored]
+    minutes = [it.get("estimated_minutes") for it in scored]
+    minutes = [value if valid_minutes(value) else None for value in minutes]
+    base_cents = [round(it["score"] * 100) for it in scored]
+    totals = [0] * len(scored)  # sums of whole percentages, avoiding accumulated rounding
+    matches = [0] * len(scored)
+    groups = {}
+    for i, it in enumerate(scored):
+        key = ("sub", it["sub"]) if it.get("sub") else ("url", it["url"])
+        groups.setdefault(key, []).append(i)
+    queues = []
+    for indices in groups.values():
+        queue = [(-base_cents[i], scored[i]["last_viewed"] is not None,
+                  -dates[i], -scored[i]["position"], i) for i in indices]
+        heapq.heapify(queue)
+        queues.append(queue)
+    heap = [(*queue[0], group) for group, queue in enumerate(queues)]
     heapq.heapify(heap)
-    out = []
+    window = metric.days * 86400
+    for_date_only = not metric.length_weight
+    percent_for = metric.percent
     while heap:
-        *_, i, n = heapq.heappop(heap)
-        it = queues[i][n]
-        if n:
-            label = f"{n} from “{short(it['feed'])}” higher up"
-            it["reasons"].append({"label": label, "points": points(-penalty * n)})
-            it["score"] = points(it["score"] - penalty * n)
-        out.append(it)
-        if n + 1 < len(queues[i]):
-            nxt = queues[i][n + 1]
-            heapq.heappush(heap, (-(nxt["score"] - penalty * (n + 1)), nxt["last_viewed"] is not None, -nxt["date"], -nxt["position"], i, n + 1))
-    return out
+        *_, i, group = heapq.heappop(heap)
+        queue = queues[group]
+        heapq.heappop(queue)
+        it = scored[i]
+        if totals[i]:
+            # Round only the cumulative adjustment to cents, never each pair.
+            cents = round(penalty * totals[i])
+            label = f"similarity to {matches[i]} post{'s' if matches[i] != 1 else ''} above, {totals[i]}% total"
+            it["reasons"].append({"label": label, "points": points(-cents / 100)})
+            it["score"] = points((base_cents[i] - cents) / 100)
+        yield it
+        if not queue:
+            continue
+        changed = False
+        first_date, first_minutes = dates[i], minutes[i]
+        for position, previous in enumerate(queue):
+            j = previous[-1]
+            if for_date_only and abs(first_date - dates[j]) > window:
+                continue
+            percent = percent_for(first_date, first_minutes, dates[j], minutes[j])
+            if percent:
+                totals[j] += percent
+                matches[j] += 1
+                queue[position] = (-(base_cents[j] - round(penalty * totals[j])), *previous[1:])
+                changed = True
+        if changed:
+            heapq.heapify(queue)
+        heapq.heappush(heap, (*queue[0], group))
