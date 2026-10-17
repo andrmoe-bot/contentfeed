@@ -238,7 +238,7 @@ The default, `score`, adds up these points. With the default settings:
 - −40 × similarity × the fraction of the 24-hour window remaining since opening, using the strongest remaining penalty (see below)
 - 0 for its media type: video (YouTube, Jellyfin, NRK TV, pages with a video file), image (a link straight to a picture) or
   article (anything else). Each has its own setting, which may be negative, to favor or hold back that type.
-- 0 per **estimated minute of content** by default. Set Content length to positive points per minute to favor longer content, or negative to favor shorter content. Runtime metadata is used where available; text is estimated at 200 words per minute (at least one minute). Feed text may be only an excerpt, and page estimates can include surrounding text. Unknown lengths have no adjustment. When Content length is enabled, missing estimates are fetched in the background for existing links and subscription posts, including YouTube watch pages. Requests are limited to eight pending fetches at a time; unavailable runtimes remain unknown.
+- 0 per **estimated minute of content** by default. Set Content length to positive points per minute to favor longer content, or negative to favor shorter content. Runtime metadata is used where available; text is estimated at 200 words per minute (at least one minute). Feed text may be only an excerpt, and page estimates can include surrounding text. Unknown lengths have no adjustment. When the site loads, the five highest-ranked posts with incomplete data are updated in the background, regardless of score weights. YouTube updates fetch runtime and exact publication time together. Change this count with “Update incomplete posts” in Settings (0–100; 0 disables it). Routine polling does not start additional batches; unavailable data stays unknown and recent attempts are skipped for six hours.
 - 0 if green; red items go to the bottom
 - −15 for each post from its subscription higher up in the feed
 
@@ -273,7 +273,7 @@ Each card's "Score" shows its points, such as
 `77% like “Egyptian Fractions”, opened 2 hours ago (same subscription, published 7 days apart), 91.67% penalty remaining −28.23`
 or `in a series starting “Making a CPU, part 1”, nothing before it opened −30`.
 
-Change the numbers in the score panel: click "Score settings" at the top of the feed. It opens
+Change the numbers in the score panel: click "Settings" at the top of the feed. It opens
 beside the feed on a wide screen, or along the bottom on a narrow one, and stays open across reloads
 until you close it. Each setting comes with a slider and a box for an exact number:
 Next up, Seen, New subscription, Series, Repeat penalty, Video, Image, Article, Content length (Seen, Video, Image, Article and Content length may be

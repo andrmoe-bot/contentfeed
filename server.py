@@ -639,38 +639,51 @@ RANKED_TTL = 60
 ranked_cache: dict[tuple, tuple[float, list[dict]]] = {}
 
 
-def feed(ranker: str, limit: int = MAX_ITEMS_SHOWN, weights: dict | None = None) -> dict:
+def enrich_posts(ranked: list[dict], count: int):
+    """Schedule the highest-ranked incomplete posts once for this page load."""
+    selected = 0
+    seen = set()
+    now = time.time()
+    for post in ranked:
+        if selected >= count:
+            break
+        if post.get("jellyfin") or (post.get("estimated_minutes") and not post.get("date_approx")):
+            continue
+        video = post.get("youtube") if post.get("kind") == "subscription" else None
+        key = "video:" + video if video else post["url"]
+        if key in seen:
+            continue
+        seen.add(key)
+        with lock:
+            cached = cache.get(post["url"], {})
+            checked = post.get("video_metadata_checked", 0) if video else (
+                cached.get("fetched", 0) if cached.get("length_version") == 1 else 0)
+            if key in pending or (checked and now - checked < 6 * 3600):
+                continue
+        if video:
+            schedule_video_metadata(video)
+        else:
+            schedule(post["url"], force=True)
+        selected += 1
+
+
+def feed(ranker: str, limit: int = MAX_ITEMS_SHOWN, weights: dict | None = None, enrich: bool = False) -> dict:
+    result = ranked_feed(ranker, ranking.LIMIT if enrich else limit, weights)
+    if enrich:
+        enrich_posts(result["items"], (weights or ranking.WEIGHTS)["enrich_count"])
+        with lock:
+            result["pending"] = len(pending)
+        result["items"] = result["items"][:limit]
+    return result
+
+
+def ranked_feed(ranker: str, limit: int, weights: dict | None = None) -> dict:
     entries = read_entries()
     subs = read_entries(FEEDS_FILE)
     for url in entries:
         schedule(url)
     for url in subs:
         schedule_subscription(url)
-    # Fill missing runtimes for existing posts too: most RSS feeds (including
-    # YouTube) omit duration, and old caches predate length estimates. Bound the
-    # work across polls so a large subscription doesn't flood the executor.
-    if (weights or ranking.WEIGHTS).get("length_per_minute"):
-        with lock:
-            candidates = list(entries)
-            candidates.extend(p["url"] for sub in subs
-                              for p in subscriptions.get(sub, {}).get("items", [])
-                              if not p.get("estimated_minutes") and not p.get("jellyfin") and not p.get("youtube"))
-            missing = [url for url in dict.fromkeys(candidates)
-                       if (cache.get(url, {}).get("length_version") != 1
-                           or (cache.get(url, {}).get("error")
-                               and time.time() - cache[url].get("fetched", 0) >= 6 * 3600))
-                       and url not in pending]
-            videos = list(dict.fromkeys(
-                p["youtube"] for sub in subs
-                for p in subscriptions.get(sub, {}).get("items", [])
-                if p.get("youtube") and not p.get("estimated_minutes")
-                and time.time() - p.get("video_metadata_checked", 0) >= 6 * 3600
-                and "video:" + p["youtube"] not in pending))
-            capacity = max(0, 8 - len(pending))
-        work = [(schedule_video_metadata, video) for video in videos]
-        work.extend((lambda url: schedule(url, force=True), url) for url in missing)
-        for fetch, address in work[:capacity]:
-            fetch(address)
     now = time.time()
     with lock:
         key = (ranker, json.dumps(weights or ranking.WEIGHTS, sort_keys=True), json.dumps([entries, subs]),
@@ -846,7 +859,8 @@ class Handler(BaseHTTPRequestHandler):
                     weights = ranking.check_weights(json.loads(query["weights"][0]))
                 except (ValueError, TypeError) as e:
                     return self._json({"error": f"weights: {e}"}, 400)
-            self._feed_json(feed(name, max(int(limit), 1) if limit.isdigit() else MAX_ITEMS_SHOWN, weights))
+            self._feed_json(feed(name, max(int(limit), 1) if limit.isdigit() else MAX_ITEMS_SHOWN, weights,
+                                 enrich=query.get("enrich") == ["1"]))
         elif path == "/api/subscriptions":
             self._json({"subscriptions": subscription_status(), "interval_minutes": feed_interval / 60})
         elif path == "/api/settings":

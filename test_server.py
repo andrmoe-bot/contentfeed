@@ -125,7 +125,7 @@ if __name__ == "__main__":
 class LengthEnrichmentTests(FeedCacheTests):
     def test_missing_subscription_length_is_scheduled_and_used(self):
         ranking.WEIGHTS["length_per_minute"] = -2
-        result = server.feed("score")
+        result = server.feed("score", enrich=True)
         server.schedule.assert_called_with(self.post["url"], force=True)
         self.assertEqual(result["items"][0]["score"], 0)
         server.cache[self.post["url"]] = {"estimated_minutes": 12, "length_version": 1}
@@ -184,7 +184,7 @@ class LengthEnrichmentTests(FeedCacheTests):
         self.post.update(youtube='abc', date_approx=True)
         ranking.WEIGHTS['length_per_minute'] = -1
         with patch.object(server, 'schedule_video_metadata') as schedule:
-            server.feed('score')
+            server.feed('score', enrich=True)
         schedule.assert_called_once_with('abc')
         server.schedule.assert_not_called()
 
@@ -203,3 +203,29 @@ class LengthEnrichmentTests(FeedCacheTests):
         with patch.object(server, 'schedule_video_metadata') as schedule:
             server.set_viewed(self.post['url'])
         schedule.assert_called_once_with('abc')
+
+
+    def test_load_enriches_only_highest_five_incomplete_posts(self):
+        posts = [dict(self.post, url=f'https://example.com/{i}', published=100 + i,
+                      estimated_minutes=10 if i == 9 else None) for i in range(10)]
+        server.subscriptions[self.url]['items'] = posts
+        server.feed('score', enrich=True)
+        self.assertEqual([call.args[0] for call in server.schedule.call_args_list],
+                         [f'https://example.com/{i}' for i in (8, 7, 6, 5, 4)])
+        server.schedule.reset_mock()
+        server.feed('score')
+        server.schedule.assert_not_called()
+
+    def test_custom_count_and_zero_apply_on_cached_feed(self):
+        server.feed('score')
+        ranking.WEIGHTS['enrich_count'] = 0
+        server.feed('score', enrich=True)
+        server.schedule.assert_not_called()
+        ranking.WEIGHTS['enrich_count'] = 1
+        server.feed('score', enrich=True)
+        server.schedule.assert_called_once_with(self.post['url'], force=True)
+
+    def test_update_count_requires_integer_in_range(self):
+        for invalid in [-1, 1.5, 101]:
+            with self.assertRaises(ValueError):
+                ranking.check_weights(dict(ranking.DEFAULT_WEIGHTS, enrich_count=invalid))
