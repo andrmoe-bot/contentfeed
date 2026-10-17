@@ -50,3 +50,33 @@ python3 benchmark_ranking.py --baseline /tmp/contentfeed-ranking-before-above.py
 
 Use `--items`, `--subs` and `--runs` to change the fixture size or repetition count. The
 benchmark also runs without a baseline file and uses only the standard library.
+
+Weighted title similarity
+-------------------------
+
+The title component uses cached Unicode word sets and Sørensen–Dice overlap. Tokens are
+prepared once per item and reused for recent-view comparisons, spreading, and subsequent
+pages. Empty token sets omit the title weight from normalization. The default title weight
+is 0, preserving saved ranking preferences.
+
+The same 50-subscription / 10,000-item fixture, with a three-run median, measured:
+
+| Enabled components | Full ranking | First 300 |
+|---|---:|---:|
+| Title only | 2352.0 ms | 330.7 ms |
+| Publish time + length + title | 2967.5 ms | 372.6 ms |
+
+Titles in this fixture are unique “Post N” strings, so they share a word while preserving
+the distinguishing number. The token cache was warmed, as in the original benchmark above.
+A five-run page-only follow-up against the previous commit, with title weight 0, measured
+146.6 → 146.4 ms for publish-only and 260.1 → 283.4 ms for publish + length. The latter is
+about 9% overhead; this change does not claim identical performance for every configuration.
+
+The benchmark now reports a baseline's first-page time when its module supports resumable
+rankings. A baseline without that feature still uses its old eager full-ranking path. Title
+cases show no baseline when the older module does not implement a title weight.
+
+```sh
+git show 31ccfa7:ranking.py > /tmp/contentfeed-ranking-before-title.py
+python3 benchmark_ranking.py --baseline /tmp/contentfeed-ranking-before-title.py --runs 3 --cases publish mixed title all
+```

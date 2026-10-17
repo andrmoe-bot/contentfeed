@@ -29,10 +29,10 @@ class SimilaritySettingsTests(unittest.TestCase):
             self.addCleanup(patcher.stop)
 
     def test_relative_weights_round_trip_including_zero_and_fractional_values(self):
-        for publish, length in [(1, 1), (0.25, 0.75), (0, 1), (0, 0)]:
-            with self.subTest(publish=publish, length=length):
+        for publish, length, title in [(1, 1, 1), (0.25, 0.75, 0.5), (0, 1, 0), (0, 0, 1), (0, 0, 0)]:
+            with self.subTest(publish=publish, length=length, title=title):
                 weights = dict(ranking.DEFAULT_WEIGHTS, similar_publish_weight=publish,
-                               similar_length_weight=length)
+                               similar_length_weight=length, similar_title_weight=title)
                 self.assertIsNone(server.save_settings(weights))
                 self.assertEqual(json.loads(self.path.read_text())['weights'], weights)
                 ranking.WEIGHTS.update(ranking.DEFAULT_WEIGHTS)
@@ -43,19 +43,21 @@ class SimilaritySettingsTests(unittest.TestCase):
         weights = dict(ranking.DEFAULT_WEIGHTS, similar_days=7, similar_penalty=60)
         del weights['similar_publish_weight']
         del weights['similar_length_weight']
+        del weights['similar_title_weight']
         self.path.write_text(json.dumps({'weights': weights}))
         server.load_settings()
         self.assertEqual(ranking.WEIGHTS['similar_days'], 7)
         self.assertEqual(ranking.WEIGHTS['similar_penalty'], 60)
         self.assertEqual(ranking.WEIGHTS['similar_publish_weight'], 1)
         self.assertEqual(ranking.WEIGHTS['similar_length_weight'], 0)
+        self.assertEqual(ranking.WEIGHTS['similar_title_weight'], 0)
 
     def test_invalid_weights_leave_saved_and_active_settings_unchanged(self):
         original = dict(ranking.DEFAULT_WEIGHTS)
         self.assertIsNone(server.save_settings(original))
         saved = self.path.read_text()
         version = server.state_version
-        for key in ['similar_publish_weight', 'similar_length_weight']:
+        for key in ['similar_publish_weight', 'similar_length_weight', 'similar_title_weight']:
             self.assertIsNotNone(server.save_settings(dict(original, **{key: -1})))
             self.assertEqual(ranking.WEIGHTS, original)
             self.assertEqual(self.path.read_text(), saved)
@@ -66,9 +68,9 @@ class SimilaritySettingsTests(unittest.TestCase):
         sub = 'https://example.com/feed'
         now = time.time()
         posts = [
-            {'url': 'https://example.com/anchor', 'title': 'Anchor',
+            {'url': 'https://example.com/anchor', 'title': 'Building a CPU part 1',
              'published': now, 'first_seen': now, 'estimated_minutes': 10},
-            {'url': 'https://example.com/candidate', 'title': 'Candidate',
+            {'url': 'https://example.com/candidate', 'title': 'Building a CPU part 2',
              'published': now - 15 * 86400, 'first_seen': now, 'estimated_minutes': 40},
         ]
         with contextlib.ExitStack() as stack:
@@ -113,6 +115,13 @@ class SimilaritySettingsTests(unittest.TestCase):
                 # Previewing changes neither the saved settings nor the next normal result.
                 self.assertEqual(request('/api/settings')['weights'], equal)
                 self.assertEqual(candidate()['similar']['percent'], 38)
+                title_only = dict(equal, similar_publish_weight=0, similar_length_weight=0, similar_title_weight=1)
+                query = '?weights=' + urllib.parse.quote(json.dumps(title_only))
+                self.assertEqual(candidate(query)['similar']['percent'], 75)
+                all_three = dict(equal, similar_title_weight=1)
+                query = '?weights=' + urllib.parse.quote(json.dumps(all_three))
+                self.assertEqual(candidate(query)['similar']['percent'], 50)
+                self.assertEqual(request('/api/settings')['weights'], equal)
                 invalid = dict(equal, similar_length_weight=-1)
                 with self.assertRaises(urllib.error.HTTPError) as error:
                     request('/api/settings', invalid)
@@ -125,6 +134,7 @@ class SimilaritySettingsTests(unittest.TestCase):
                     html = response.read().decode()
                 self.assertIn('label: "Publish time similarity"', html)
                 self.assertIn('label: "Content length similarity"', html)
+                self.assertIn('label: "Title similarity"', html)
                 self.assertIn('term: "similarity"', html)
             finally:
                 httpd.shutdown()
