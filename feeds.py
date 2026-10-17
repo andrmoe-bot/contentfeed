@@ -17,14 +17,14 @@ from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
 from urllib.parse import parse_qs, urljoin, urlparse
 
-from content_length import duration_minutes, reading_minutes
+from content_length import duration_minutes, reading_minutes, youtube_minutes
 
 USER_AGENT = "Mozilla/5.0 (compatible; ContentFeed/1.0)"
 FETCH_TIMEOUT = 10
 MAX_FEED_BYTES = 20_000_000  # some blogs put every whole post in their feed
 MAX_ITEMS_PER_FEED = 50
 MAX_OLDER_VIDEOS = 3000  # per YouTube channel or playlist, see older_videos()
-MAX_WATCH_PAGE_BYTES = 4_000_000  # see video_date()
+MAX_WATCH_PAGE_BYTES = 4_000_000  # see video_metadata()
 FEED_TYPES = ("application/rss+xml", "application/atom+xml", "application/feed+xml", "application/rdf+xml")
 # Where feeds usually are when a page doesn't link to one, tried under the page and then the site
 USUAL_FEEDS = ("feed", "rss.xml", "feed.xml", "index.xml", "atom.xml", "rss")
@@ -462,18 +462,25 @@ def older_videos(feed_url: str, limit: int = MAX_OLDER_VIDEOS) -> list[dict]:
 YT_DATE = re.compile(rb'itemprop="datePublished" content="([^"]+)"')
 
 
-def video_date(video_id: str) -> float | None:
-    """A YouTube video's exact upload time, from its watch page, or None if the page doesn't give one."""
+def video_metadata(video_id: str) -> dict:
+    """Read exact publication time and runtime together from one watch-page request."""
+    result = {}
     try:
         with open_url(f"https://www.youtube.com/watch?v={video_id}&hl=en", "text/html") as r:
             page = b""
-            # The date is some 800 KB into a page of over 1 MB, so stop reading once it's there.
-            while chunk := r.read(256_000):
-                page += chunk
-                if m := YT_DATE.search(page):
-                    return parse_date(m.group(1).decode())
-                if len(page) > MAX_WATCH_PAGE_BYTES:
+            while len(page) < MAX_WATCH_PAGE_BYTES:
+                chunk = r.read(min(256_000, MAX_WATCH_PAGE_BYTES - len(page)))
+                if not chunk:
                     break
-    except OSError:  # network and HTTP errors
+                page += chunk
+                if match := YT_DATE.search(page):
+                    if date := parse_date(match.group(1).decode()):
+                        result["published"] = date
+                if minutes := youtube_minutes(page.decode("utf-8", errors="replace")):
+                    result["estimated_minutes"] = minutes
+                # Don't stop at the date: runtime may be in a later chunk.
+                if len(result) == 2:
+                    break
+    except OSError:
         pass
-    return None
+    return result

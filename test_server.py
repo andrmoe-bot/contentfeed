@@ -120,3 +120,112 @@ class FeedCacheTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LengthEnrichmentTests(FeedCacheTests):
+    def test_missing_subscription_length_is_scheduled_and_used(self):
+        ranking.WEIGHTS["length_per_minute"] = -2
+        result = server.feed("score", enrich=True)
+        server.schedule.assert_called_with(self.post["url"], force=True)
+        self.assertEqual(result["items"][0]["score"], 0)
+        server.cache[self.post["url"]] = {"estimated_minutes": 12, "length_version": 1}
+        server.state_version += 1
+        server.schedule.reset_mock()
+        result = server.feed("score")
+        self.assertEqual(result["items"][0]["score"], -24)
+        server.schedule.assert_not_called()
+
+    def test_missing_length_is_not_fetched_with_zero_weight(self):
+        server.feed("score")
+        server.schedule.assert_not_called()
+
+    def test_feed_refresh_preserves_known_runtime(self):
+        old = dict(self.post, estimated_minutes=20)
+        merged = server.merge_posts([old], [dict(self.post, estimated_minutes=None)], 2000000)
+        self.assertEqual(merged[0]["estimated_minutes"], 20)
+
+    def test_playlist_enriches_existing_video_without_replacing_date(self):
+        self.post["youtube"] = "abc"
+        with patch.object(server.feeds, "older_videos", return_value=[
+                dict(self.post, published=1, date_approx=True, estimated_minutes=15)]):
+            server.load_older(self.url)
+        post = server.subscriptions[self.url]["items"][0]
+        self.assertEqual(post["estimated_minutes"], 15)
+        self.assertEqual(post["published"], self.post["published"])
+
+    def test_metadata_fetch_reads_youtube_player_runtime(self):
+        import io
+        from email.message import Message
+        response = io.BytesIO(b'<html><script>{"lengthSeconds":"720"}</script></html>')
+        response.headers = Message()
+        response.headers['Content-Type'] = 'text/html; charset=utf-8'
+        response.geturl = lambda: 'https://www.youtube.com/watch?v=abcdefghijk'
+        with patch.object(server.feeds, "open_url", return_value=response):
+            result = server.fetch_metadata(response.geturl())
+        self.assertEqual(result['estimated_minutes'], 12)
+        self.assertEqual(result['length_version'], 1)
+
+    def test_video_update_gets_date_and_runtime_for_every_copy(self):
+        self.post.update(youtube='abc', date_approx=True)
+        duplicate = dict(self.post)
+        server.subscriptions['other'] = {'items': [duplicate]}
+        server.pending.add('video:abc')
+        with patch.object(server.feeds, 'video_metadata', return_value={
+                'published': 900000, 'estimated_minutes': 12}) as fetch:
+            server.update_video_metadata('abc')
+        fetch.assert_called_once_with('abc')
+        for post in [self.post, duplicate]:
+            self.assertEqual(post['published'], 900000)
+            self.assertEqual(post['estimated_minutes'], 12)
+            self.assertNotIn('date_approx', post)
+        self.assertNotIn('video:abc', server.pending)
+
+    def test_background_video_uses_existing_updater(self):
+        self.post.update(youtube='abc', date_approx=True)
+        ranking.WEIGHTS['length_per_minute'] = -1
+        with patch.object(server, 'schedule_video_metadata') as schedule:
+            server.feed('score', enrich=True)
+        schedule.assert_called_once_with('abc')
+        server.schedule.assert_not_called()
+
+    def test_opening_video_updates_missing_runtime_even_with_exact_date(self):
+        self.post.update(youtube='abc')
+        with patch.object(server, 'schedule_video_metadata') as schedule:
+            self.assertTrue(server.set_viewed(self.post['url']))
+        schedule.assert_called_once_with('abc')
+
+    def test_failed_video_update_keeps_approximate_date_and_can_retry(self):
+        self.post.update(youtube='abc', date_approx=True)
+        with patch.object(server.feeds, 'video_metadata', return_value={}):
+            server.update_video_metadata('abc')
+        self.assertTrue(self.post['date_approx'])
+        self.assertNotIn('video:abc', server.pending)
+        with patch.object(server, 'schedule_video_metadata') as schedule:
+            server.set_viewed(self.post['url'])
+        schedule.assert_called_once_with('abc')
+
+
+    def test_load_enriches_only_highest_five_incomplete_posts(self):
+        posts = [dict(self.post, url=f'https://example.com/{i}', published=100 + i,
+                      estimated_minutes=10 if i == 9 else None) for i in range(10)]
+        server.subscriptions[self.url]['items'] = posts
+        server.feed('score', enrich=True)
+        self.assertEqual([call.args[0] for call in server.schedule.call_args_list],
+                         [f'https://example.com/{i}' for i in (8, 7, 6, 5, 4)])
+        server.schedule.reset_mock()
+        server.feed('score')
+        server.schedule.assert_not_called()
+
+    def test_custom_count_and_zero_apply_on_cached_feed(self):
+        server.feed('score')
+        ranking.WEIGHTS['enrich_count'] = 0
+        server.feed('score', enrich=True)
+        server.schedule.assert_not_called()
+        ranking.WEIGHTS['enrich_count'] = 1
+        server.feed('score', enrich=True)
+        server.schedule.assert_called_once_with(self.post['url'], force=True)
+
+    def test_update_count_requires_integer_in_range(self):
+        for invalid in [-1, 1.5, 101]:
+            with self.assertRaises(ValueError):
+                ranking.check_weights(dict(ranking.DEFAULT_WEIGHTS, enrich_count=invalid))

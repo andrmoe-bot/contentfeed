@@ -66,6 +66,7 @@ DEFAULT_WEIGHTS = {
     "video_bonus": 0,  # for each media type (see media_type); below 0 is a penalty
     "image_bonus": 0,
     "article_bonus": 0,
+    "enrich_count": 5,  # highest-ranked incomplete posts to enrich on page load
     "length_per_minute": 0,  # signed points per estimated minute of content
 }
 WEIGHTS = dict(DEFAULT_WEIGHTS)
@@ -83,6 +84,8 @@ def check_weights(weights: dict) -> dict:
         low = -LIMIT if key in SIGNED else 0
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not low <= value <= LIMIT:
             raise ValueError(f"{key} must be a number from {low} to {LIMIT}")
+        if key == "enrich_count" and (not float(value).is_integer() or value > 100):
+            raise ValueError("enrich_count must be a whole number from 0 to 100")
         out[key] = int(value) if float(value).is_integer() else value
     return out
 

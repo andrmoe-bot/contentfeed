@@ -37,7 +37,7 @@ def reading_minutes(text):
 
 
 def page_minutes(parser, video=False):
-    for key in ('duration', 'video:duration', 'og:video:duration'):
+    for key in ('duration', 'lengthseconds', 'video:duration', 'og:video:duration'):
         duration = duration_minutes(parser.meta.get(key))
         if duration is not None:
             return duration
@@ -63,3 +63,12 @@ def page_minutes(parser, video=False):
     if not video and not parser.video:
         return reading_minutes(' '.join(parser.text))
     return None
+
+
+def youtube_minutes(html):
+    """YouTube exposes runtime in player data even without duration meta tags."""
+    match = re.search(r'"lengthSeconds"\s*:\s*"?(\d+)', html)
+    if not match:
+        match = re.search(r'"approxDurationMs"\s*:\s*"?(\d+)', html)
+        return duration_minutes(float(match[1]) / 1000) if match else None
+    return duration_minutes(match[1])

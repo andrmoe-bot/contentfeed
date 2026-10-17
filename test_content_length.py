@@ -1,12 +1,17 @@
 import unittest
 
-from content_length import duration_minutes, page_minutes
+from content_length import duration_minutes, page_minutes, youtube_minutes
 from feeds import MetaParser, parse
 import ranking
 from test_ranking import item, NOW
 
 
 class ContentLengthTests(unittest.TestCase):
+    def test_youtube_player_runtime(self):
+        self.assertEqual(youtube_minutes('<script>{"videoDetails":{"lengthSeconds":"750"}}</script>'), 12.5)
+        self.assertEqual(youtube_minutes('{"approxDurationMs":"90000"}'), 1.5)
+        self.assertIsNone(youtube_minutes('{"isLive":true}'))
+
     def test_duration_units(self):
         for value, minutes in [('PT1H30M', 90), ('P1DT30M', 1470), ('1:30', 1.5), (120, 2)]:
             self.assertEqual(duration_minutes(value), minutes)
@@ -39,3 +44,14 @@ class ContentLengthTests(unittest.TestCase):
             self.assertEqual(result['reasons'], [{'label': 'estimated 10 minutes', 'points': 10 * weight}])
         self.assertEqual(ranking.DEFAULT_WEIGHTS['length_per_minute'], 0)
         self.assertTrue(all(it['score'] == 0 for it in ranking.rank('score', [short, long, unknown], NOW)))
+
+    def test_watch_page_continues_after_date_to_find_runtime(self):
+        import io
+        from unittest.mock import patch
+        import feeds
+        body = b'<meta itemprop="datePublished" content="2020-01-01">'
+        body += b' ' * 256000 + b'{"lengthSeconds":"120"}'
+        with patch.object(feeds, 'open_url', return_value=io.BytesIO(body)):
+            result = feeds.video_metadata('abc')
+        self.assertEqual(result['estimated_minutes'], 2)
+        self.assertEqual(result['published'], feeds.parse_date('2020-01-01'))

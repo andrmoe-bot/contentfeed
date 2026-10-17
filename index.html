@@ -89,7 +89,7 @@
 <header>
   <div class="bar">
     <h1>Content Feed</h1>
-    <nav><a href="/subscriptions" id="subs-link">Subscriptions</a> · <button type="button" id="panel-toggle" aria-expanded="false" aria-controls="panel">Score settings</button></nav>
+    <nav><a href="/subscriptions" id="subs-link">Subscriptions</a> · <button type="button" id="panel-toggle" aria-expanded="false" aria-controls="panel">Settings</button></nav>
     <span id="status"></span>
   </div>
   <form class="bar" id="add">
@@ -104,8 +104,8 @@
 <button type="button" id="more" hidden></button>
 <aside id="panel" aria-labelledby="panel-title" hidden>
   <div class="panel-head">
-    <h2 id="panel-title">Score settings</h2>
-    <button type="button" id="panel-close" aria-label="Close score settings">×</button>
+    <h2 id="panel-title">Settings</h2>
+    <button type="button" id="panel-close" aria-label="Close settings">×</button>
   </div>
   <p class="hint">The feed is sorted by score, highest first; on equal scores, unopened first, then newest
     first. Every card's “Score” details show the points it got. The feed reorders as you
@@ -385,6 +385,7 @@ function load() {
   return loading;
 }
 
+let enrichOnLoad = true;
 let feedTag = null;  // the ETag of the feed shown: the server answers "not modified" if it's still the same
 let lastPending = 0;
 
@@ -394,8 +395,9 @@ async function fetchFeed() {
     // Settings you haven't saved yet, such as while you drag a slider, are sent along to preview them.
     const preview = Object.keys(saved).length && !sameWeights(draft, saved)
       ? `&weights=${encodeURIComponent(JSON.stringify(draft))}` : "";
-    const res = await fetch(`/api/feed?limit=${limit}${preview}`,
+    const res = await fetch(`/api/feed?limit=${limit}${preview}${enrichOnLoad ? "&enrich=1" : ""}`,
       { cache: "no-store", headers: feedTag ? { "If-None-Match": feedTag } : {} });
+    if (res.ok || res.status === 304) enrichOnLoad = false;
     if (res.status === 304) {
       render();  // same items, but cards kept in place may now take their place
       pollTimer = setTimeout(load, lastPending ? 1500 : 30000);
@@ -425,6 +427,8 @@ async function fetchFeed() {
 // A setting with a term only changes how that term's points are worked out, such as Similar's days,
 // so it's shown and hidden with it.
 const SETTINGS = [
+  { key: "enrich_count", label: "Update incomplete posts", before: "", after: "posts on page load",
+    hint: "Fetch missing runtime or exact publication time for this many highest-ranked incomplete posts when you open the site. 0 turns this off. This does not add score points." },
   { key: "next_up_bonus", label: "Next up", before: "+", after: "points",
     hint: "Next up is the post after the one you opened most recently in a subscription: the next part of its series, or else the next published. Skipping (the white dot) doesn't make anything next up. Not for subscriptions tagged “latest”." },
   { key: "seen_bonus", label: "Seen", before: "", after: "points",
@@ -481,14 +485,14 @@ function nearestStep(list, value) {
 const fmt = (n) => Number(n).toLocaleString("en-US", { maximumFractionDigits: 3 }).replaceAll(",", "\u202f").replace("-", "−");
 const plus = (n) => (n < 0 ? ` − ${fmt(-n)}` : ` + ${fmt(n)}`);  // " + 5" or " − 5", for adding a term to a sum
 const sameWeights = (a, b) => KEYS.every((key) => a[key] === b[key]);
-const inRange = (key, v) => Number.isFinite(v) && v >= (SIGNED.includes(key) ? -LIMIT : 0) && v <= LIMIT;
+const inRange = (key, v) => (key !== "enrich_count" || (Number.isInteger(v) && v <= 100)) && Number.isFinite(v) && v >= (SIGNED.includes(key) ? -LIMIT : 0) && v <= LIMIT;
 const controls = {};
 
 function buildSettings() {
   document.getElementById("settings").replaceChildren(...SETTINGS.map(({ key, term, label, before, after, extra, hint }) => {
-    const list = SIGNED.includes(key) ? SIGNED_STEPS : BONUS_STEPS;
+    const list = key === "enrich_count" ? Array.from({ length: 101 }, (_, i) => i) : SIGNED.includes(key) ? SIGNED_STEPS : BONUS_STEPS;
     const num = el("input", { type: "number", id: `w-${key}`, step: "any", inputmode: "decimal", required: "",
-      min: SIGNED.includes(key) ? -LIMIT : 0, max: LIMIT });
+      min: SIGNED.includes(key) ? -LIMIT : 0, max: key === "enrich_count" ? 100 : LIMIT });
     const slider = el("input", { type: "range", min: 0, max: list.length - 1, step: 1, "aria-label": `${label} slider` });
     const def = el("span");
     controls[key] = { num, slider, list, def };
@@ -537,7 +541,7 @@ function showSettings(w) {
 
 // Hide the terms that are 0 when the page loads; "Add a term" brings them back.
 function hideZeroTerms(w) {
-  for (const { key, term } of SETTINGS) if (!term && w[key] !== 0) shownTerms.add(key);
+  for (const { key, term } of SETTINGS) if (!term && (key === "enrich_count" || w[key] !== 0)) shownTerms.add(key);
   showTerms();
 }
 
@@ -618,7 +622,7 @@ let rankerShown = null;
 function rankerNote(ranker) {
   if (ranker === rankerShown) return;
   rankerShown = ranker;
-  if (ranker !== "score") panelSay(`The feed is ranked by ${ranker}, which doesn't use these settings.`);
+  if (ranker !== "score") panelSay(`The feed is ranked by ${ranker}, which doesn't use the score terms.`);
 }
 
 async function loadSettings() {

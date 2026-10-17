@@ -30,7 +30,7 @@ import feeds
 import jellyfin
 import nrk
 import pages
-from content_length import page_minutes
+from content_length import page_minutes, youtube_minutes
 
 import ranking
 
@@ -122,7 +122,7 @@ def read_links() -> list[str]:
 
 
 def fetch_metadata(url: str) -> dict:
-    item = {"url": url, "domain": urlparse(url).netloc.removeprefix("www."), "fetched": time.time()}
+    item = {"url": url, "domain": urlparse(url).netloc.removeprefix("www."), "fetched": time.time(), "length_version": 1}
     yt = feeds.youtube_id(url)
     if yt:
         item["youtube"] = yt
@@ -136,8 +136,10 @@ def fetch_metadata(url: str) -> dict:
             elif "html" in ctype:
                 charset = resp.headers.get_content_charset() or "utf-8"
                 parser = feeds.MetaParser()
-                parser.feed(resp.read(MAX_BYTES).decode(charset, errors="replace"))
-                item["estimated_minutes"] = page_minutes(parser, video=bool(yt))
+                html = resp.read(feeds.MAX_WATCH_PAGE_BYTES if yt else MAX_BYTES).decode(charset, errors="replace")
+                parser.feed(html)
+                item["estimated_minutes"] = (youtube_minutes(html) if yt else None) or page_minutes(
+                    parser, video=bool(yt) or item["domain"] == "tv.nrk.no")
                 m = parser.meta
                 item["title"] = m.get("og:title") or m.get("twitter:title") or parser.title.strip()
                 item["description"] = (
@@ -209,6 +211,10 @@ def merge_posts(old: list[dict], new: list[dict], now: float) -> list[dict]:
     first_seen = {post_key(p): p.get("first_seen", now) for p in old}
     merged = {post_key(p): p for p in old}
     for p in new:
+        if not p.get("estimated_minutes") and merged.get(post_key(p), {}).get("estimated_minutes"):
+            p = {**p, "estimated_minutes": merged[post_key(p)]["estimated_minutes"]}
+        if merged.get(post_key(p), {}).get("video_metadata_checked"):
+            p = {**p, "video_metadata_checked": merged[post_key(p)]["video_metadata_checked"]}
         merged[post_key(p)] = {**p, "first_seen": first_seen.get(post_key(p), now)}
     posts = sorted(merged.values(), key=post_date, reverse=True)
     return posts[:MAX_POSTS_KEPT]
@@ -291,7 +297,11 @@ def load_older(url: str):
             if s is None or s.get("feed_url") != feed_url:  # unsubscribed meanwhile
                 return
             known = {post_key(p) for p in s.get("items", [])}
-            # Posts already known came from the feed, with exact dates, so they win over these.
+            # Keep exact feed dates while filling runtime from playlist metadata.
+            durations = {post_key(p): p.get("estimated_minutes") for p in older}
+            for post in s.get("items", []):
+                if not post.get("estimated_minutes") and durations.get(post_key(post)):
+                    post["estimated_minutes"] = durations[post_key(post)]
             s["items"] = merge_posts(s.get("items", []), [p for p in older if post_key(p) not in known], now)
             s["older_loaded"] = now
             s.pop("older_error", None)
@@ -455,41 +465,48 @@ def set_viewed(url: str) -> bool:
         return False
     with lock:
         viewed[url] = time.time()
-        approx = next((p["youtube"] for s in subscriptions.values() for p in s.get("items", [])
-                       if p["url"] == url and p.get("date_approx")), None)
+        video = next((p["youtube"] for s in subscriptions.values() for p in s.get("items", [])
+                      if p["url"] == url and p.get("youtube")
+                      and (p.get("date_approx") or not p.get("estimated_minutes"))), None)
     save_json(VIEWED_FILE, viewed)
-    if approx:
-        schedule_exact_date(approx)
+    if video:
+        schedule_video_metadata(video)
     return True
 
 
-def exact_date(video: str):
-    """Give an older YouTube video, whose date is only known as "3 years ago", its exact date."""
+def update_video_metadata(video: str):
+    """Enrich every copy of a video with its exact date and runtime in one fetch."""
     try:
-        date = feeds.video_date(video)
-        if date is None:  # keep the approximate date; opening the video again tries again
-            return
+        metadata = feeds.video_metadata(video)
+        now = time.time()
         with lock:
-            for s in subscriptions.values():
-                posts = [p for p in s.get("items", []) if p.get("youtube") == video and p.get("date_approx")]
-                for p in posts:
-                    p["published"] = date
-                    del p["date_approx"]
-                if posts:
-                    s["items"].sort(key=post_date, reverse=True)
+            for subscription in subscriptions.values():
+                changed_date = False
+                for post in subscription.get("items", []):
+                    if post.get("youtube") != video:
+                        continue
+                    post["video_metadata_checked"] = now
+                    if metadata.get("estimated_minutes"):
+                        post["estimated_minutes"] = metadata["estimated_minutes"]
+                    if post.get("date_approx") and metadata.get("published"):
+                        post["published"] = metadata["published"]
+                        post.pop("date_approx", None)
+                        changed_date = True
+                if changed_date:
+                    subscription["items"].sort(key=post_date, reverse=True)
         save_json(FEED_CACHE_FILE, subscriptions)
     finally:
         with lock:
-            pending.discard("date:" + video)
+            pending.discard("video:" + video)
 
 
-def schedule_exact_date(video: str):
-    key = "date:" + video
+def schedule_video_metadata(video: str):
+    key = "video:" + video
     with lock:
         if key in pending:
             return
         pending.add(key)
-    executor.submit(exact_date, video)
+    executor.submit(update_video_metadata, video)
 
 
 def set_skipped(url: str) -> bool:
@@ -622,7 +639,45 @@ RANKED_TTL = 60
 ranked_cache: dict[tuple, tuple[float, list[dict]]] = {}
 
 
-def feed(ranker: str, limit: int = MAX_ITEMS_SHOWN, weights: dict | None = None) -> dict:
+def enrich_posts(ranked: list[dict], count: int):
+    """Schedule the highest-ranked incomplete posts once for this page load."""
+    selected = 0
+    seen = set()
+    now = time.time()
+    for post in ranked:
+        if selected >= count:
+            break
+        if post.get("jellyfin") or (post.get("estimated_minutes") and not post.get("date_approx")):
+            continue
+        video = post.get("youtube") if post.get("kind") == "subscription" else None
+        key = "video:" + video if video else post["url"]
+        if key in seen:
+            continue
+        seen.add(key)
+        with lock:
+            cached = cache.get(post["url"], {})
+            checked = post.get("video_metadata_checked", 0) if video else (
+                cached.get("fetched", 0) if cached.get("length_version") == 1 else 0)
+            if key in pending or (checked and now - checked < 6 * 3600):
+                continue
+        if video:
+            schedule_video_metadata(video)
+        else:
+            schedule(post["url"], force=True)
+        selected += 1
+
+
+def feed(ranker: str, limit: int = MAX_ITEMS_SHOWN, weights: dict | None = None, enrich: bool = False) -> dict:
+    result = ranked_feed(ranker, ranking.LIMIT if enrich else limit, weights)
+    if enrich:
+        enrich_posts(result["items"], (weights or ranking.WEIGHTS)["enrich_count"])
+        with lock:
+            result["pending"] = len(pending)
+        result["items"] = result["items"][:limit]
+    return result
+
+
+def ranked_feed(ranker: str, limit: int, weights: dict | None = None) -> dict:
     entries = read_entries()
     subs = read_entries(FEEDS_FILE)
     for url in entries:
@@ -653,7 +708,8 @@ def feed(ranker: str, limit: int = MAX_ITEMS_SHOWN, weights: dict | None = None)
                     continue
                 seen.add(post["url"])
                 items.append({
-                    **post, "kind": "subscription", "tags": tags, "feed": s["title"], "icon": s.get("icon"),
+                    **post, "estimated_minutes": post.get("estimated_minutes") or cache.get(post["url"], {}).get("estimated_minutes"),
+                    "kind": "subscription", "tags": tags, "feed": s["title"], "icon": s.get("icon"),
                     "domain": domain(post["url"]),
                     "added": post["first_seen"], "date": post["published"] or post["first_seen"], "position": -1,
                     "sub_last_viewed": sub_opened.get(sub_url), "sub": sub_url,
@@ -803,7 +859,8 @@ class Handler(BaseHTTPRequestHandler):
                     weights = ranking.check_weights(json.loads(query["weights"][0]))
                 except (ValueError, TypeError) as e:
                     return self._json({"error": f"weights: {e}"}, 400)
-            self._feed_json(feed(name, max(int(limit), 1) if limit.isdigit() else MAX_ITEMS_SHOWN, weights))
+            self._feed_json(feed(name, max(int(limit), 1) if limit.isdigit() else MAX_ITEMS_SHOWN, weights,
+                                 enrich=query.get("enrich") == ["1"]))
         elif path == "/api/subscriptions":
             self._json({"subscriptions": subscription_status(), "interval_minutes": feed_interval / 60})
         elif path == "/api/settings":
