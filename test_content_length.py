@@ -44,3 +44,14 @@ class ContentLengthTests(unittest.TestCase):
             self.assertEqual(result['reasons'], [{'label': 'estimated 10 minutes', 'points': 10 * weight}])
         self.assertEqual(ranking.DEFAULT_WEIGHTS['length_per_minute'], 0)
         self.assertTrue(all(it['score'] == 0 for it in ranking.rank('score', [short, long, unknown], NOW)))
+
+    def test_watch_page_continues_after_date_to_find_runtime(self):
+        import io
+        from unittest.mock import patch
+        import feeds
+        body = b'<meta itemprop="datePublished" content="2020-01-01">'
+        body += b' ' * 256000 + b'{"lengthSeconds":"120"}'
+        with patch.object(feeds, 'open_url', return_value=io.BytesIO(body)):
+            result = feeds.video_metadata('abc')
+        self.assertEqual(result['estimated_minutes'], 2)
+        self.assertEqual(result['published'], feeds.parse_date('2020-01-01'))

@@ -213,6 +213,8 @@ def merge_posts(old: list[dict], new: list[dict], now: float) -> list[dict]:
     for p in new:
         if not p.get("estimated_minutes") and merged.get(post_key(p), {}).get("estimated_minutes"):
             p = {**p, "estimated_minutes": merged[post_key(p)]["estimated_minutes"]}
+        if merged.get(post_key(p), {}).get("video_metadata_checked"):
+            p = {**p, "video_metadata_checked": merged[post_key(p)]["video_metadata_checked"]}
         merged[post_key(p)] = {**p, "first_seen": first_seen.get(post_key(p), now)}
     posts = sorted(merged.values(), key=post_date, reverse=True)
     return posts[:MAX_POSTS_KEPT]
@@ -463,41 +465,48 @@ def set_viewed(url: str) -> bool:
         return False
     with lock:
         viewed[url] = time.time()
-        approx = next((p["youtube"] for s in subscriptions.values() for p in s.get("items", [])
-                       if p["url"] == url and p.get("date_approx")), None)
+        video = next((p["youtube"] for s in subscriptions.values() for p in s.get("items", [])
+                      if p["url"] == url and p.get("youtube")
+                      and (p.get("date_approx") or not p.get("estimated_minutes"))), None)
     save_json(VIEWED_FILE, viewed)
-    if approx:
-        schedule_exact_date(approx)
+    if video:
+        schedule_video_metadata(video)
     return True
 
 
-def exact_date(video: str):
-    """Give an older YouTube video, whose date is only known as "3 years ago", its exact date."""
+def update_video_metadata(video: str):
+    """Enrich every copy of a video with its exact date and runtime in one fetch."""
     try:
-        date = feeds.video_date(video)
-        if date is None:  # keep the approximate date; opening the video again tries again
-            return
+        metadata = feeds.video_metadata(video)
+        now = time.time()
         with lock:
-            for s in subscriptions.values():
-                posts = [p for p in s.get("items", []) if p.get("youtube") == video and p.get("date_approx")]
-                for p in posts:
-                    p["published"] = date
-                    del p["date_approx"]
-                if posts:
-                    s["items"].sort(key=post_date, reverse=True)
+            for subscription in subscriptions.values():
+                changed_date = False
+                for post in subscription.get("items", []):
+                    if post.get("youtube") != video:
+                        continue
+                    post["video_metadata_checked"] = now
+                    if metadata.get("estimated_minutes"):
+                        post["estimated_minutes"] = metadata["estimated_minutes"]
+                    if post.get("date_approx") and metadata.get("published"):
+                        post["published"] = metadata["published"]
+                        post.pop("date_approx", None)
+                        changed_date = True
+                if changed_date:
+                    subscription["items"].sort(key=post_date, reverse=True)
         save_json(FEED_CACHE_FILE, subscriptions)
     finally:
         with lock:
-            pending.discard("date:" + video)
+            pending.discard("video:" + video)
 
 
-def schedule_exact_date(video: str):
-    key = "date:" + video
+def schedule_video_metadata(video: str):
+    key = "video:" + video
     with lock:
         if key in pending:
             return
         pending.add(key)
-    executor.submit(exact_date, video)
+    executor.submit(update_video_metadata, video)
 
 
 def set_skipped(url: str) -> bool:
@@ -645,15 +654,23 @@ def feed(ranker: str, limit: int = MAX_ITEMS_SHOWN, weights: dict | None = None)
             candidates = list(entries)
             candidates.extend(p["url"] for sub in subs
                               for p in subscriptions.get(sub, {}).get("items", [])
-                              if not p.get("estimated_minutes") and not p.get("jellyfin"))
+                              if not p.get("estimated_minutes") and not p.get("jellyfin") and not p.get("youtube"))
             missing = [url for url in dict.fromkeys(candidates)
                        if (cache.get(url, {}).get("length_version") != 1
                            or (cache.get(url, {}).get("error")
                                and time.time() - cache[url].get("fetched", 0) >= 6 * 3600))
                        and url not in pending]
+            videos = list(dict.fromkeys(
+                p["youtube"] for sub in subs
+                for p in subscriptions.get(sub, {}).get("items", [])
+                if p.get("youtube") and not p.get("estimated_minutes")
+                and time.time() - p.get("video_metadata_checked", 0) >= 6 * 3600
+                and "video:" + p["youtube"] not in pending))
             capacity = max(0, 8 - len(pending))
-        for url in missing[:capacity]:
-            schedule(url, force=True)
+        work = [(schedule_video_metadata, video) for video in videos]
+        work.extend((lambda url: schedule(url, force=True), url) for url in missing)
+        for fetch, address in work[:capacity]:
+            fetch(address)
     now = time.time()
     with lock:
         key = (ranker, json.dumps(weights or ranking.WEIGHTS, sort_keys=True), json.dumps([entries, subs]),

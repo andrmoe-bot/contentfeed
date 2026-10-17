@@ -164,3 +164,42 @@ class LengthEnrichmentTests(FeedCacheTests):
             result = server.fetch_metadata(response.geturl())
         self.assertEqual(result['estimated_minutes'], 12)
         self.assertEqual(result['length_version'], 1)
+
+    def test_video_update_gets_date_and_runtime_for_every_copy(self):
+        self.post.update(youtube='abc', date_approx=True)
+        duplicate = dict(self.post)
+        server.subscriptions['other'] = {'items': [duplicate]}
+        server.pending.add('video:abc')
+        with patch.object(server.feeds, 'video_metadata', return_value={
+                'published': 900000, 'estimated_minutes': 12}) as fetch:
+            server.update_video_metadata('abc')
+        fetch.assert_called_once_with('abc')
+        for post in [self.post, duplicate]:
+            self.assertEqual(post['published'], 900000)
+            self.assertEqual(post['estimated_minutes'], 12)
+            self.assertNotIn('date_approx', post)
+        self.assertNotIn('video:abc', server.pending)
+
+    def test_background_video_uses_existing_updater(self):
+        self.post.update(youtube='abc', date_approx=True)
+        ranking.WEIGHTS['length_per_minute'] = -1
+        with patch.object(server, 'schedule_video_metadata') as schedule:
+            server.feed('score')
+        schedule.assert_called_once_with('abc')
+        server.schedule.assert_not_called()
+
+    def test_opening_video_updates_missing_runtime_even_with_exact_date(self):
+        self.post.update(youtube='abc')
+        with patch.object(server, 'schedule_video_metadata') as schedule:
+            self.assertTrue(server.set_viewed(self.post['url']))
+        schedule.assert_called_once_with('abc')
+
+    def test_failed_video_update_keeps_approximate_date_and_can_retry(self):
+        self.post.update(youtube='abc', date_approx=True)
+        with patch.object(server.feeds, 'video_metadata', return_value={}):
+            server.update_video_metadata('abc')
+        self.assertTrue(self.post['date_approx'])
+        self.assertNotIn('video:abc', server.pending)
+        with patch.object(server, 'schedule_video_metadata') as schedule:
+            server.set_viewed(self.post['url'])
+        schedule.assert_called_once_with('abc')
