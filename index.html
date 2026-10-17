@@ -451,8 +451,12 @@ const SETTINGS = [
   { key: "similar_penalty", label: "Similar", before: "−", after: "points at 100% alike, within",
     extra: { key: "similar_hours", type: "number", after: "hours" },
     hint: "Taken off items alike to something you opened, in proportion: 50% alike takes off half. The penalty fades linearly to zero over this many hours, updated in whole hours. Only the strongest remaining penalty counts. 0 points or 0 hours: off." },
-  { key: "similar_days", term: "similar_penalty", label: "Same subscription", before: "alike within", after: "days",
-    hint: "Two posts from the same subscription are 100% alike if published at the same time, falling evenly to 0% this many days apart." },
+  { key: "similar_days", term: "similar_penalty", label: "Publish time window", before: "alike within", after: "days",
+    hint: "Publish-time similarity is 100% for posts published together, falling evenly to 0% this many days apart. Only posts from the same subscription are compared." },
+  { key: "similar_publish_weight", term: "similar_penalty", label: "Publish time similarity", before: "", after: "weight",
+    hint: "How much publish time contributes compared with content length. Equal weights give each half the say; only their ratio matters. Both weights at 0 turn the similarity penalty off." },
+  { key: "similar_length_weight", term: "similar_penalty", label: "Content length similarity", before: "", after: "weight",
+    hint: "Length similarity is shorter minutes divided by longer minutes: equal lengths are 100%, 10 and 20 minutes are 50%. Its contribution adds to publish time and is normalized by the weights. Unknown lengths use publish time alone. Every item is 100% similar to itself." },
 ];
 // Every setting, including the second box some have, such as Similar's hours
 const KEYS = SETTINGS.flatMap(({ key, extra }) => (extra ? [key, extra.key] : [key]));
@@ -568,7 +572,7 @@ function showFormula() {
   const terms = [
     ["new_sub_bonus", `${plus(w.new_sub_bonus)} if nothing opened from its subscription`],
     ["series_penalty", ` − ${fmt(w.series_penalty)} if nothing opened before it in its series`],
-    ["similar_penalty", ` − ${fmt(w.similar_penalty)} × similarity × time remaining (fades to zero over ${fmt(w.similar_hours)} hours; strongest match)`],
+    ["similar_penalty", ` − ${fmt(w.similar_penalty)} × similarity (publish time ${fmt(w.similar_publish_weight)} : length ${fmt(w.similar_length_weight)}) × time remaining (fades to zero over ${fmt(w.similar_hours)} hours; strongest match)`],
     ["video_bonus", `${plus(w.video_bonus)} if video`],
     ["image_bonus", `${plus(w.image_bonus)} if image`],
     ["article_bonus", `${plus(w.article_bonus)} if article`],

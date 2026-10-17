@@ -59,6 +59,8 @@ DEFAULT_WEIGHTS = {
     "new_sub_bonus": 0,  # for posts from a subscription you've never opened anything from
     "similar_penalty": 40,  # taken off at 100% like something you opened recently (see similarity):
     "similar_hours": 24,  # penalty fades linearly to zero this many hours after opening
+    "similar_publish_weight": 1,  # relative weight of publication-time similarity
+    "similar_length_weight": 0,  # relative weight of duration similarity; 0 keeps the old behavior
     "similar_days": 30,  # posts from the same subscription are alike if published within this many days
     "series_penalty": 30,  # taken off a later part of a series when you haven't opened anything before it
     "repeat_per_post": 15,  # taken off for each post from the same subscription higher up in the feed
@@ -115,21 +117,44 @@ def hours_since(now: float, then: float) -> int:
     return max(0, int((now - then) // 3600))  # whole hours, so points don't change every second
 
 
-# Similarity: how alike an item is to one you opened, from 0 to 100%. Two posts from the same
-# subscription are 100% alike if published at the same time, falling evenly to 0% when published
-# similar_days or more apart. Items from different subscriptions aren't alike. An item is 100% like itself, so one you
-# just opened loses the whole penalty too.
+def valid_minutes(value) -> bool:
+    """Only positive, finite numeric estimates can contribute to length similarity."""
+    return (isinstance(value, (int, float)) and not isinstance(value, bool)
+            and math.isfinite(value) and value > 0)
+
+
+# Similarity is the weighted average of publication proximity and duration ratio.
+# Only posts from the same subscription match; an item always matches itself.
+# Missing/invalid lengths are omitted from both the sum and its normalizing weight.
 def similarity(item: dict, other: dict, weights: dict) -> tuple[int, str]:
-    """How alike the two items are, in whole percent, and why, such as "same subscription, published 4 days apart"."""
+    """Whole-percent similarity, plus the components that explain it."""
     if item["url"] == other["url"]:
         return 100, "itself"
-    if item.get("sub") and item.get("sub") == other.get("sub"):
-        gap = abs(item["date"] - other["date"]) / 3600
-        days = weights["similar_days"]
-        percent = max(0.0, 1 - gap / 24 / days) if days else 0.0
-        apart = f"published {hours_label(int(gap))} apart" if gap >= 1 else "published within the hour"
-        return round(100 * percent), f"same subscription, {apart}"
-    return 0, "different subscriptions"
+    if not item.get("sub") or item.get("sub") != other.get("sub"):
+        return 0, "different subscriptions"
+
+    gap = abs(item["date"] - other["date"]) / 3600
+    days = weights["similar_days"]
+    published = max(0.0, 1 - gap / 24 / days) if days else 0.0
+    apart = f"published {hours_label(int(gap))} apart" if gap >= 1 else "published within the hour"
+    publish_weight = weights["similar_publish_weight"]
+    length_weight = weights["similar_length_weight"]
+    components = [(publish_weight, published)]
+    details = ["same subscription", apart]
+    if length_weight:
+        first, second = item.get("estimated_minutes"), other.get("estimated_minutes")
+        if valid_minutes(first) and valid_minutes(second):
+            length = min(first, second) / max(first, second)
+            components.append((length_weight, length))
+            details.append(f"publish time {points(100 * published)}% × {points(publish_weight)}, "
+                           f"length {points(100 * length)}% × {points(length_weight)} "
+                           f"({points(first)} and {points(second)} minutes), normalized")
+        else:
+            details.append("length unknown; using publish time only")
+    normalizer = sum(weight for weight, _ in components)
+    # Normalize weights first so rescaling them does not change rounding at ties.
+    percent = sum((weight / normalizer) * value for weight, value in components) if normalizer else 0
+    return round(100 * percent), ", ".join(details)
 
 
 def similar_to_recent(items: list[dict], now: float, weights: dict):
@@ -139,7 +164,8 @@ def similar_to_recent(items: list[dict], now: float, weights: dict):
     for it in items:
         it["similar"] = None
     window = weights["similar_hours"]
-    if not weights["similar_penalty"] or not window:
+    if (not weights["similar_penalty"] or not window
+            or not (weights["similar_publish_weight"] or weights["similar_length_weight"])):
         return
     # Only posts from the same subscription can match. Links can only match themselves.
     # Compute recency once per viewed item, rather than once per comparison.
@@ -260,8 +286,7 @@ def score(item: dict, now: float, weights: dict) -> Reasons:
     if w[f"{kind}_bonus"]:
         reasons.append((kind, w[f"{kind}_bonus"]))
     minutes = item.get("estimated_minutes")
-    if (w["length_per_minute"] and isinstance(minutes, (int, float))
-            and not isinstance(minutes, bool) and math.isfinite(minutes) and minutes > 0):
+    if w["length_per_minute"] and valid_minutes(minutes):
         reasons.append((f"estimated {points(minutes)} minutes", points(minutes * w["length_per_minute"])))
     if item["color"] == "green" and w["green_bonus_points"]:
         reasons.append(("green", w["green_bonus_points"]))
