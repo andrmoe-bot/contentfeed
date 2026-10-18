@@ -11,7 +11,7 @@ from test_above_similarity import reference_similarity, greedy_reference
 
 class TitleSimilarityTests(unittest.TestCase):
     def weights(self, publish=0, length=0, title=1, **extra):
-        return dict(ranking.DEFAULT_WEIGHTS, similar_publish_weight=publish,
+        return dict(ranking.DEFAULT_WEIGHTS, similar_base_percent=0, similar_publish_weight=publish,
                     similar_length_weight=length, similar_title_weight=title, **extra)
 
     def pair(self, first='Building a CPU, part 1', second='Building a CPU, part 2', days=15):

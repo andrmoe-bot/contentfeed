@@ -39,7 +39,7 @@
   .match-title a:hover { text-decoration: underline; }
   .match-title mark { background: transparent; color: inherit; font-weight: 700; text-decoration: underline; text-decoration-color: var(--accent); text-underline-offset: 3px; }
   .match-component { display: flex; flex-wrap: wrap; gap: 2px 10px; font-variant-numeric: tabular-nums; }
-  .match-component > :first-child { flex: 0 0 58px; }
+  .match-component > :first-child { flex: 0 0 78px; white-space: nowrap; }
   .match-component > :last-child { margin-left: auto; }
   .match-average { margin-top: 3px; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
   .match-list > .reason-detail { overflow-wrap: anywhere; }
@@ -399,19 +399,27 @@ function highlightedTitle(match) {
 
 function matchBreakdown(match) {
   const n = (v) => Math.round(v * 100) / 100;
-  const components = match.components.filter((c) => c.percent != null);
-  const denominator = components.reduce((sum, c) => sum + c.weight, 0);
-  const terms = components.filter((c) => c.percent * c.weight !== 0);
+  const available = match.components.filter((c) => c.percent != null);
+  const totalWeight = available.reduce((sum, c) => sum + c.weight, 0);
+  const base = match.base_percent || 0;
+  const components = base ? [
+    { label: "Subscription", percent: 100, weight: base, input: "same subscription" },
+    ...match.components.map((c) => ({ ...c,
+      weight: c.percent == null || !totalWeight ? 0 : (100 - base) * c.weight / totalWeight })),
+  ] : match.components;
+  const denominator = base ? 100 : totalWeight;
+  const terms = components.filter((c) => c.percent != null && c.percent * c.weight !== 0);
+  const calculation = `(${terms.map((c) => `${n(c.percent)}% × ${n(c.weight)}`).join(" + ") || "0"}) ÷ ${denominator} ≈ ${match.percent}%`;
   return el("div", { class: "similar-match" },
     el("div", { class: "match-title" }, `${match.percent}% · `,
       el("a", { href: match.url, target: "_blank", rel: "noopener noreferrer" }, ...highlightedTitle(match))),
     ...(match.self ? [el("div", {}, "Same item · 100% match")] : [
-      ...match.components.filter((c) => c.weight !== 0 && c.percent !== 0).map((c) => el("div", {},
+      ...components.filter((c) => c.weight !== 0 && c.percent !== 0).map((c) => el("div", {},
         el("div", { class: "match-component" },
           el("span", {}, c.label), el("span", {}, c.input),
-          el("span", {}, c.percent == null ? "—" : `${n(c.percent)}% × ${c.weight}`)))),
+          el("span", {}, c.percent == null ? "—" : `${n(c.percent)}% × ${n(c.weight)}`)))),
       el("div", { class: "match-average" },
-        `(${terms.map((c) => `${n(c.percent)}% × ${c.weight}`).join(" + ") || "0"}) ÷ ${denominator} ≈ ${match.percent}%`),
+        calculation),
     ]));
 }
 
@@ -546,10 +554,12 @@ const SETTINGS = [
   { key: "similar_penalty", label: "Similar", before: "−", after: "points at 100% alike, within",
     extra: { key: "similar_hours", type: "number", after: "hours" },
     hint: "Taken off items alike to something you opened, in proportion: 50% alike takes off half. The penalty fades linearly to zero over this many hours, updated in whole hours. Only the strongest remaining penalty counts. 0 points or 0 hours: off." },
+  { key: "similar_base_percent", term: "similarity", label: "Subscription base similarity", before: "", after: "%",
+    hint: "Same-subscription posts start at this similarity. Other components fill the remainder: 50% base + 50% × 60% measured = 80%. Different subscriptions do not match. 0 restores similarity from components alone." },
   { key: "similar_days", term: "similarity", label: "Publish time window", before: "alike within", after: "days",
     hint: "Publish-time similarity is 100% for posts published together, falling evenly to 0% this many days apart. Only posts from the same subscription are compared." },
   { key: "similar_publish_weight", term: "similarity", label: "Publish time similarity", before: "", after: "weight",
-    hint: "How much publish time contributes compared with content length and titles. Equal weights give components equal influence; only their ratios matter. All three weights at 0 turn both similarity penalties off." },
+    hint: "How much publish time contributes compared with content length and titles. Equal weights give components equal influence; only their ratios matter. Set the base and all three weights to 0 to turn both similarity penalties off." },
   { key: "similar_title_weight", term: "similarity", label: "Title similarity", before: "", after: "weight",
     hint: "Twice the shared meaningful title words divided by the total words in both titles. Ignores case, punctuation and common English words; keeps numbers. Adds to publish-time and length similarity, normalized by the available weights. Empty titles are left out. Comparisons stay within the same subscription." },
   { key: "similar_length_weight", term: "similarity", label: "Content length similarity", before: "", after: "weight",
@@ -586,14 +596,14 @@ function nearestStep(list, value) {
 const fmt = (n) => Number(n).toLocaleString("en-US", { maximumFractionDigits: 3 }).replaceAll(",", "\u202f").replace("-", "−");
 const plus = (n) => (n < 0 ? ` − ${fmt(-n)}` : ` + ${fmt(n)}`);  // " + 5" or " − 5", for adding a term to a sum
 const sameWeights = (a, b) => KEYS.every((key) => a[key] === b[key]);
-const inRange = (key, v) => (key !== "enrich_count" || (Number.isInteger(v) && v <= 100)) && Number.isFinite(v) && v >= (SIGNED.includes(key) ? -LIMIT : 0) && v <= LIMIT;
+const inRange = (key, v) => (key !== "enrich_count" || (Number.isInteger(v) && v <= 100)) && (key !== "similar_base_percent" || v <= 100) && Number.isFinite(v) && v >= (SIGNED.includes(key) ? -LIMIT : 0) && v <= LIMIT;
 const controls = {};
 
 function buildSettings() {
   document.getElementById("settings").replaceChildren(...SETTINGS.map(({ key, term, label, before, after, extra, hint }) => {
-    const list = key === "enrich_count" ? Array.from({ length: 101 }, (_, i) => i) : SIGNED.includes(key) ? SIGNED_STEPS : BONUS_STEPS;
+    const list = ["enrich_count", "similar_base_percent"].includes(key) ? Array.from({ length: 101 }, (_, i) => i) : SIGNED.includes(key) ? SIGNED_STEPS : BONUS_STEPS;
     const num = el("input", { type: "number", id: `w-${key}`, step: "any", inputmode: "decimal", required: "",
-      min: SIGNED.includes(key) ? -LIMIT : 0, max: key === "enrich_count" ? 100 : LIMIT });
+      min: SIGNED.includes(key) ? -LIMIT : 0, max: ["enrich_count", "similar_base_percent"].includes(key) ? 100 : LIMIT });
     const slider = el("input", { type: "range", min: 0, max: list.length - 1, step: 1, "aria-label": `${label} slider` });
     const def = el("span");
     controls[key] = { num, slider, list, def };
@@ -671,7 +681,7 @@ function showFormula() {
   const terms = [
     ["new_sub_bonus", `${plus(w.new_sub_bonus)} if nothing opened from its subscription`],
     ["series_penalty", ` − ${fmt(w.series_penalty)} if nothing opened before it in its series`],
-    ["similar_penalty", ` − ${fmt(w.similar_penalty)} × similarity (publish time ${fmt(w.similar_publish_weight)} : length ${fmt(w.similar_length_weight)} : title ${fmt(w.similar_title_weight)}) × time remaining (fades to zero over ${fmt(w.similar_hours)} hours; strongest match)`],
+    ["similar_penalty", ` − ${fmt(w.similar_penalty)} × similarity (${fmt(w.similar_base_percent)}% base; publish time ${fmt(w.similar_publish_weight)} : length ${fmt(w.similar_length_weight)} : title ${fmt(w.similar_title_weight)}) × time remaining (fades to zero over ${fmt(w.similar_hours)} hours; strongest match)`],
     ["video_bonus", `${plus(w.video_bonus)} if video`],
     ["image_bonus", `${plus(w.image_bonus)} if image`],
     ["article_bonus", `${plus(w.article_bonus)} if article`],

@@ -264,6 +264,12 @@ thinks starts the series.
 
 How alike two items are, from 0 to 100%:
 
+- **Subscription base:** 50% by default for posts from the same subscription. The weighted
+  components below fill the remaining share: `50% + 50% × measured similarity`. A measured
+  60% match therefore becomes 80%. The flat **Subscription base similarity** setting accepts
+  0–100%; 0 restores the component-only calculation, and 100 makes all same-subscription posts
+  fully alike. Cards show Subscription alongside the other weighted contributions.
+
 - **Publish time:** 100% for posts published together, falling evenly to 0% at the configured
   window (30 days by default). A week apart is 77%, two weeks 53%.
 - **Content length:** shorter minutes divided by longer minutes. Equal lengths are 100%;
@@ -274,23 +280,24 @@ How alike two items are, from 0 to 100%:
   count once, and numbers are kept. This measures word overlap, not semantic paraphrases.
 - The three similarities add according to their relative weights, then divide by the sum of
   the available weights. A 50% publish-time match, 50% length match and 75% title match with
-  equal weights give 58% overall similarity (rounded to whole percent). Scaling all weights
-  together leaves similarity unchanged.
+  equal weights give 58.33% measured similarity, or 79% overall with the default base
+  (rounded once to whole percent). Scaling all component weights together leaves similarity unchanged.
 - Settings exposes the three weights and the publish-time window. Publish time defaults to
-  weight 1, content length and title to weight 0, preserving existing preferences. Increase
+  weight 1, content length and title to weight 0. Increase
   **Title similarity** to include titles; set all three to 1 for an equal mix. The separate
   Content length points-per-minute score is unchanged.
 - If either length is unknown/invalid or either title has no meaningful words, omit that
   component and its weight. Use the remaining components; with no available component,
-  distinct posts have no similarity.
+  distinct same-subscription posts retain the subscription base.
 - Only posts from the same subscription match. Tags don't affect similarity. When length or title is
-  enabled, posts can still match on those components beyond the publish-time window.
-- Every item is 100% like itself, even without a known length or title. All three weights at 0 disable the
+  enabled, posts can still gain similarity beyond the subscription base outside the publish-time window.
+- Every item is 100% like itself, even without a known length or title. Set the subscription base and all three weights to 0 to disable the
   similarity penalties entirely, including for opened items.
 
 The similarity penalty fades linearly to zero over 24 hours, updated in whole hours. After you
-watch a video, its channel's next one (published a week later) starts at next up 30 − 30.8;
-after 12 hours, that penalty is only 15.4. These examples use the default publish-time-only similarity.
+watch a video, its channel's next one (published a week later) starts at next up 30 − 35.2;
+after 12 hours, that penalty is only 17.6. These examples use the default 50% subscription base
+and publish-time-only measured similarity.
 Something you've opened starts at −70 (−30 for opened and −40 for being like itself),
 reaches −50 after 12 hours, and −30 after 24 hours.
 
@@ -306,7 +313,7 @@ Ranking is computed only as far as the requested page needs, then resumed from c
 incomplete posts; if none are eligible, it does not rank the tail looking for them.
 
 Each card's "Score" shows its points, such as
-`77% like “Egyptian Fractions”, opened 2 hours ago (same subscription, published 7 days apart), 91.67% penalty remaining −28.23`
+`88% like “Egyptian Fractions”, opened 2 hours ago (same subscription, published 7 days apart), 91.67% penalty remaining −32.27`
 or `in a series starting “Making a CPU, part 1”, nothing before it opened −30`.
 
 Change the numbers in the score panel: click "Settings" at the top of the feed. It opens

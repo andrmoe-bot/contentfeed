@@ -28,6 +28,17 @@ class SimilaritySettingsTests(unittest.TestCase):
             patcher.start()
             self.addCleanup(patcher.stop)
 
+    def test_missing_subscription_base_gets_default_and_saved_value_round_trips(self):
+        weights = dict(ranking.DEFAULT_WEIGHTS)
+        del weights['similar_base_percent']
+        self.path.write_text(json.dumps({'weights': weights}))
+        server.load_settings()
+        self.assertEqual(ranking.WEIGHTS['similar_base_percent'], 50)
+        for base in [0, 12.5, 50, 100]:
+            self.assertIsNone(server.save_settings(dict(ranking.WEIGHTS, similar_base_percent=base)))
+            server.load_settings()
+            self.assertEqual(ranking.WEIGHTS['similar_base_percent'], base)
+
     def test_relative_weights_round_trip_including_zero_and_fractional_values(self):
         for publish, length, title in [(1, 1, 1), (0.25, 0.75, 0.5), (0, 1, 0), (0, 0, 1), (0, 0, 0)]:
             with self.subTest(publish=publish, length=length, title=title):
@@ -105,29 +116,29 @@ class SimilaritySettingsTests(unittest.TestCase):
                 defaults = request('/api/settings')['defaults']
                 self.assertEqual(defaults['similar_publish_weight'], 1)
                 self.assertEqual(defaults['similar_length_weight'], 0)
-                self.assertEqual(candidate()['similar']['percent'], 50)
+                self.assertEqual(candidate()['similar']['percent'], 75)
                 equal = dict(defaults, similar_length_weight=1)
                 self.assertTrue(request('/api/settings', equal)['ok'])
-                self.assertEqual(candidate()['similar']['percent'], 38)
+                self.assertEqual(candidate()['similar']['percent'], 69)
                 preview = dict(equal, similar_publish_weight=0)
                 query = '?weights=' + urllib.parse.quote(json.dumps(preview))
-                self.assertEqual(candidate(query)['similar']['percent'], 25)
+                self.assertEqual(candidate(query)['similar']['percent'], 62)
                 # Previewing changes neither the saved settings nor the next normal result.
                 self.assertEqual(request('/api/settings')['weights'], equal)
-                self.assertEqual(candidate()['similar']['percent'], 38)
+                self.assertEqual(candidate()['similar']['percent'], 69)
                 title_only = dict(equal, similar_publish_weight=0, similar_length_weight=0, similar_title_weight=1)
                 query = '?weights=' + urllib.parse.quote(json.dumps(title_only))
-                self.assertEqual(candidate(query)['similar']['percent'], 75)
+                self.assertEqual(candidate(query)['similar']['percent'], 88)
                 all_three = dict(equal, similar_title_weight=1)
                 query = '?weights=' + urllib.parse.quote(json.dumps(all_three))
-                self.assertEqual(candidate(query)['similar']['percent'], 50)
+                self.assertEqual(candidate(query)['similar']['percent'], 75)
                 self.assertEqual(request('/api/settings')['weights'], equal)
                 invalid = dict(equal, similar_length_weight=-1)
                 with self.assertRaises(urllib.error.HTTPError) as error:
                     request('/api/settings', invalid)
                 self.assertEqual(error.exception.code, 400)
                 self.assertEqual(request('/api/settings')['weights'], equal)
-                off = dict(equal, similar_publish_weight=0, similar_length_weight=0)
+                off = dict(equal, similar_base_percent=0, similar_publish_weight=0, similar_length_weight=0)
                 self.assertTrue(request('/api/settings', off)['ok'])
                 self.assertTrue(all(it['similar'] is None for it in request('/api/feed')['items']))
                 with urllib.request.urlopen(base + '/', timeout=5) as response:
