@@ -743,7 +743,8 @@ def ranked_feed(ranker: str, limit: int, weights: dict | None = None, *, enrich:
         enrich_posts(extra, extra_count)
     with lock:
         n_pending = len(pending)
-    return {"items": visible, "total": ranked.total, "pending": n_pending, "ranker": ranker}
+    return {"items": ranking.explain_similarities(visible, ranked.source, weights or ranking.WEIGHTS),
+            "total": ranked.total, "pending": n_pending, "ranker": ranker}
 
 
 def append_line(path: Path, url: str, tags: list[str]):

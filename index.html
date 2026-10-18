@@ -27,9 +27,23 @@
   .tags span { font-size: 12px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); }
   .why { padding: 0 16px 10px; color: var(--muted); font-size: 13px; }
   .why summary { cursor: pointer; width: max-content; }
-  .why table { border-collapse: collapse; margin-top: 4px; }
-  .why td { padding: 1px 12px 1px 0; }
-  .why td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+  .why table { border-collapse: collapse; width: 100%; margin-top: 8px; }
+  .why td { padding: 7px 0; vertical-align: top; overflow-wrap: anywhere; }
+  .why tr + tr { border-top: 1px solid var(--border); }
+  .why .points { padding-right: 12px; text-align: right; white-space: nowrap; width: 1%; font-variant-numeric: tabular-nums; font-weight: 600; color: var(--text); }
+  .why .reason-label { color: var(--text); }
+  .why .reason-detail { font-size: 12px; line-height: 1.5; margin-top: 3px; }
+  .similar-match { border-left: 2px solid var(--border); padding-left: 8px; margin-top: 8px; font-size: 12px; }
+  .match-title { color: var(--text); margin-bottom: 3px; overflow-wrap: anywhere; }
+  .match-title a { color: inherit; text-decoration: none; }
+  .match-title a:hover { text-decoration: underline; }
+  .match-title mark { background: transparent; color: inherit; font-weight: 700; text-decoration: underline; text-decoration-color: var(--accent); text-underline-offset: 3px; }
+  .match-component { display: flex; flex-wrap: wrap; gap: 2px 10px; font-variant-numeric: tabular-nums; }
+  .match-component > :first-child { flex: 0 0 58px; }
+  .match-component > :last-child { margin-left: auto; }
+  .match-average { margin-top: 3px; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+  .match-list > .reason-detail { overflow-wrap: anywhere; }
+  .match-list > details { margin-top: 8px; }
   .play { position: relative; display: block; width: 100%; padding: 0; border: 0; border-radius: 0; background: #000; }
   .play img { opacity: .9; }
   .viewed { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 0 10px 8px 16px; font-size: 13px; color: var(--muted); }
@@ -137,7 +151,7 @@ let playing = null;  // url of the video playing on this page
 // Fields that change when you open or color an item, or when its subscription gets a new post. They're
 // updated in place, not by rebuilding the card, so a video you just started keeps playing.
 const VIEW_FIELDS = ["color", "last_viewed", "skipped", "next_after", "series_first", "similar", "sub_last_viewed",
-  "score", "reasons"];
+  "score", "reasons", "score_weights", "recent_match", "above_matches"];
 const contentKey = (item) => JSON.stringify(item, (k, v) => (VIEW_FIELDS.includes(k) ? undefined : v));
 
 async function post(path, body) {
@@ -298,6 +312,11 @@ function showViewState(art, item) {
   const old = art.querySelector(".why"), details = why(item);
   if (old.outerHTML === details.outerHTML) return;
   details.open = old.open;
+  if (details.open) details.dispatchEvent(new Event("toggle"));
+  if (old.querySelector(".additional-matches[open]")) {
+    const more = details.querySelector(".additional-matches");
+    if (more) more.open = true;
+  }
   old.replaceWith(details);
 }
 
@@ -352,17 +371,91 @@ function render() {
 const fmtPoints = (n) => (n > 0 ? "+" : n < 0 ? "−" : "±") + Math.round(Math.abs(n) * 100) / 100;
 
 // Shows why the card is where it is: the ranker's reasons and the points each one added.
+function scoreDetail(item, reason) {
+  const w = item.score_weights;
+  if (!w) return "";
+  const label = reason.label, n = (v) => String(Math.round(v * 100) / 100).replace("-", "−");
+  const rate = (v) => String(v).replace("-", "−");
+  if (label.startsWith("similarity to ")) {
+    const match = label.match(/similarity to (\d+) posts? above, (\d+)% total/);
+    return match ? `−${rate(w.above_similarity_penalty)} × ${match[2]}% similarity · ${match[1]} above` : "";
+  }
+  if (item.similar && label.includes("% like")) {
+    const like = item.similar;
+    const remaining = 100 * (1 - like.hours / w.similar_hours);
+    return `−${rate(w.similar_penalty)} × ${like.percent}% similarity × ${n(remaining)}% remaining · ${like.hours}/${rate(w.similar_hours)} h elapsed`;
+  }
+  if (label.startsWith("estimated ")) return `${n(item.estimated_minutes)} min × ${rate(w.length_per_minute)} pts/min`;
+  if (label.startsWith("age ")) {
+    return `${rate(w.age_per_day)} pts/day`;
+  }
+  return "";
+}
+
+function highlightedTitle(match) {
+  return (match.title_parts || [{ text: match.title, shared: false }])
+    .map((part) => part.shared ? el("mark", {}, part.text) : part.text);
+}
+
+function matchBreakdown(match) {
+  const n = (v) => Math.round(v * 100) / 100;
+  const components = match.components.filter((c) => c.percent != null);
+  const denominator = components.reduce((sum, c) => sum + c.weight, 0);
+  const terms = components.filter((c) => c.percent * c.weight !== 0);
+  return el("div", { class: "similar-match" },
+    el("div", { class: "match-title" }, `${match.percent}% · `,
+      el("a", { href: match.url, target: "_blank", rel: "noopener noreferrer" }, ...highlightedTitle(match))),
+    ...(match.self ? [el("div", {}, "Same item · 100% match")] : [
+      ...match.components.filter((c) => c.weight !== 0 && c.percent !== 0).map((c) => el("div", {},
+        el("div", { class: "match-component" },
+          el("span", {}, c.label), el("span", {}, c.input),
+          el("span", {}, c.percent == null ? "—" : `${n(c.percent)}% × ${c.weight}`)))),
+      el("div", { class: "match-average" },
+        `(${terms.map((c) => `${n(c.percent)}% × ${c.weight}`).join(" + ") || "0"}) ÷ ${denominator} ≈ ${match.percent}%`),
+    ]));
+}
+
+function similarityMatches(item, reason) {
+  if (reason.label.startsWith("similarity to ") && item.above_matches?.length) {
+    const matches = item.above_matches;
+    return el("div", { class: "match-list" },
+      el("div", { class: "reason-detail" }, `${matches.length} from same subscription · ${matches.reduce((sum, m) => sum + m.percent, 0)}% combined`),
+      ...matches.slice(0, 3).map(matchBreakdown),
+      matches.length > 3 ? lazyDetails({ class: "additional-matches" },
+        `${matches.length - 3} more match${matches.length === 4 ? "" : "es"}`,
+        () => matches.slice(3).map(matchBreakdown)) : null);
+  }
+  return reason.label.includes("% like") && item.recent_match ? matchBreakdown(item.recent_match) : null;
+}
+
+// Closed cards and folded match lists do not need their detailed DOM yet.
+function lazyDetails(attrs, summary, children) {
+  const details = el("details", attrs, el("summary", {}, summary));
+  let populated = false;
+  details.addEventListener("toggle", () => {
+    if (!details.open || populated) return;
+    populated = true;
+    const content = children();
+    details.append(...(Array.isArray(content) ? content : [content]));
+  });
+  return details;
+}
+
+function scoreRows(item) {
+  const rows = item.reasons.filter((r) => r.points !== 0).map((r) => el("tr", {},
+    el("td", { class: "points" }, fmtPoints(r.points)),
+    el("td", {}, el("div", { class: "reason-label" },
+        r.label.startsWith("similarity to ") ? "Similar posts above"
+          : item.recent_match && r.label.includes("% like") ? `Similar to recently ${item.similar.skipped ? "skipped" : "opened"}`
+          : r.label.replace(/, [\d.]+% penalty remaining$/, "")),
+      scoreDetail(item, r) ? el("div", { class: "reason-detail" }, scoreDetail(item, r)) : null,
+      similarityMatches(item, r))));
+  return rows.length ? el("table", { "aria-label": "Bonuses and penalties" }, el("tbody", {}, ...rows))
+      : el("div", { class: "reason-detail" }, "No bonuses or penalties apply.");
+}
+
 function why(item) {
-  const rows = item.reasons.map((r) => el("tr", {}, el("td", {}, r.label), el("td", {}, fmtPoints(r.points))));
-  const origin = item.kind === "subscription" ? `from subscription “${item.feed}”` : "from links.txt";
-  const note = el("div", {}, item.reasons.length
-    ? `Equal scores are ordered unopened first, then newest first. This item is ${origin}.`
-    : `No ranking rules apply, so it is ordered by date, newest first. This item is ${origin}.`);
-  return el("details", { class: "why" },
-    el("summary", {}, `Score ${fmtPoints(item.score).replace(/^\+/, "")}`),
-    rows.length ? el("table", {}, ...rows) : null,
-    note,
-  );
+  return lazyDetails({ class: "why" }, `Score ${Math.round(item.score * 100) / 100}`, () => scoreRows(item));
 }
 
 // One request at a time: calls while one is running (such as from a slider being dragged) are

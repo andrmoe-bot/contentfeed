@@ -30,7 +30,7 @@ def brute_force(items, weights):
                 strength = percent * (1 - hours / weights["similar_hours"])
                 if strength and (not best or strength > best["strength"]
                                  or (strength == best["strength"] and why == "itself")):
-                    best = {"title": other["title"], "hours": hours, "percent": percent,
+                    best = {"title": other["title"], "url": other["url"], "hours": hours, "percent": percent,
                             "strength": strength, "why": why, "skipped": other.get("skipped", False)}
         it["similar"] = best
 
