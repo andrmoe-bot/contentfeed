@@ -403,7 +403,7 @@ function matchBreakdown(match) {
   const totalWeight = available.reduce((sum, c) => sum + c.weight, 0);
   const base = match.base_percent || 0;
   const components = base ? [
-    { label: "Subscription", percent: 100, weight: base, input: "same subscription" },
+    { label: "Subscription", percent: 100, weight: base },
     ...match.components.map((c) => ({ ...c,
       weight: c.percent == null || !totalWeight ? 0 : (100 - base) * c.weight / totalWeight })),
   ] : match.components;
@@ -416,7 +416,7 @@ function matchBreakdown(match) {
     ...(match.self ? [el("div", {}, "Same item · 100% match")] : [
       ...components.filter((c) => c.weight !== 0 && c.percent !== 0).map((c) => el("div", {},
         el("div", { class: "match-component" },
-          el("span", {}, c.label), el("span", {}, c.input),
+          el("span", {}, c.label), c.input ? el("span", {}, c.input) : null,
           el("span", {}, c.percent == null ? "—" : `${n(c.percent)}% × ${n(c.weight)}`)))),
       el("div", { class: "match-average" },
         calculation),
