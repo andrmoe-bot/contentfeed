@@ -235,7 +235,7 @@ The default, `score`, adds up these points. With the default settings:
   the next part of its series (see below) or, if it has none, the post published next. Jellyfin
   series go in episode order. Tag a subscription `latest` in feeds.txt to turn next up off for it,
   such as a news feed.
-- −30 for anything you've opened or skipped, other than next up
+- −30 for anything you've opened or skipped, including next up
 - 0 if nothing from its subscription has been opened yet, such as one you just subscribed to
 - −30 for a later part of a series when you haven't opened anything before it (see below)
 - −40 × similarity × the fraction of the 24-hour window remaining since opening, using the strongest remaining penalty (see below)

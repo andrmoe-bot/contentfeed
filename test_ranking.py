@@ -35,6 +35,24 @@ def brute_force(items, weights):
         it["similar"] = best
 
 
+class ViewedPenaltyTests(unittest.TestCase):
+    def test_next_up_and_seen_points_apply_independently(self):
+        for skipped in (False, True):
+            for bonus in (0, 30, 50):
+                with self.subTest(skipped=skipped, bonus=bonus):
+                    post = item('episode', 'feed', age=48)
+                    post.update(next_after='previous episode', skipped=skipped)
+                    weights = dict(ranking.DEFAULT_WEIGHTS, next_up_bonus=bonus)
+                    reasons = ranking.score(post, NOW, weights)
+                    seen = [(label, points) for label, points in reasons
+                            if label.startswith('skipped' if skipped else 'opened')]
+                    self.assertEqual(len(seen), 1)
+                    self.assertEqual(seen[0][1], -30)
+                    self.assertEqual(sum(points for _, points in reasons), bonus - 30)
+                    post['last_viewed'] = None
+                    self.assertEqual(sum(points for _, points in ranking.score(post, NOW, weights)), bonus)
+
+
 class AgeTests(unittest.TestCase):
     def test_default_is_disabled(self):
         self.assertEqual(ranking.DEFAULT_WEIGHTS['age_per_day'], 0)

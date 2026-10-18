@@ -59,7 +59,7 @@ DEFAULT = "score"
 # values in settings.json.
 DEFAULT_WEIGHTS = {
     "next_up_bonus": 30,  # the post after the one you opened most recently in a subscription
-    "seen_bonus": -30,  # items you've opened (other than next up); below 0 puts them under unopened ones
+    "seen_bonus": -30,  # items you've opened or skipped; below 0 puts them under unopened ones
     "new_sub_bonus": 0,  # for posts from a subscription you've never opened anything from
     "similar_penalty": 40,  # taken off at 100% like something you opened recently (see similarity):
     "similar_hours": 24,  # penalty fades linearly to zero this many hours after opening
@@ -476,14 +476,14 @@ def chronological(item: dict, now: float, weights: dict) -> Reasons:
 
 @ranker("score", spread=True)
 def score(item: dict, now: float, weights: dict) -> Reasons:
-    """Points for next up or opened before, a new subscription, a later part of a series, being like
+    """Points for next up, opened before, a new subscription, a later part of a series, being like
     something opened recently, its media type, and green. rank() then penalizes similarity to posts above it."""
     w = weights
     reasons = []
     if item.get("next_after") and "latest" not in item["tags"]:
         if w["next_up_bonus"]:
             reasons.append((f"next up after “{short(item['next_after'])}”", w["next_up_bonus"]))
-    elif item["last_viewed"] is not None and w["seen_bonus"]:
+    if item["last_viewed"] is not None and w["seen_bonus"]:
         away = hours_since(now, item["last_viewed"])
         verb = "skipped" if item.get("skipped") else "opened"
         reasons.append((f"{verb} {hours_label(away)} ago" if away else f"{verb} in the last hour", w["seen_bonus"]))
