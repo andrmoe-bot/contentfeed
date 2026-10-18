@@ -447,6 +447,8 @@ const SETTINGS = [
     hint: "For everything else: articles, blog posts and other pages. Below 0: a penalty." },
   { key: "length_per_minute", label: "Content length", before: "", after: "points per minute",
     hint: "Estimated runtime, or reading time at 200 words per minute. Positive favors longer content; negative favors shorter content. Unknown lengths have no adjustment. Default: 0." },
+  { key: "age_per_day", label: "Age", before: "", after: "points per day",
+    hint: "Time since publication for posts, or since addition for links, updated in whole hours. Negative favors newer items; positive favors older items. Future dates count as age 0. Default: 0." },
   { key: "green_bonus_points", label: "Green", before: "+", after: "points", hint: "For items you marked green." },
   { key: "similar_penalty", label: "Similar", before: "−", after: "points at 100% alike, within",
     extra: { key: "similar_hours", type: "number", after: "hours" },
@@ -462,7 +464,7 @@ const SETTINGS = [
 ];
 // Every setting, including the second box some have, such as Similar's hours
 const KEYS = SETTINGS.flatMap(({ key, extra }) => (extra ? [key, extra.key] : [key]));
-const SIGNED = ["seen_bonus", "video_bonus", "image_bonus", "article_bonus", "length_per_minute"];  // may be negative: the sign says which way
+const SIGNED = ["seen_bonus", "video_bonus", "image_bonus", "article_bonus", "length_per_minute", "age_per_day"];  // may be negative: the sign says which way
 const LIMIT = 10_000_000;
 let saved = {};  // as saved on the server
 let draft = {};  // as shown in the panel
@@ -581,6 +583,7 @@ function showFormula() {
     ["image_bonus", `${plus(w.image_bonus)} if image`],
     ["article_bonus", `${plus(w.article_bonus)} if article`],
     ["length_per_minute", `${plus(w.length_per_minute)} × estimated minutes`],
+    ["age_per_day", `${plus(w.age_per_day)} × age in days`],
     ["green_bonus_points", `${plus(w.green_bonus_points)} if green`],
     ["above_similarity_penalty", ` − ${fmt(w.above_similarity_penalty)} × summed similarity to posts above`],
   ].filter(([key]) => shownTerms.has(key)).map(([, text]) => text).join("");
