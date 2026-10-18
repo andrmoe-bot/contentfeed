@@ -40,6 +40,7 @@ Keep points stable between page updates, for example by using whole hours rather
 for age, so the page doesn't redraw every time it checks for changes.
 """
 
+import bisect
 import functools
 import heapq
 import math
@@ -219,6 +220,112 @@ def similarity(item: dict, other: dict, weights: dict) -> tuple[int, str]:
     return percent, similarity_reason(item, other, metric, first, second)
 
 
+@functools.lru_cache(maxsize=4096)
+def title_word_spans(title: str) -> tuple:
+    """Map ranking tokens back to the original title, including Unicode expansions."""
+    normalized = unicodedata.normalize("NFKC", title).casefold()
+    lengths = [len(unicodedata.normalize("NFKC", title[:i]).casefold()) for i in range(len(title) + 1)]
+    spans = []
+    for match in re.finditer(r"[^\W_]+", normalized):
+        start = bisect.bisect_right(lengths, match.start()) - 1
+        end = bisect.bisect_left(lengths, match.end())
+        end = bisect.bisect_right(lengths, lengths[end]) - 1
+        # Keep combining marks with their original base character when normalization reorders them.
+        while start > 0 and unicodedata.category(title[start]).startswith("M"):
+            start -= 1
+        while end < len(title) and unicodedata.category(title[end]).startswith("M"):
+            end += 1
+        spans.append((match.group(), start, end))
+    return tuple(spans)
+
+
+def highlighted_title_parts(title: str, shared: set | frozenset) -> list[dict]:
+    ranges = []
+    for word, start, end in title_word_spans(title):
+        if word not in shared:
+            continue
+        if ranges and start <= ranges[-1][1]:
+            ranges[-1][1] = max(end, ranges[-1][1])
+        else:
+            ranges.append([start, end])
+    parts = []
+    at = 0
+    for start, end in ranges:
+        if start > at:
+            parts.append({"text": title[at:start], "shared": False})
+        parts.append({"text": title[start:end], "shared": True})
+        at = end
+    if at < len(title):
+        parts.append({"text": title[at:], "shared": False})
+    return parts
+
+
+def similarity_breakdown(item: dict, other: dict, weights: dict) -> dict:
+    """Numeric inputs for a displayed match; uses the ranking metric unchanged."""
+    metric = similarity_metric(weights["similar_days"], weights["similar_publish_weight"],
+                               weights["similar_length_weight"], weights["similar_title_weight"])
+    first_minutes, second_minutes = item.get("estimated_minutes"), other.get("estimated_minutes")
+    first_minutes = first_minutes if valid_minutes(first_minutes) else None
+    second_minutes = second_minutes if valid_minutes(second_minutes) else None
+    first_title, second_title = title_tokens(item.get("title")), title_tokens(other.get("title"))
+    if item["url"] == other["url"]:
+        percent = 100
+    elif item.get("sub") and item.get("sub") == other.get("sub"):
+        percent = metric.percent(item["date"], first_minutes, other["date"], second_minutes, first_title, second_title)
+    else:
+        percent = 0
+    components = []
+    gap_days = abs(item["date"] - other["date"]) / 86400
+    if weights["similar_publish_weight"]:
+        value = max(0, 1 - gap_days / weights["similar_days"]) if weights["similar_days"] else 0
+        components.append({"label": "Published", "percent": points(100 * value),
+                           "weight": weights["similar_publish_weight"],
+                           "input": f"{points(gap_days)} / {weights['similar_days']} days apart"})
+    if weights["similar_length_weight"]:
+        first, second = first_minutes, second_minutes
+        known = first is not None and second is not None
+        components.append({"label": "Length", "percent": points(100 * min(first, second) / max(first, second)) if known else None,
+                           "weight": weights["similar_length_weight"],
+                           "input": f"{points(min(first, second))} ÷ {points(max(first, second))} min" if known else "unknown · omitted"})
+    if weights["similar_title_weight"]:
+        first, second = first_title, second_title
+        known = bool(first and second)
+        components.append({"label": "Title", "percent": points(100 * title_fraction(first, second)) if known else None,
+                           "weight": weights["similar_title_weight"],
+                           "shared_words": sorted(first & second),
+                           "input": f"2 × {len(first & second)} shared ÷ ({len(first)} + {len(second)}) words" if known else "unknown · omitted"})
+    title = other.get("title") or "Untitled"
+    shared = (first_title & second_title) if weights["similar_title_weight"] else frozenset()
+    return {"title": title, "url": other["url"], "percent": percent,
+            "title_parts": highlighted_title_parts(title, shared) if shared else [{"text": title, "shared": False}],
+            "self": item["url"] == other["url"], "components": components}
+
+
+def explain_similarities(visible: list[dict], source: list[dict], weights: dict) -> list[dict]:
+    """Enrich only displayed cards, keeping pair details out of the ranking cache."""
+    by_url = {item["url"]: item for item in source}
+    groups = {}
+    explained = []
+    for item in visible:
+        out = {**item, "score_weights": dict(weights)}
+        recent = item.get("similar")
+        if recent:
+            other = by_url.get(recent.get("url"))
+            if other:
+                out["recent_match"] = similarity_breakdown(item, other, weights)
+        if any(r["label"].startswith("similarity to ") for r in item["reasons"]):
+            matches = []
+            for other in groups.get(item.get("sub"), []):
+                match = similarity_breakdown(item, other, weights)
+                if match["percent"]:
+                    matches.append(match)
+            out["above_matches"] = matches
+        if item.get("sub"):
+            groups.setdefault(item["sub"], []).append(item)
+        explained.append(out)
+    return explained
+
+
 def similarity_reason(item: dict, other: dict, metric: SimilarityMetric, first, second) -> str:
     """Build text only for a selected match, not every candidate comparison."""
     gap = abs(item["date"] - other["date"]) / 3600
@@ -293,6 +400,7 @@ def similar_to_recent(items: list[dict], now: float, weights: dict, title_words:
                         "skipped": other.get("skipped", False), "other": other, "minutes": second}
         if best:
             other, second = best.pop("other"), best.pop("minutes")
+            best["url"] = other["url"]
             best["why"] = "itself" if it["url"] == other["url"] else similarity_reason(it, other, metric, first, second)
         it["similar"] = best
 
