@@ -150,7 +150,7 @@ let playing = null;  // url of the video playing on this page
 
 // Fields that change when you open or color an item, or when its subscription gets a new post. They're
 // updated in place, not by rebuilding the card, so a video you just started keeps playing.
-const VIEW_FIELDS = ["color", "last_viewed", "skipped", "series_first", "similar", "sub_last_viewed",
+const VIEW_FIELDS = ["color", "last_viewed", "skipped", "next_after", "series_first", "similar", "sub_last_viewed",
   "score", "reasons", "score_weights", "recent_match", "above_matches"];
 const contentKey = (item) => JSON.stringify(item, (k, v) => (VIEW_FIELDS.includes(k) ? undefined : v));
 
@@ -179,11 +179,11 @@ async function opened(item) {
 const COLORS = ["green", "white", "red"];
 const COLOR_TITLES = {
   green: "Green: ranked higher",
-  white: "White (default): skip, like viewing it",
+  white: "White (default): skip, like viewing it but without making what comes after it next up",
   red: "Red: ranked at the bottom",
 };
 
-// White also skips the item: it scores as if you'd viewed it.
+// White also skips the item: it scores as if you'd viewed it, but neither it nor what comes after it is next up.
 async function setColor(item, color) {
   item = latest(item);
   const skip = color === "white";
@@ -530,6 +530,8 @@ async function fetchFeed() {
 const SETTINGS = [
   { key: "enrich_count", label: "Update incomplete posts", before: "", after: "posts on page load",
     hint: "Fetch missing runtime or exact publication time for this many highest-ranked incomplete posts when you open the site. 0 turns this off. This does not add score points." },
+  { key: "next_up_bonus", label: "Next up", before: "+", after: "points",
+    hint: "Next up is the post after the one you opened most recently in a subscription: the next part of its series, or else the next published. Skipping (the white dot) doesn't make anything next up. Not for subscriptions tagged “latest”." },
   { key: "seen_bonus", label: "Seen", before: "", after: "points",
     hint: "For items you've opened or skipped (the white dot). Below 0: they go under things you haven't opened." },
   { key: "new_sub_bonus", label: "New subscription", before: "+", after: "points",
@@ -688,8 +690,9 @@ function showFormula() {
     ["green_bonus_points", `${plus(w.green_bonus_points)} if green`],
     ["above_similarity_penalty", ` − ${fmt(w.above_similarity_penalty)} × summed similarity to posts above`],
   ].filter(([key]) => shownTerms.has(key)).map(([, text]) => text).join("");
+  const next = shownTerms.has("next_up_bonus") ? `next up: ${fmt(w.next_up_bonus)} · ` : "";
   const opened = shownTerms.has("seen_bonus") ? `opened: ${fmt(w.seen_bonus)} · ` : "";
-  document.getElementById("formula").textContent = `${opened}all:${terms || " 0"}; red at the bottom`;
+  document.getElementById("formula").textContent = `${next}${opened}all:${terms || " 0"}; red at the bottom`;
 }
 
 function panelSay(text, isError = false) {

@@ -17,6 +17,9 @@ Each item has its page metadata (url, title, description, domain, ...) plus thes
     last_viewed  unix time you last opened or skipped it (the white dot), or None
     skipped      True if the last of those was a skip
     color        "green", "white" (the default) or "red", as you marked it on the page
+    next_after   for a post: the title of the post you opened (not skipped) most recently in its subscription,
+                 if this post comes right after that one ("what's next"): the next part of its series
+                 (see title_series) or else the next published; otherwise None
     series_first for a later part of a series of which you haven't opened anything before it: the
                  first part's title; otherwise None
     sub          for a post: its subscription's address; None for links
@@ -55,6 +58,7 @@ DEFAULT = "score"
 # Settings for the "score" ranker, in points. These are the defaults; you can change them in the feed's score panel, and server.py keeps your
 # values in settings.json.
 DEFAULT_WEIGHTS = {
+    "next_up_bonus": 30,  # the post after the one you opened most recently in a subscription
     "seen_bonus": -30,  # items you've opened or skipped; below 0 puts them under unopened ones
     "new_sub_bonus": 0,  # for posts from a subscription you've never opened anything from
     "similar_penalty": 40,  # taken off at 100% like something you opened recently (see similarity):
@@ -472,10 +476,13 @@ def chronological(item: dict, now: float, weights: dict) -> Reasons:
 
 @ranker("score", spread=True)
 def score(item: dict, now: float, weights: dict) -> Reasons:
-    """Points for opened before, a new subscription, a later part of a series, being like
+    """Points for next up, opened before, a new subscription, a later part of a series, being like
     something opened recently, its media type, and green. rank() then penalizes similarity to posts above it."""
     w = weights
     reasons = []
+    if item.get("next_after") and "latest" not in item["tags"]:
+        if w["next_up_bonus"]:
+            reasons.append((f"next up after “{short(item['next_after'])}”", w["next_up_bonus"]))
     if item["last_viewed"] is not None and w["seen_bonus"]:
         away = hours_since(now, item["last_viewed"])
         verb = "skipped" if item.get("skipped") else "opened"

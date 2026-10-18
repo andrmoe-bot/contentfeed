@@ -36,19 +36,21 @@ def brute_force(items, weights):
 
 
 class ViewedPenaltyTests(unittest.TestCase):
-    def test_viewed_and_skipped_posts_always_receive_seen_penalty(self):
+    def test_next_up_and_seen_points_apply_independently(self):
         for skipped in (False, True):
-            with self.subTest(skipped=skipped):
-                post = item('episode', 'feed', age=48)
-                # Old cached metadata must never override the viewed penalty.
-                post.update(next_after='previous episode', skipped=skipped)
-                reasons = ranking.score(post, NOW, ranking.DEFAULT_WEIGHTS)
-                self.assertEqual(sum(points for _, points in reasons), -30)
-                self.assertEqual(len(reasons), 1)
-                self.assertIn('skipped' if skipped else 'opened', reasons[0][0])
-        self.assertNotIn('next_up_bonus', ranking.DEFAULT_WEIGHTS)
-        self.assertEqual(ranking.score(item('unopened', 'feed'), NOW,
-                                       ranking.DEFAULT_WEIGHTS), [])
+            for bonus in (0, 30, 50):
+                with self.subTest(skipped=skipped, bonus=bonus):
+                    post = item('episode', 'feed', age=48)
+                    post.update(next_after='previous episode', skipped=skipped)
+                    weights = dict(ranking.DEFAULT_WEIGHTS, next_up_bonus=bonus)
+                    reasons = ranking.score(post, NOW, weights)
+                    seen = [(label, points) for label, points in reasons
+                            if label.startswith('skipped' if skipped else 'opened')]
+                    self.assertEqual(len(seen), 1)
+                    self.assertEqual(seen[0][1], -30)
+                    self.assertEqual(sum(points for _, points in reasons), bonus - 30)
+                    post['last_viewed'] = None
+                    self.assertEqual(sum(points for _, points in ranking.score(post, NOW, weights)), bonus)
 
 
 class AgeTests(unittest.TestCase):
