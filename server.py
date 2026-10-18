@@ -431,8 +431,7 @@ def poll_subscriptions():
 COLORS = ("green", "white", "red")
 
 
-# Skipping an item (the white dot) counts as viewing it, except for next up: what comes after a post you
-# skipped isn't next up, and nor is a post you skipped. Whichever you did last counts.
+# Opening and skipping both count as viewing an item.
 def seen_at(url: str) -> float | None:
     """When you last opened or skipped url. Call with lock held."""
     return max(viewed.get(url, 0), skipped.get(url, 0)) or None
@@ -578,17 +577,11 @@ def load_settings():
         print(f"Ignoring {SETTINGS_FILE}: {e}")
 
 
-def series_state(subs) -> tuple[dict[str, str], dict[str, str]]:
-    """Call with lock held. Returns:
-    - next up, as {its url: the opened post's title}: for each subscription, the post after the one
-      you opened most recently: the next part of its series, or else the next published. Skipped posts
-      don't count as opened here, and a post you skipped isn't next up. A subscription
-      whose posts belong to series of their own, such as a Jellyfin server's TV shows, has a next post
-      in each series, in episode order.
-    - later parts of a series none of whose earlier parts you've opened, as {url: the first part's title}.
-    Series are found from titles (see ranking.title_series), or for Jellyfin and NRK TV from episode order.
-    Posts marked no_series, such as NRK TV's news, have no series."""
-    next_up, unstarted = {}, {}
+def series_state(subs) -> dict[str, str]:
+    """Later series parts without an earlier viewed part, as {url: first part's title}.
+    Call with lock held. Series come from titles or episode order; no_series posts are excluded.
+    """
+    unstarted = {}
     for sub_url in subs:
         groups = {}
         for p in subscriptions.get(sub_url, {}).get("items", []):  # newest first
@@ -599,13 +592,6 @@ def series_state(subs) -> tuple[dict[str, str], dict[str, str]]:
             else:
                 posts.sort(key=lambda p: p.get("episode", []), reverse=True)  # last episode first; stable otherwise
                 prev = {p["url"]: posts[i + 1] for i, p in enumerate(posts[:-1])}
-            opened = [(t, i) for i, p in enumerate(posts) if (t := opened_at(p["url"]))]
-            if opened:
-                i = max(opened)[1]
-                after = [p for p in posts if prev.get(p["url"]) is posts[i]]
-                nxt = after[0] if after else posts[i - 1] if i > 0 else None
-                if nxt and not view_state(nxt["url"])["skipped"]:
-                    next_up.setdefault(nxt["url"], posts[i]["title"] or posts[i]["url"])
             # For each part: (the series' first part, whether it or anything before it was opened)
             state = {}
             for p in posts:
@@ -618,7 +604,7 @@ def series_state(subs) -> tuple[dict[str, str], dict[str, str]]:
                     state[q["url"]] = (first, any_opened or seen_at(q["url"]) is not None)
                     if before and not any_opened:
                         unstarted.setdefault(q["url"], first["title"] or first["url"])
-    return next_up, unstarted
+    return unstarted
 
 
 def last_opened(subs) -> dict[str, float]:
@@ -704,7 +690,7 @@ def ranked_feed(ranker: str, limit: int, weights: dict | None = None, *, enrich:
                 for i, (url, tags) in enumerate(entries.items())
             ]
             seen = set(entries)
-            next_after, series_first = series_state(subs)
+            series_first = series_state(subs)
             sub_opened = last_opened(subs)
             for sub_url, tags in subs.items():
                 s = subscriptions.get(sub_url, {})
@@ -720,8 +706,7 @@ def ranked_feed(ranker: str, limit: int, weights: dict | None = None, *, enrich:
                         "sub_last_viewed": sub_opened.get(sub_url), "sub": sub_url,
                     })
             for item in items:
-                item.update(view_state(item["url"]), next_after=next_after.get(item["url"]),
-                            series_first=series_first.get(item["url"]))
+                item.update(view_state(item["url"]), series_first=series_first.get(item["url"]))
             n_pending = len(pending)
     if new:
         save_json(ADDED_FILE, added, affects_feed=False)

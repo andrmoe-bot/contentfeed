@@ -191,11 +191,10 @@ series. The feed gets the episodes you can watch now, from NRK's public catalogu
 which needs no login. It isn't documented, so it can break when NRK changes it; the Subscriptions page
 then shows the error.
 
-A series with seasons, such as a drama, is a series in the feed too: open an episode and the next
-one in season and episode order is next up, and later episodes are held back until you've opened an
-earlier one. Episodes that are no longer available leave the feed. Other series, such as the news or
-talk shows, list their episodes by date; the feed reads up to the 1000 newest, and next up is the
-episode published after the one you opened. Their titles say the date ("5. oktober"), even where NRK
+A series with seasons, such as a drama, is a series in the feed too: later episodes are held
+back until you've opened an earlier one. Episodes that are no longer available leave the feed.
+Other series, such as the news or talk shows, list their episodes by date; the feed reads up to
+the 1000 newest. Their titles say the date ("5. oktober"), even where NRK
 says "I dag" or "Fredag". Episodes are dated by when they came out on NRK TV.
 
 Clicking a card opens the episode on tv.nrk.no; it doesn't play in the card. Many programs can only
@@ -217,8 +216,7 @@ yet; for now they change an item's score:
 
 - **green**: 0 by default; give it points in the score panel (see Ranking)
 - **white**: the default, no change. Clicking white also skips the item: it counts as viewed (the card
-  says "Skipped"), except that it doesn't make anything next up. Neither the item nor the post after it
-  gets the next-up bonus, so you can pass over an episode without the feed pushing the following one.
+  says "Skipped").
 - **red**: puts it at the bottom, below everything else
 
 ## Ranking
@@ -231,11 +229,7 @@ last opened an item. A ranker returns reasons with points, such as
 
 The default, `score`, adds up these points. With the default settings:
 
-- +30 for **next up**: the post after the one you opened (not skipped) most recently in its subscription. That's
-  the next part of its series (see below) or, if it has none, the post published next. Jellyfin
-  series go in episode order. Tag a subscription `latest` in feeds.txt to turn next up off for it,
-  such as a news feed.
-- −30 for anything you've opened or skipped, other than next up
+- −30 for anything you've opened or skipped
 - 0 if nothing from its subscription has been opened yet, such as one you just subscribed to
 - −30 for a later part of a series when you haven't opened anything before it (see below)
 - −40 × similarity × the fraction of the 24-hour window remaining since opening, using the strongest remaining penalty (see below)
@@ -257,7 +251,7 @@ one that's 1 higher: "Making a CPU, part 2: the ALU" follows "Making a CPU, part
 follows "S01E04". Only the numbers are compared, not the words, and only between posts at most 10
 apart in the subscription; numbers of 1000 or more, such as years, don't count. Posts that follow
 each other make a series, whose first part is the one that follows nothing. So "part 3" is held back
-until you've opened part 1 or 2, and after you open part 2, part 3 is next up. Jellyfin episodes
+until you've opened part 1 or 2. Jellyfin episodes
 and NRK TV episodes are in series by episode order instead, and NRK TV's news and other dated programs have no series. Subscriptions tagged `latest` have no series. Because words aren't compared, unrelated posts are
 sometimes taken for a series, such as "Q&A #2" after "Chapter 1"; the card says which post it
 thinks starts the series.
@@ -295,7 +289,7 @@ How alike two items are, from 0 to 100%:
   similarity penalties entirely, including for opened items.
 
 The similarity penalty fades linearly to zero over 24 hours, updated in whole hours. After you
-watch a video, its channel's next one (published a week later) starts at next up 30 − 35.2;
+watch a video, its channel's next one (published a week later) starts at −35.2;
 after 12 hours, that penalty is only 17.6. These examples use the default 50% subscription base
 and publish-time-only measured similarity.
 Something you've opened starts at −70 (−30 for opened and −40 for being like itself),
@@ -319,7 +313,7 @@ or `in a series starting “Making a CPU, part 1”, nothing before it opened �
 Change the numbers in the score panel: click "Settings" at the top of the feed. It opens
 beside the feed on a wide screen, or along the bottom on a narrow one, and stays open across reloads
 until you close it. Each setting comes with a slider and a box for an exact number:
-Next up, Seen, New subscription, Series, Similar posts above, Video, Image, Article, Content length, Age (Seen, Video, Image, Article, Content length and Age may be
+Seen, New subscription, Series, Similar posts above, Video, Image, Article, Content length, Age (Seen, Video, Image, Article, Content length and Age may be
 negative), Green, Similar
 (which also has its number of hours), Publish time window (days), Publish time similarity and
 Content length similarity and Title similarity (relative weights), and Update incomplete posts (count). The
