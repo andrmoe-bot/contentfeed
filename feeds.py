@@ -394,8 +394,14 @@ def find_all(obj, key: str):
 
 
 def parse_ago(text: str, now: float) -> float | None:
-    m = re.search(r"(\d+)\s+(second|minute|hour|day|week|month|year)s?\s+ago", text or "")
-    return now - int(m.group(1)) * AGO_UNITS[m.group(2)] if m else None
+    m = re.search(r"\b(\d+)\s*(second|minute|hour|day|week|month|year|sec|min|mo|s|m|h|d|w|y)s?\s+ago\b",
+                  text or "", re.IGNORECASE)
+    if not m:
+        return None
+    unit = m.group(2).lower()
+    unit = {"sec": "second", "s": "second", "min": "minute", "m": "minute",
+            "h": "hour", "d": "day", "w": "week", "mo": "month", "y": "year"}.get(unit, unit)
+    return now - int(m.group(1)) * AGO_UNITS[unit]
 
 
 def videos_on_page(data) -> tuple[list[dict], str | None]:
@@ -407,11 +413,13 @@ def videos_on_page(data) -> tuple[list[dict], str | None]:
             continue
         meta = lockup.get("metadata", {})
         title = next(find_all(meta, "title"), {}).get("content", "")
-        labels = [p.get("accessibilityLabel", "") for p in find_all(meta, "metadataParts") for p in p]
+        parts = [part for row in find_all(meta, "metadataParts") for part in row]
+        labels = [part.get("accessibilityLabel", "") for part in parts]
+        labels += [part.get("text", {}).get("content", "") for part in parts]
         duration = next((d for text in find_all(lockup.get("contentImage", {}), "text")
                          if isinstance(text, str) and ':' in text
                          and (d := duration_minutes(text)) is not None), None)
-        videos.append({"id": vid, "title": title, "ago": next((l for l in labels if l.endswith(" ago")), ""),
+        videos.append({"id": vid, "title": title, "ago": next((l for l in labels if parse_ago(l, 0) is not None), ""),
                        "estimated_minutes": duration})
     token = next((c["token"] for c in find_all(data, "continuationCommand") if isinstance(c, dict) and "token" in c), None)
     return videos, token
