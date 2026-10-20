@@ -421,8 +421,68 @@ def videos_on_page(data) -> tuple[list[dict], str | None]:
                          and (d := duration_minutes(text)) is not None), None)
         videos.append({"id": vid, "title": title, "ago": next((l for l in labels if parse_ago(l, 0) is not None), ""),
                        "estimated_minutes": duration})
+    for video in find_all(data, "playlistVideoRenderer"):
+        if video.get("videoId"):
+            title = video.get("title", {})
+            videos.append({"id": video["videoId"],
+                           "title": title.get("simpleText") or "".join(r.get("text", "") for r in title.get("runs", [])),
+                           "ago": "", "estimated_minutes": duration_minutes(video.get("lengthText", {}).get("simpleText", ""))})
     token = next((c["token"] for c in find_all(data, "continuationCommand") if isinstance(c, dict) and "token" in c), None)
     return videos, token
+
+
+def youtube_channel_id(feed_url):
+    if not youtube_playlist_id(feed_url):
+        return None
+    return parse_qs(urlparse(feed_url).query).get("channel_id", [None])[0]
+
+
+def channel_playlists(feed_url):
+    """Import public playlists as ordered video IDs; uploads aren't a series."""
+    channel = youtube_channel_id(feed_url)
+    playlist = youtube_playlist_id(feed_url)
+    if not playlist:
+        return []
+
+    def browse(url, parse):
+        try:
+            with open_url(url, "text/html") as r:
+                page = r.read(MAX_FEED_BYTES * 2).decode("utf-8", errors="replace")
+            data, version = YT_DATA.search(page), YT_VERSION.search(page)
+            if not data or not version:
+                raise FeedError("couldn't import playlists: YouTube's page has changed")
+            entries, token = parse(json.loads(data.group(1)))
+            seen = set()
+            while token and token not in seen:
+                seen.add(token)
+                body = {"context": {"client": {"clientName": "WEB", "clientVersion": version.group(1), "hl": "en"}},
+                        "continuation": token}
+                req = urllib.request.Request(
+                    "https://www.youtube.com/youtubei/v1/browse?prettyPrint=false", data=json.dumps(body).encode(),
+                    headers={"User-Agent": USER_AGENT, "Content-Type": "application/json", "Cookie": "SOCS=CAI"})
+                with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT) as r:
+                    more, token = parse(json.loads(r.read(MAX_FEED_BYTES)))
+                entries.extend(more)
+            return entries
+        except (OSError, ValueError) as e:
+            raise FeedError(f"couldn't import playlists: {e}") from e
+
+    def playlist_ids(data):
+        ids = [v["contentId"] for v in find_all(data, "lockupViewModel")
+               if v.get("contentType") == "LOCKUP_CONTENT_TYPE_PLAYLIST" and v.get("contentId")]
+        for key in ("gridPlaylistRenderer", "playlistRenderer"):
+            ids.extend(v["playlistId"] for v in find_all(data, key) if v.get("playlistId"))
+        token = next((c["token"] for c in find_all(data, "continuationCommand") if "token" in c), None)
+        return ids, token
+
+    ids = browse(f"https://www.youtube.com/channel/{channel}/playlists?hl=en", playlist_ids) if channel else [playlist]
+    result = []
+    for pid in dict.fromkeys(ids):
+        if channel and pid == playlist:
+            continue
+        videos = browse(f"https://www.youtube.com/playlist?list={pid}&hl=en", videos_on_page)
+        result.append({"id": pid, "videos": list(dict.fromkeys(v["id"] for v in videos))})
+    return result
 
 
 def older_videos(feed_url: str, limit: int = MAX_OLDER_VIDEOS) -> list[dict]:

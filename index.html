@@ -25,6 +25,7 @@
   #more:not([hidden]) { display: block; margin: 0 auto 48px; }
   .tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
   .tags span { font-size: 12px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); }
+  .playlists { display: flex; flex-wrap: wrap; gap: 6px 12px; padding: 0 16px 12px; font-size: 13px; }
   .why { padding: 0 16px 10px; color: var(--muted); font-size: 13px; }
   .why summary { cursor: pointer; width: max-content; }
   .why table { border-collapse: collapse; width: 100%; margin-top: 8px; }
@@ -301,7 +302,14 @@ function card(item) {
   const art = el("article", item.loading ? { class: "loading" } : {});
   if (media && !item.youtube && !item.jellyfin && !item.video) link.prepend(media);
   else if (media) art.append(media);
-  art.append(link, why(item), el("div", { class: "viewed" }));
+  art.append(link);
+  if (item.youtube && item.youtube_playlists?.length) {
+    art.append(el("div", { class: "playlists" }, ...item.youtube_playlists.map((id, i) =>
+      el("a", { href: `https://www.youtube.com/playlist?list=${encodeURIComponent(id)}`,
+        target: "_blank", rel: "noopener noreferrer" },
+        item.youtube_playlists.length === 1 ? "YouTube playlist ↗" : `YouTube playlist ${i + 1} ↗`))));
+  }
+  art.append(why(item), el("div", { class: "viewed" }));
   return art;
 }
 
@@ -537,7 +545,7 @@ const SETTINGS = [
   { key: "new_sub_bonus", label: "New subscription", before: "+", after: "points",
     hint: "For posts from a subscription you've never opened anything from, such as one you just subscribed to." },
   { key: "series_penalty", label: "Series", before: "−", after: "points",
-    hint: "Taken off a later part of a series when you haven't opened anything before it. A post follows another from its subscription when their titles have the same numbers but one, 1 higher, such as “part 2” after “part 1”; Jellyfin and NRK TV episodes go in episode order. Not for subscriptions tagged “latest”." },
+    hint: "Taken off a later part of a series when you haven't opened anything before it. YouTube series use imported channel playlists in playlist order. Other posts follow another from their subscription when their titles have the same numbers but one, 1 higher, such as “part 2” after “part 1”; Jellyfin and NRK TV episodes go in episode order. Not for subscriptions tagged “latest”." },
   { key: "above_similarity_penalty", label: "Similar posts above", before: "−", after: "points per 100% similarity",
     hint: "Adds a penalty for similarity to each post already above it, using the publish-time, content-length and title similarity weights below. Two 50% matches add up to one full penalty. Different subscriptions do not match. No viewing-time fade." },
   { key: "video_bonus", label: "Video", before: "", after: "points",

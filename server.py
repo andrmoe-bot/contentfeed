@@ -279,33 +279,47 @@ def schedule_subscription(url: str, force: bool = False):
 
 
 def load_older(url: str):
-    """Add the older videos of a YouTube subscription, beyond the ones its feed lists."""
+    """Import video history and playlists independently, retaining completed work on retry."""
     try:
         with lock:
-            feed_url = subscriptions.get(url, {}).get("feed_url")
-        try:
-            older = feeds.older_videos(feed_url)
-        except feeds.FeedError as e:
-            with lock:
-                if url in subscriptions:
-                    subscriptions[url]["older_error"] = {"error": str(e)[:300], "time": time.time()}
-            save_json(FEED_CACHE_FILE, subscriptions, affects_feed=False)
+            original = subscriptions.get(url, {})
+            feed_url = original.get("feed_url")
+            older_loaded = original.get("older_loaded")
+            playlists_loaded = original.get("playlists_loaded")
+        if not feed_url:
             return
-        now = time.time()
-        with lock:
-            s = subscriptions.get(url)
-            if s is None or s.get("feed_url") != feed_url:  # unsubscribed meanwhile
+        for kind, loaded, fetch in (("older", older_loaded, feeds.older_videos),
+                                    ("playlists", playlists_loaded, feeds.channel_playlists)):
+            if loaded:
+                continue
+            try:
+                result = fetch(feed_url)
+            except feeds.FeedError as e:
+                with lock:
+                    s = subscriptions.get(url)
+                    if s is None or s.get("feed_url") != feed_url:
+                        return
+                    s["older_error"] = {"error": str(e)[:300], "time": time.time()}
+                save_json(FEED_CACHE_FILE, subscriptions, affects_feed=False)
                 return
-            known = {post_key(p) for p in s.get("items", [])}
-            # Keep exact feed dates while filling runtime from playlist metadata.
-            durations = {post_key(p): p.get("estimated_minutes") for p in older}
-            for post in s.get("items", []):
-                if not post.get("estimated_minutes") and durations.get(post_key(post)):
-                    post["estimated_minutes"] = durations[post_key(post)]
-            s["items"] = merge_posts(s.get("items", []), [p for p in older if post_key(p) not in known], now)
-            s["older_loaded"] = now
-            s.pop("older_error", None)
-        save_json(FEED_CACHE_FILE, subscriptions)
+            now = time.time()
+            with lock:
+                s = subscriptions.get(url)
+                if s is None or s.get("feed_url") != feed_url:
+                    return
+                if kind == "older":
+                    known = {post_key(p) for p in s.get("items", [])}
+                    durations = {post_key(p): p.get("estimated_minutes") for p in result}
+                    for post in s.get("items", []):
+                        if not post.get("estimated_minutes") and durations.get(post_key(post)):
+                            post["estimated_minutes"] = durations[post_key(post)]
+                    s["items"] = merge_posts(s.get("items", []),
+                                             [p for p in result if post_key(p) not in known], now)
+                else:
+                    s["youtube_playlists"] = result
+                s[kind + "_loaded"] = now
+                s.pop("older_error", None)
+            save_json(FEED_CACHE_FILE, subscriptions)
     finally:
         with lock:
             pending.discard("older:" + url)
@@ -317,7 +331,7 @@ def schedule_older(url: str):
     with lock:
         s = subscriptions.get(url, {})
         failed = s.get("older_error", {}).get("time", 0)
-        if (key in pending or s.get("older_loaded") or not feeds.youtube_playlist_id(s.get("feed_url") or "")
+        if (key in pending or (s.get("older_loaded") and s.get("playlists_loaded")) or not feeds.youtube_playlist_id(s.get("feed_url") or "")
                 or time.time() - failed < OLDER_RETRY):
             return
         pending.add(key)
@@ -586,16 +600,33 @@ def series_state(subs) -> tuple[dict[str, str], dict[str, str]]:
       whose posts belong to series of their own, such as a Jellyfin server's TV shows, has a next post
       in each series, in episode order.
     - later parts of a series none of whose earlier parts you've opened, as {url: the first part's title}.
-    Series are found from titles (see ranking.title_series), or for Jellyfin and NRK TV from episode order.
+    YouTube series use imported playlist order; other series use titles (see ranking.title_series),
+    or for Jellyfin and NRK TV, episode order.
     Posts marked no_series, such as NRK TV's news, have no series."""
     next_up, unstarted = {}, {}
+    started = set()
     for sub_url in subs:
         groups = {}
-        for p in subscriptions.get(sub_url, {}).get("items", []):  # newest first
-            groups.setdefault(p.get("series"), []).append(p)
+        subscription = subscriptions.get(sub_url, {})
+        items = subscription.get("items", [])
+        by_video = {p["youtube"]: p for p in items if p.get("youtube")}
+        assigned = set()
+        for playlist in subscription.get("youtube_playlists", []):
+            ordered = [by_video[v] for v in playlist["videos"] if v in by_video]
+            if ordered:
+                groups[("playlist", playlist["id"])] = list(reversed(ordered))
+                assigned.update(p["youtube"] for p in ordered)
+        for p in items:
+            if p.get("youtube"):
+                if p["youtube"] not in assigned:
+                    groups.setdefault(("youtube",), []).append(p)
+            else:
+                groups.setdefault(p.get("series"), []).append(p)
         for key, posts in groups.items():
             if key is None:
                 prev = {} if posts[0].get("no_series") else ranking.title_series(posts)
+            elif key == ("youtube",):
+                prev = {}
             else:
                 posts.sort(key=lambda p: p.get("episode", []), reverse=True)  # last episode first; stable otherwise
                 prev = {p["url"]: posts[i + 1] for i, p in enumerate(posts[:-1])}
@@ -616,9 +647,11 @@ def series_state(subs) -> tuple[dict[str, str], dict[str, str]]:
                     before = prev.get(q["url"])
                     first, any_opened = state[before["url"]] if before else (q, False)
                     state[q["url"]] = (first, any_opened or seen_at(q["url"]) is not None)
+                    if before and any_opened:
+                        started.add(q["url"])
                     if before and not any_opened:
                         unstarted.setdefault(q["url"], first["title"] or first["url"])
-    return next_up, unstarted
+    return next_up, {url: title for url, title in unstarted.items() if url not in started}
 
 
 def last_opened(subs) -> dict[str, float]:
@@ -708,12 +741,17 @@ def ranked_feed(ranker: str, limit: int, weights: dict | None = None, *, enrich:
             sub_opened = last_opened(subs)
             for sub_url, tags in subs.items():
                 s = subscriptions.get(sub_url, {})
+                playlists_by_video = {}
+                for playlist in s.get("youtube_playlists", []):
+                    for video in playlist["videos"]:
+                        playlists_by_video.setdefault(video, []).append(playlist["id"])
                 for post in s.get("items", []):
                     if post["url"] in seen:
                         continue
                     seen.add(post["url"])
                     items.append({
-                        **post, "estimated_minutes": post.get("estimated_minutes") or cache.get(post["url"], {}).get("estimated_minutes"),
+                        **post, "youtube_playlists": playlists_by_video.get(post.get("youtube"), []),
+                        "estimated_minutes": post.get("estimated_minutes") or cache.get(post["url"], {}).get("estimated_minutes"),
                         "kind": "subscription", "tags": tags, "feed": s["title"], "icon": s.get("icon"),
                         "domain": domain(post["url"]),
                         "added": post["first_seen"], "date": post["published"] or post["first_seen"], "position": -1,
