@@ -252,7 +252,14 @@ The default, `score`, adds up these points. With the default settings:
 Equal scores are ordered unopened first, then newest first, so with nothing else going on the
 feed is newest first.
 
-A post follows another from the same subscription when their titles have the same numbers, except
+For YouTube, subscribing imports the channel’s public playlists in the background alongside older
+videos. Existing channels are backfilled automatically. Each playlist defines a series in its saved
+video order; a video can belong to several series. The uploads playlist is excluded for channels.
+Direct playlist subscriptions use that playlist’s order. Videos outside playlists have no series,
+and YouTube titles are never used to infer one. Playlist membership is saved with the subscription
+and imported once; failures retry automatically.
+
+For other feeds, a post follows another from the same subscription when their titles have the same numbers, except
 one that's 1 higher: "Making a CPU, part 2: the ALU" follows "Making a CPU, part 1", and "S01E05"
 follows "S01E04". Only the numbers are compared, not the words, and only between posts at most 10
 apart in the subscription; numbers of 1000 or more, such as years, don't count. Posts that follow
