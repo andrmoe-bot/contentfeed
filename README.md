@@ -331,8 +331,8 @@ negative), Green, Similar
 (which also has its number of hours), Publish time window (days), Publish time similarity and
 Content length similarity and Title similarity (relative weights), and Update incomplete posts (count). The
 sliders go in steps of 1, 1.5, 2, 3, 5 and 7 times a power of ten, so they cover both small and large
-numbers. Age defaults to 0 points per day since publication (or addition for links), updated in
-whole hours; negative values favor newer items and positive values favor older items. Future dates
+numbers. Age defaults to 0 points per week since publication (or addition for links), counting fractional
+weeks and updated in whole hours; negative values favor newer items and positive values favor older items. Future dates
 count as age 0. The feed reorders as
 you move a slider, and the setting is saved when you let go (or when you press Enter in the box).
 Settings that are 0 when the page loads are hidden, along with their part of the formula, to keep the

@@ -55,7 +55,7 @@ class ViewedPenaltyTests(unittest.TestCase):
 
 class AgeTests(unittest.TestCase):
     def test_default_is_disabled(self):
-        self.assertEqual(ranking.DEFAULT_WEIGHTS['age_per_day'], 0)
+        self.assertEqual(ranking.DEFAULT_WEIGHTS['age_per_week'], 0)
         ranked = ranking.rank('score', [item('old', date=NOW - 10 * 86400)], NOW)
         self.assertEqual(ranked[0]['score'], 0)
         self.assertEqual(ranked[0]['reasons'], [])
@@ -64,21 +64,22 @@ class AgeTests(unittest.TestCase):
         for sub in [None, 'feed']:
             for weight, first in [(2, 'old'), (-2, 'new')]:
                 with self.subTest(sub=sub, weight=weight):
-                    weights = dict(ranking.DEFAULT_WEIGHTS, similar_base_percent=0, age_per_day=weight,
+                    weights = dict(ranking.DEFAULT_WEIGHTS, similar_base_percent=0, age_per_week=weight,
                                    above_similarity_penalty=0)
                     ranking.check_weights(weights)
                     ranked = ranking.rank('score', [item('old', sub, date=NOW - 36 * 3600),
                                                     item('new', sub)], NOW, weights)
                     self.assertEqual(ranked[0]['url'], first)
                     old = next(it for it in ranked if it['url'] == 'old')
-                    self.assertEqual(old['score'], 1.5 * weight)
+                    self.assertEqual(old['score'], ranking.points(1.5 / 7 * weight))
                     self.assertEqual(old['reasons'], [{'label': 'age 1 day 12 hours',
-                                                       'points': 1.5 * weight}])
+                                                       'points': ranking.points(1.5 / 7 * weight)}])
 
     def test_whole_hours_and_future_dates(self):
-        weights = dict(ranking.DEFAULT_WEIGHTS, similar_base_percent=0, age_per_day=-1)
-        for seconds, expected in [(-86400, 0), (3599, 0), (3600, -0.04),
-                                  (7199, -0.04), (86400, -1)]:
+        weights = dict(ranking.DEFAULT_WEIGHTS, similar_base_percent=0, age_per_week=-1)
+        for seconds, expected in [(-86400, 0), (3599, 0), (3600, -0.01),
+                                  (7199, -0.01), (86400, -0.14),
+                                  (302400, -0.5), (604800, -1), (907200, -1.5)]:
             with self.subTest(seconds=seconds):
                 ranked = ranking.rank('score', [item('post', date=NOW - seconds)], NOW, weights)
                 self.assertEqual(ranked[0]['score'], expected)
