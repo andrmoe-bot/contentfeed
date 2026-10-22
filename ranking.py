@@ -76,10 +76,10 @@ DEFAULT_WEIGHTS = {
     "article_bonus": 0,
     "enrich_count": 5,  # highest-ranked incomplete posts to enrich on page load
     "length_per_minute": 0,  # signed points per estimated minute of content
-    "age_per_day": 0,  # signed points per day since publication (or addition for links)
+    "age_per_week": 0,  # signed points per fractional week since publication (or addition for links)
 }
 WEIGHTS = dict(DEFAULT_WEIGHTS)
-SIGNED = {"seen_bonus", "video_bonus", "image_bonus", "article_bonus", "length_per_minute", "age_per_day"}  # may be negative
+SIGNED = {"seen_bonus", "video_bonus", "image_bonus", "article_bonus", "length_per_minute", "age_per_week"}  # may be negative
 LIMIT = 10_000_000
 RED = 10_000_000  # red items sink below everything else
 
@@ -507,9 +507,9 @@ def score(item: dict, now: float, weights: dict) -> Reasons:
     minutes = item.get("estimated_minutes")
     if w["length_per_minute"] and valid_minutes(minutes):
         reasons.append((f"estimated {points(minutes)} minutes", points(minutes * w["length_per_minute"])))
-    if w["age_per_day"]:
+    if w["age_per_week"]:
         hours = hours_since(now, item["date"])
-        reasons.append((f"age {hours_label(hours)}", points(hours / 24 * w["age_per_day"])))
+        reasons.append((f"age {hours_label(hours)}", points(hours / (24 * 7) * w["age_per_week"])))
     if item["color"] == "green" and w["green_bonus_points"]:
         reasons.append(("green", w["green_bonus_points"]))
     elif item["color"] == "red":
