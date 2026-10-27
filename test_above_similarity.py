@@ -54,7 +54,7 @@ def greedy_reference(items, weights):
         for it in remaining:
             similarities = [reference_similarity(it, other, weights) for other in out] if amount else []
             total = sum(similarities)
-            adjustment = -round(Fraction(str(amount)) * total) / 100
+            adjustment = round(Fraction(str(amount)) * total) / 100
             score = ranking.points(it['score'] + adjustment)
             key = (score, it['last_viewed'] is None, it['date'], it['position'], -positions[it['url']])
             candidates.append((key, it, total, sum(percent > 0 for percent in similarities), adjustment))
@@ -126,7 +126,7 @@ class AboveSimilarityTests(unittest.TestCase):
 
     def test_rounding_uses_total_similarity_not_per_post_rounding(self):
         posts = [dict(item(str(i), 'feed'), estimated_minutes=10) for i in range(5)]
-        weights = self.weights(above_similarity_penalty=0.004)
+        weights = self.weights(above_similarity_penalty=-0.004)
         result = ranking.rank('score', posts, NOW, weights)
         self.assertEqual([it['score'] for it in result], [0, 0, -0.01, -0.01, -0.02])
         self.assertEqual(result, greedy_reference(posts, weights))
@@ -168,7 +168,7 @@ class AboveSimilarityTests(unittest.TestCase):
                 if rng.random() < 0.2:
                     it['next_after'] = 'previous'
                 posts.append(it)
-            weights = self.weights(above_similarity_penalty=rng.choice([0, 0.05, 15, 100]),
+            weights = self.weights(above_similarity_penalty=rng.choice([0, -0.05, -15, -100, 15]),
                                    green_bonus_points=10, length_per_minute=-0.5,
                                    similar_days=rng.choice([0, 0.5, 30]),
                                    similar_publish_weight=rng.choice([0, 1, 2]),

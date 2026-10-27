@@ -229,7 +229,7 @@ the colors you picked), the numbers in titles, dates (when a post was published,
 last opened an item. A ranker returns reasons with points, such as
 `("tagged music", 2)`; the score is their sum. Click "Score" on any card to see its reasons.
 
-The default, `score`, adds up these points. With the default settings:
+All scoring terms add their configured signed points; negative values subtract points. Similarity weights, time windows and counts remain nonnegative. The default, `score`, adds up these points. With the default settings:
 
 - +30 for **next up**: the post after the one you opened (not skipped) most recently in its subscription. That's
   the next part of its series (see below) or, if it has none, the post published next. Jellyfin
@@ -331,8 +331,8 @@ negative), Green, Similar
 (which also has its number of hours), Publish time window (days), Publish time similarity and
 Content length similarity and Title similarity (relative weights), and Update incomplete posts (count). The
 sliders go in steps of 1, 1.5, 2, 3, 5 and 7 times a power of ten, so they cover both small and large
-numbers. Age defaults to 0 points per week since publication (or addition for links), counting fractional
-weeks and updated in whole hours; negative values favor newer items and positive values favor older items. Future dates
+numbers. Age defaults to 0 points per year since publication (or addition for links), counting fractional
+365-day years and updated in whole hours; negative values favor newer items and positive values favor older items. Future dates
 count as age 0. The feed reorders as
 you move a slider, and the setting is saved when you let go (or when you press Enter in the box).
 Settings that are 0 when the page loads are hidden, along with their part of the formula, to keep the
