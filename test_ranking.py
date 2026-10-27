@@ -55,7 +55,7 @@ class ViewedPenaltyTests(unittest.TestCase):
 
 class AgeTests(unittest.TestCase):
     def test_default_is_disabled(self):
-        self.assertEqual(ranking.DEFAULT_WEIGHTS['age_per_week'], 0)
+        self.assertEqual(ranking.DEFAULT_WEIGHTS['age_per_year'], 0)
         ranked = ranking.rank('score', [item('old', date=NOW - 10 * 86400)], NOW)
         self.assertEqual(ranked[0]['score'], 0)
         self.assertEqual(ranked[0]['reasons'], [])
@@ -64,19 +64,40 @@ class AgeTests(unittest.TestCase):
         for sub in [None, 'feed']:
             for weight, first in [(2, 'old'), (-2, 'new')]:
                 with self.subTest(sub=sub, weight=weight):
-                    weights = dict(ranking.DEFAULT_WEIGHTS, similar_base_percent=0, age_per_week=weight,
+                    weights = dict(ranking.DEFAULT_WEIGHTS, similar_base_percent=0, age_per_year=weight,
                                    above_similarity_penalty=0)
                     ranking.check_weights(weights)
                     ranked = ranking.rank('score', [item('old', sub, date=NOW - 36 * 3600),
                                                     item('new', sub)], NOW, weights)
                     self.assertEqual(ranked[0]['url'], first)
                     old = next(it for it in ranked if it['url'] == 'old')
-                    self.assertEqual(old['score'], ranking.points(1.5 / 7 * weight))
+                    self.assertEqual(old['score'], ranking.points(1.5 / 365 * weight))
                     self.assertEqual(old['reasons'], [{'label': 'age 1 day 12 hours',
-                                                       'points': ranking.points(1.5 / 7 * weight)}])
+                                                       'points': ranking.points(1.5 / 365 * weight)}])
+
+    def test_one_year_uses_configured_points(self):
+        weights = dict(ranking.DEFAULT_WEIGHTS, age_per_year=-12)
+        ranked = ranking.rank('score', [item('old', date=NOW - 365 * 86400)], NOW, weights)
+        self.assertEqual(ranked[0]['score'], -12)
+
+    def test_all_scoring_terms_accept_both_signs(self):
+        for key in ranking.SIGNED:
+            for value in [-12, 12]:
+                with self.subTest(key=key, value=value):
+                    self.assertEqual(ranking.check_weights(dict(ranking.DEFAULT_WEIGHTS, **{key: value}))[key], value)
+
+    def test_series_and_recent_similarity_add_signed_points(self):
+        for value in [-12, 12]:
+            post = dict(item('post', 'feed'), series_first='First')
+            weights = dict(ranking.DEFAULT_WEIGHTS, series_penalty=value)
+            self.assertEqual(sum(p for _, p in ranking.score(post, NOW, weights)), value)
+            post = item('seen', 'feed', age=0)
+            weights = dict(ranking.DEFAULT_WEIGHTS, seen_bonus=0, similar_penalty=value)
+            ranked = ranking.rank('score', [post], NOW, weights)
+            self.assertEqual(ranked[0]['score'], value)
 
     def test_whole_hours_and_future_dates(self):
-        weights = dict(ranking.DEFAULT_WEIGHTS, similar_base_percent=0, age_per_week=-1)
+        weights = dict(ranking.DEFAULT_WEIGHTS, similar_base_percent=0, age_per_year=-365 / 7)
         for seconds, expected in [(-86400, 0), (3599, 0), (3600, -0.01),
                                   (7199, -0.01), (86400, -0.14),
                                   (302400, -0.5), (604800, -1), (907200, -1.5)]:

@@ -36,7 +36,7 @@ class ScoreExplanationTests(unittest.TestCase):
             for reason in card['reasons']:
                 if reason['label'].startswith('similarity to '):
                     total = sum(m['percent'] for m in card['above_matches'])
-                    self.assertEqual(reason['points'], -round(weights['above_similarity_penalty'] * total) / 100)
+                    self.assertEqual(reason['points'], round(weights['above_similarity_penalty'] * total) / 100)
                     self.assertTrue(all(m['url'] != 'unrelated' for m in card['above_matches']))
         self.assertTrue(any(len(c.get('above_matches', [])) >= 3 for c in explained))
         self.assertTrue(all('above_matches' not in c for c in visible))

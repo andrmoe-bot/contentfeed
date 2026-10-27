@@ -386,16 +386,16 @@ function scoreDetail(item, reason) {
   const rate = (v) => String(v).replace("-", "−");
   if (label.startsWith("similarity to ")) {
     const match = label.match(/similarity to (\d+) posts? above, (\d+)% total/);
-    return match ? `−${rate(w.above_similarity_penalty)} × ${match[2]}% similarity · ${match[1]} above` : "";
+    return match ? `${rate(w.above_similarity_penalty)} × ${match[2]}% similarity · ${match[1]} above` : "";
   }
   if (item.similar && label.includes("% like")) {
     const like = item.similar;
     const remaining = 100 * (1 - like.hours / w.similar_hours);
-    return `−${rate(w.similar_penalty)} × ${like.percent}% similarity × ${n(remaining)}% remaining · ${like.hours}/${rate(w.similar_hours)} h elapsed`;
+    return `${rate(w.similar_penalty)} × ${like.percent}% similarity × ${n(remaining)}% remaining · ${like.hours}/${rate(w.similar_hours)} h elapsed`;
   }
   if (label.startsWith("estimated ")) return `${n(item.estimated_minutes)} min × ${rate(w.length_per_minute)} pts/min`;
   if (label.startsWith("age ")) {
-    return `${rate(w.age_per_week)} pts/week`;
+    return `${rate(w.age_per_year)} pts/year`;
   }
   return "";
 }
@@ -538,16 +538,16 @@ async function fetchFeed() {
 const SETTINGS = [
   { key: "enrich_count", label: "Update incomplete posts", before: "", after: "posts on page load",
     hint: "Fetch missing runtime or exact publication time for this many highest-ranked incomplete posts when you open the site. 0 turns this off. This does not add score points." },
-  { key: "next_up_bonus", label: "Next up", before: "+", after: "points",
+  { key: "next_up_bonus", label: "Next up", before: "", after: "points",
     hint: "Next up is the post after the one you opened most recently in a subscription: the next part of its series, or else the next published. Skipping (the white dot) doesn't make anything next up. Not for subscriptions tagged “latest”." },
   { key: "seen_bonus", label: "Seen", before: "", after: "points",
     hint: "For items you've opened or skipped (the white dot). Below 0: they go under things you haven't opened." },
-  { key: "new_sub_bonus", label: "New subscription", before: "+", after: "points",
+  { key: "new_sub_bonus", label: "New subscription", before: "", after: "points",
     hint: "For posts from a subscription you've never opened anything from, such as one you just subscribed to." },
-  { key: "series_penalty", label: "Series", before: "−", after: "points",
-    hint: "Taken off a later part of a series when you haven't opened anything before it. YouTube series use imported channel playlists in playlist order. Other posts follow another from their subscription when their titles have the same numbers but one, 1 higher, such as “part 2” after “part 1”; Jellyfin and NRK TV episodes go in episode order. Not for subscriptions tagged “latest”." },
-  { key: "above_similarity_penalty", label: "Similar posts above", before: "−", after: "points per 100% similarity",
-    hint: "Adds a penalty for similarity to each post already above it, using the publish-time, content-length and title similarity weights below. Two 50% matches add up to one full penalty. Different subscriptions do not match. No viewing-time fade." },
+  { key: "series_penalty", label: "Series", before: "", after: "points",
+    hint: "Added to a later part of a series when you haven't opened anything before it. YouTube series use imported channel playlists in playlist order. Other posts follow another from their subscription when their titles have the same numbers but one, 1 higher, such as “part 2” after “part 1”; Jellyfin and NRK TV episodes go in episode order. Not for subscriptions tagged “latest”." },
+  { key: "above_similarity_penalty", label: "Similar posts above", before: "", after: "points per 100% similarity",
+    hint: "Adds signed points for similarity to each post already above it, using the publish-time, content-length and title similarity weights below. Two 50% matches add up to the full configured points. Negative points penalize similarity. Different subscriptions do not match. No viewing-time fade." },
   { key: "video_bonus", label: "Video", before: "", after: "points",
     hint: "For YouTube, Jellyfin and NRK TV videos. Below 0: a penalty." },
   { key: "image_bonus", label: "Image", before: "", after: "points",
@@ -556,12 +556,12 @@ const SETTINGS = [
     hint: "For everything else: articles, blog posts and other pages. Below 0: a penalty." },
   { key: "length_per_minute", label: "Content length", before: "", after: "points per minute",
     hint: "Estimated runtime, or reading time at 200 words per minute. Positive favors longer content; negative favors shorter content. Unknown lengths have no adjustment. Default: 0." },
-  { key: "age_per_week", label: "Age", before: "", after: "points per week",
-    hint: "Fractional weeks since publication for posts, or since addition for links, updated in whole hours. Negative favors newer items; positive favors older items. Future dates count as age 0. Default: 0." },
-  { key: "green_bonus_points", label: "Green", before: "+", after: "points", hint: "For items you marked green." },
-  { key: "similar_penalty", label: "Similar", before: "−", after: "points at 100% alike, within",
+  { key: "age_per_year", label: "Age", before: "", after: "points per year",
+    hint: "Fractional 365-day years since publication for posts, or since addition for links, updated in whole hours. Negative favors newer items; positive favors older items. Future dates count as age 0. Default: 0." },
+  { key: "green_bonus_points", label: "Green", before: "", after: "points", hint: "For items you marked green." },
+  { key: "similar_penalty", label: "Similar", before: "", after: "points at 100% alike, within",
     extra: { key: "similar_hours", type: "number", after: "hours" },
-    hint: "Taken off items alike to something you opened, in proportion: 50% alike takes off half. The penalty fades linearly to zero over this many hours, updated in whole hours. Only the strongest remaining penalty counts. 0 points or 0 hours: off." },
+    hint: "Added to items alike to something you opened, in proportion: 50% alike adds half the configured points. Negative points penalize similarity. The adjustment fades linearly to zero over this many hours, updated in whole hours. Only the strongest remaining penalty counts. 0 points or 0 hours: off." },
   { key: "similar_base_percent", term: "similarity", label: "Subscription base similarity", before: "", after: "%",
     hint: "Same-subscription posts start at this similarity. Other components fill the remainder: 50% base + 50% × 60% measured = 80%. Different subscriptions do not match. 0 restores similarity from components alone." },
   { key: "similar_days", term: "similarity", label: "Publish time window", before: "alike within", after: "days",
@@ -575,7 +575,7 @@ const SETTINGS = [
 ];
 // Every setting, including the second box some have, such as Similar's hours
 const KEYS = SETTINGS.flatMap(({ key, extra }) => (extra ? [key, extra.key] : [key]));
-const SIGNED = ["seen_bonus", "video_bonus", "image_bonus", "article_bonus", "length_per_minute", "age_per_week"];  // may be negative: the sign says which way
+const SIGNED = ["seen_bonus", "video_bonus", "image_bonus", "article_bonus", "length_per_minute", "age_per_year", "next_up_bonus", "new_sub_bonus", "green_bonus_points", "series_penalty", "similar_penalty", "above_similarity_penalty"];  // may be negative: the sign says which way
 const LIMIT = 10_000_000;
 let saved = {};  // as saved on the server
 let draft = {};  // as shown in the panel
@@ -688,15 +688,15 @@ function showFormula() {
   const w = draft;
   const terms = [
     ["new_sub_bonus", `${plus(w.new_sub_bonus)} if nothing opened from its subscription`],
-    ["series_penalty", ` − ${fmt(w.series_penalty)} if nothing opened before it in its series`],
-    ["similar_penalty", ` − ${fmt(w.similar_penalty)} × similarity (${fmt(w.similar_base_percent)}% base; publish time ${fmt(w.similar_publish_weight)} : length ${fmt(w.similar_length_weight)} : title ${fmt(w.similar_title_weight)}) × time remaining (fades to zero over ${fmt(w.similar_hours)} hours; strongest match)`],
+    ["series_penalty", `${plus(w.series_penalty)} if nothing opened before it in its series`],
+    ["similar_penalty", `${plus(w.similar_penalty)} × similarity (${fmt(w.similar_base_percent)}% base; publish time ${fmt(w.similar_publish_weight)} : length ${fmt(w.similar_length_weight)} : title ${fmt(w.similar_title_weight)}) × time remaining (fades to zero over ${fmt(w.similar_hours)} hours; strongest match)`],
     ["video_bonus", `${plus(w.video_bonus)} if video`],
     ["image_bonus", `${plus(w.image_bonus)} if image`],
     ["article_bonus", `${plus(w.article_bonus)} if article`],
     ["length_per_minute", `${plus(w.length_per_minute)} × estimated minutes`],
-    ["age_per_week", `${plus(w.age_per_week)} × age in weeks`],
+    ["age_per_year", `${plus(w.age_per_year)} × age in years`],
     ["green_bonus_points", `${plus(w.green_bonus_points)} if green`],
-    ["above_similarity_penalty", ` − ${fmt(w.above_similarity_penalty)} × summed similarity to posts above`],
+    ["above_similarity_penalty", `${plus(w.above_similarity_penalty)} × summed similarity to posts above`],
   ].filter(([key]) => shownTerms.has(key)).map(([, text]) => text).join("");
   const next = shownTerms.has("next_up_bonus") ? `next up: ${fmt(w.next_up_bonus)} · ` : "";
   const opened = shownTerms.has("seen_bonus") ? `opened: ${fmt(w.seen_bonus)} · ` : "";

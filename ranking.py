@@ -61,25 +61,30 @@ DEFAULT_WEIGHTS = {
     "next_up_bonus": 30,  # the post after the one you opened most recently in a subscription
     "seen_bonus": -30,  # items you've opened or skipped; below 0 puts them under unopened ones
     "new_sub_bonus": 0,  # for posts from a subscription you've never opened anything from
-    "similar_penalty": 40,  # taken off at 100% like something you opened recently (see similarity):
+    "similar_penalty": -40,  # added at 100% like something you opened recently (see similarity):
     "similar_hours": 24,  # penalty fades linearly to zero this many hours after opening
     "similar_base_percent": 50,  # same-subscription baseline; other similarity fills the remainder
     "similar_publish_weight": 1,  # relative weight of publication-time similarity
     "similar_title_weight": 0,  # relative weight of meaningful title-word overlap
     "similar_length_weight": 0,  # relative weight of duration similarity; 0 keeps the old behavior
     "similar_days": 30,  # posts from the same subscription are alike if published within this many days
-    "series_penalty": 30,  # taken off a later part of a series when you haven't opened anything before it
-    "above_similarity_penalty": 15,  # taken off per 100% similarity to each post above it
+    "series_penalty": -30,  # added to a later part of a series when you haven't opened anything before it
+    "above_similarity_penalty": -15,  # added per 100% similarity to each post above it
     "green_bonus_points": 0,
     "video_bonus": 0,  # for each media type (see media_type); below 0 is a penalty
     "image_bonus": 0,
     "article_bonus": 0,
     "enrich_count": 5,  # highest-ranked incomplete posts to enrich on page load
     "length_per_minute": 0,  # signed points per estimated minute of content
-    "age_per_week": 0,  # signed points per fractional week since publication (or addition for links)
+    "age_per_year": 0,  # signed points per fractional 365-day year since publication (or addition for links)
 }
 WEIGHTS = dict(DEFAULT_WEIGHTS)
-SIGNED = {"seen_bonus", "video_bonus", "image_bonus", "article_bonus", "length_per_minute", "age_per_week"}  # may be negative
+# Every scoring coefficient is signed; windows, similarity parameters and counts are not.
+SIGNED = {
+    "next_up_bonus", "seen_bonus", "new_sub_bonus", "series_penalty", "similar_penalty",
+    "above_similarity_penalty", "green_bonus_points", "video_bonus", "image_bonus",
+    "article_bonus", "length_per_minute", "age_per_year",
+}
 LIMIT = 10_000_000
 RED = 10_000_000  # red items sink below everything else
 
@@ -458,7 +463,7 @@ def media_type(item: dict) -> str:
 
 
 def ranker(name: str, spread: bool = False):
-    """Register a ranker. With spread, the feed is built from the top down and each item loses
+    """Register a ranker. With spread, the feed is built from the top down and each item gains
     above_similarity_penalty times its summed similarity to posts above it (see rank)."""
     def register(fn: Ranker) -> Ranker:
         fn.spread = spread
@@ -490,7 +495,7 @@ def score(item: dict, now: float, weights: dict) -> Reasons:
     if item["kind"] == "subscription" and item.get("sub_last_viewed") is None and w["new_sub_bonus"]:
         reasons.append((f"nothing opened from “{short(item['feed'])}” yet", w["new_sub_bonus"]))
     if item.get("series_first") and "latest" not in item["tags"] and w["series_penalty"]:
-        reasons.append((f"in a series starting “{short(item['series_first'])}”, nothing before it opened", -w["series_penalty"]))
+        reasons.append((f"in a series starting “{short(item['series_first'])}”, nothing before it opened", w["series_penalty"]))
     like = item.get("similar")
     if like and w["similar_penalty"]:
         verb = "skipped" if like.get("skipped") else "opened"
@@ -500,16 +505,16 @@ def score(item: dict, now: float, weights: dict) -> Reasons:
         else:
             label = f"{like['percent']}% like “{short(like['title'])}”, {when} ({like['why']})"
         label += f", {points(100 * (1 - like['hours'] / w['similar_hours']))}% penalty remaining"
-        reasons.append((label, points(-w["similar_penalty"] * like["strength"] / 100)))
+        reasons.append((label, points(w["similar_penalty"] * like["strength"] / 100)))
     kind = media_type(item)
     if w[f"{kind}_bonus"]:
         reasons.append((kind, w[f"{kind}_bonus"]))
     minutes = item.get("estimated_minutes")
     if w["length_per_minute"] and valid_minutes(minutes):
         reasons.append((f"estimated {points(minutes)} minutes", points(minutes * w["length_per_minute"])))
-    if w["age_per_week"]:
+    if w["age_per_year"]:
         hours = hours_since(now, item["date"])
-        reasons.append((f"age {hours_label(hours)}", points(hours / (24 * 7) * w["age_per_week"])))
+        reasons.append((f"age {hours_label(hours)}", points(hours / (24 * 365) * w["age_per_year"])))
     if item["color"] == "green" and w["green_bonus_points"]:
         reasons.append(("green", w["green_bonus_points"]))
     elif item["color"] == "red":
@@ -553,7 +558,7 @@ def rank(name: str, items: list[dict], now: float, weights: dict | None = None,
     saved ones are for previewing them, such as while you move a slider.
 
     For a spread ranker, repeatedly choose the item with the highest current score, after
-    subtracting above_similarity_penalty times its summed similarity to all items already
+    adding above_similarity_penalty times its summed similarity to all items already
     placed above it. Similarity is the same normalized measure used for recent views, without
     viewing-time decay. Penalties are cumulative; different subscriptions don't match.
     """
@@ -616,8 +621,8 @@ def spread_by_similarity(scored: list[dict], penalty: float, metric: SimilarityM
             # Round only the cumulative adjustment to cents, never each pair.
             cents = round(penalty * totals[i])
             label = f"similarity to {matches[i]} post{'s' if matches[i] != 1 else ''} above, {totals[i]}% total"
-            it["reasons"].append({"label": label, "points": points(-cents / 100)})
-            it["score"] = points((base_cents[i] - cents) / 100)
+            it["reasons"].append({"label": label, "points": points(cents / 100)})
+            it["score"] = points((base_cents[i] + cents) / 100)
         yield it
         if not queue:
             continue
@@ -631,7 +636,7 @@ def spread_by_similarity(scored: list[dict], penalty: float, metric: SimilarityM
             if percent:
                 totals[j] += percent
                 matches[j] += 1
-                queue[position] = (-(base_cents[j] - round(penalty * totals[j])), *previous[1:])
+                queue[position] = (-(base_cents[j] + round(penalty * totals[j])), *previous[1:])
                 changed = True
         if changed:
             heapq.heapify(queue)

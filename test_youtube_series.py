@@ -229,7 +229,7 @@ class PlaylistIntegrationTests(server_tests.FeedCacheTests):
         self.assertEqual(ranked['a']['youtube_playlists'], ['PL'])
         self.assertEqual(ranked['b']['youtube_playlists'], ['PL'])
         self.assertEqual(ranked['b']['series_first'], 'First')
-        self.assertEqual(ranked['b']['score'], ranked['a']['score'] - ranking.WEIGHTS['series_penalty'])
+        self.assertEqual(ranked['b']['score'], ranked['a']['score'] + ranking.WEIGHTS['series_penalty'])
         self.refresh({'items': [dict(second)], 'title': 'Example'})
         self.assertEqual(entry['youtube_playlists'], server.subscriptions[self.url]['youtube_playlists'])
         server.viewed[first['url']] = 100
