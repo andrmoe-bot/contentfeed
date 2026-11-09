@@ -16,6 +16,10 @@
   .unplayable { display: grid; place-content: center; gap: 6px; padding: 16px; text-align: center; color: var(--muted); }
   .unplayable a { font-weight: 600; }
   .body { padding: 12px 16px 14px; }
+  .subscription-stats { max-width: 720px; margin: 0 auto; padding: 0 16px 12px; display: flex; flex-wrap: wrap; gap: 8px 24px; }
+  .subscription-stats div { min-width: 100px; }
+  .subscription-stats dt { color: var(--muted); font-size: 13px; }
+  .subscription-stats dd { margin: 0; font-size: 16px; }
   .source { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; }
   .source img { width: 16px; height: 16px; border-radius: 3px; }
   h2 { font-size: 17px; margin: 4px 0; line-height: 1.3; overflow-wrap: anywhere; }
@@ -119,6 +123,9 @@
     <button type="button" id="refresh" title="Re-fetch every link and check every subscription now">Refresh all</button>
     <p id="message" role="status"></p>
   </form>
+  <form class="bar" id="search-form" role="search">
+    <input id="search" type="search" placeholder="Search posts by title, description, source or tag" aria-label="Search posts">
+  </form>
 </header>
 <main id="feed"></main>
 <button type="button" id="more" hidden></button>
@@ -141,9 +148,27 @@
 
 <script src="/common.js"></script>
 <script>
+const subscriptionPage = location.pathname === "/subscription";
 const postPage = location.pathname === "/post";
 const postUrl = new URLSearchParams(location.search).get("url") || "";
 let postData = null;
+const searchEl = document.getElementById("search");
+searchEl.value = new URLSearchParams(location.search).get("q") || "";
+let searchTimer;
+function searchChanged() {
+  clearTimeout(searchTimer);
+  limit = PAGE;
+  stay.clear();
+  shown = [];
+  feedTag = null;
+  const url = new URL(location.href);
+  if (searchEl.value.trim()) url.searchParams.set("q", searchEl.value.trim());
+  else url.searchParams.delete("q");
+  history.replaceState(null, "", url);
+  load();
+}
+searchEl.addEventListener("input", () => { clearTimeout(searchTimer); searchTimer = setTimeout(searchChanged, 250); });
+document.getElementById("search-form").addEventListener("submit", (e) => { e.preventDefault(); searchChanged(); });
 const sections = new Map();
 const feedEl = document.getElementById("feed");
 const statusEl = document.getElementById("status");
@@ -330,6 +355,9 @@ function card(item) {
   art.append(el("div", { class: "playlists" }, el("a", {
     class: "post-link", href: `/post?url=${encodeURIComponent(item.url)}`,
   }, "Post & related")));
+  if (item.sub) art.append(el("div", { class: "playlists" }, el("a", {
+    href: `/subscription?url=${encodeURIComponent(item.sub)}`,
+  }, `${source} · Subscription`)));
   if (item.related_percent != null) art.append(el("div", { class: "playlists" }, `${item.related_percent}% similar`));
   art.append(why(item), el("div", { class: "viewed" }));
   return art;
@@ -564,7 +592,7 @@ async function fetchFeed() {
     // Settings you haven't saved yet, such as while you drag a slider, are sent along to preview them.
     const preview = Object.keys(saved).length && !sameWeights(draft, saved)
       ? `&weights=${encodeURIComponent(JSON.stringify(draft))}` : "";
-    const res = await fetch(`/api/${postPage ? "post" : "feed"}?limit=${limit}${postPage ? `&url=${encodeURIComponent(postUrl)}` : ""}${preview}${enrichOnLoad ? "&enrich=1" : ""}`,
+    const res = await fetch(`/api/${postPage ? "post" : subscriptionPage ? "subscription" : "feed"}?limit=${limit}&q=${encodeURIComponent(searchEl.value.trim())}${postPage || subscriptionPage ? `&url=${encodeURIComponent(postUrl)}` : ""}${preview}${enrichOnLoad ? "&enrich=1" : ""}`,
       { cache: "no-store", headers: feedTag ? { "If-None-Match": feedTag } : {} });
     if (res.ok || res.status === 304) enrichOnLoad = false;
     if (res.status === 304) {
@@ -574,7 +602,7 @@ async function fetchFeed() {
     }
     const data = await res.json();
     if (!res.ok) {
-      if (postPage && res.status === 404) {
+      if ((postPage || subscriptionPage) && res.status === 404) {
         postData = null;
         sections.clear();
         cards.clear();
@@ -598,8 +626,27 @@ async function fetchFeed() {
       pollTimer = setTimeout(load, data.pending ? 1500 : 30000);
       return;
     }
+    if (subscriptionPage && data.subscription) {
+      const sub = data.subscription;
+      document.title = `${sub.title} · Content Feed`;
+      document.getElementById("subscription-title").textContent = sub.title;
+      document.getElementById("subscription-info").replaceChildren(
+        el("a", { href: sub.site || sub.url, target: "_blank", rel: "noopener noreferrer" }, "Visit source ↗"),
+        sub.tags.length ? ` · ${sub.tags.join(" · ")}` : "",
+        sub.error ? ` · Last check failed: ${sub.error}` : "");
+      const stats = [
+        ["Posts", sub.posts], ["Opened", sub.opened], ["Skipped", sub.skipped], ["Unseen", sub.unseen],
+        ["Green", sub.color_counts.green], ["White", sub.color_counts.white], ["Red", sub.color_counts.red],
+        ["Latest post", sub.latest ? ago(sub.latest) : "None yet"],
+        ["Last viewed or skipped", sub.last_viewed ? ago(sub.last_viewed) : "Never"],
+        ["Last checked", sub.checking ? "Checking…" : sub.fetched ? ago(sub.fetched) : "Not yet"],
+      ];
+      document.getElementById("subscription-stats").replaceChildren(...stats.map(([label, value]) =>
+        el("div", {}, el("dt", {}, label), el("dd", {}, String(value)))));
+    }
     items = data.items;
     render();
+    if (!items.length) feedEl.replaceChildren(el("p", {}, searchEl.value.trim() ? "No posts match your search." : subscriptionPage ? "No posts in this subscription yet." : "No posts in your feed yet."));
     const count = data.total > items.length ? `top ${items.length} of ${data.total}` : `${data.total}`;
     statusEl.textContent = `${count} items · ranked by ${data.ranker}` + (data.pending ? ` · fetching ${data.pending}…` : "");
     rankerNote(data.ranker);
@@ -907,9 +954,19 @@ async function loadSubscriptionCount() {
   document.getElementById("subs-link").textContent = `Subscriptions (${subscriptions.length})`;
 }
 
+if (subscriptionPage) {
+  document.querySelector("h1").replaceChildren(el("a", { href: "/" }, "← Content Feed"));
+  document.getElementById("add").hidden = true;
+  feedEl.before(el("div", { class: "bar" }, el("h2", { id: "subscription-title" }, "Subscription")),
+    el("div", { class: "bar", id: "subscription-info" }),
+    el("dl", { class: "subscription-stats", id: "subscription-stats", "aria-label": "Subscription statistics" }));
+}
+
 if (postPage) {
   document.querySelector("h1").replaceChildren(el("a", { href: "/", class: "post-link" }, "← Content Feed"));
   document.getElementById("add").hidden = true;
+  searchEl.placeholder = "Search series and similar posts";
+  searchEl.setAttribute("aria-label", "Search series and similar posts");
   document.querySelector("#panel > .hint").textContent = "Series are in episode or playlist order. Similar posts are ordered by similarity using the settings below. Cards show scores before the main feed's adjustments for posts above them.";
   feedEl.append(el("p", { role: "status", id: "post-loading" }, "Loading post…"));
 }

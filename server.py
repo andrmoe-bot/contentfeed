@@ -59,6 +59,7 @@ TEMPLATES = {
 }
 PAGES = {  # request path -> (file, content type)
     "/": ("index.html", "text/html; charset=utf-8"),
+    "/subscription": ("index.html", "text/html; charset=utf-8"),
     "/post": ("index.html", "text/html; charset=utf-8"),
     "/subscriptions": ("subscriptions.html", "text/html; charset=utf-8"),
     "/style.css": ("style.css", "text/css; charset=utf-8"),
@@ -367,6 +368,7 @@ def subscription_status() -> list[dict]:
         for url, tags in read_entries(FEEDS_FILE).items():
             s = subscriptions.get(url, {})
             dates = [it["published"] or it["first_seen"] for it in s.get("items", [])]
+            states = [view_state(u) for u in {p["url"] for p in s.get("items", [])}]
             status.append({
                 "url": url,
                 "tags": tags,
@@ -376,6 +378,11 @@ def subscription_status() -> list[dict]:
                 "feed_url": s.get("feed_url"),
                 "page": bool(s.get("page")),
                 "posts": len(s.get("items", [])),
+                "opened": sum(state["last_viewed"] is not None and not state["skipped"] for state in states),
+                "skipped": sum(state["skipped"] for state in states),
+                "unseen": sum(state["last_viewed"] is None for state in states),
+                "color_counts": {color: sum(state["color"] == color for state in states) for color in COLORS},
+                "last_viewed": max((state["last_viewed"] for state in states if state["last_viewed"] is not None), default=None),
                 "latest": max(dates, default=None),
                 "fetched": s.get("fetched"),
                 "error": s.get("error"),
@@ -709,20 +716,25 @@ def enrich_posts(ranked: list[dict], count: int):
             schedule(post["url"], force=True)
 
 
-def feed(ranker: str, limit: int = MAX_ITEMS_SHOWN, weights: dict | None = None, enrich: bool = False) -> dict:
-    return ranked_feed(ranker, limit, weights, enrich=enrich)
+def feed(ranker: str, limit: int = MAX_ITEMS_SHOWN, weights: dict | None = None, enrich: bool = False, search: str = "") -> dict:
+    return ranked_feed(ranker, limit, weights, enrich=enrich, search=search)
 
 
-def ranked_feed(ranker: str, limit: int, weights: dict | None = None, *, enrich: bool = False, post_url: str | None = None) -> dict:
+def ranked_feed(ranker: str, limit: int, weights: dict | None = None, *, enrich: bool = False, post_url: str | None = None, subscription_url: str | None = None, search: str = "") -> dict:
     entries = read_entries()
     subs = read_entries(FEEDS_FILE)
+    if subscription_url is not None:
+        if subscription_url not in subs:
+            return {"error": "Subscription not found"}
+        entries = {}
+        subs = {subscription_url: subs[subscription_url]}
     for url in entries:
         schedule(url)
     for url in subs:
         schedule_subscription(url)
     now = time.time()
     with lock:
-        key = (ranker, json.dumps(weights or ranking.WEIGHTS, sort_keys=True), json.dumps([entries, subs]),
+        key = (ranker, json.dumps(weights or ranking.WEIGHTS, sort_keys=True), json.dumps([entries, subs, search, post_url is not None]),
                state_version)
         hit = ranked_cache.get(key)
         if hit and now - hit[0] < RANKED_TTL:
@@ -765,6 +777,8 @@ def ranked_feed(ranker: str, limit: int, weights: dict | None = None, *, enrich:
     if new:
         save_json(ADDED_FILE, added, affects_feed=False)
     if items is not None:
+        if post_url is None and search.strip():
+            items = [p for p in items if matches_search(p, search)]
         ranked = ranking.rank(ranker, items, now, weights, lazy=True)
         with lock:
             for k in [k for k, (t, _) in ranked_cache.items() if now - t >= RANKED_TTL or k[3] != state_version]:
@@ -775,7 +789,7 @@ def ranked_feed(ranker: str, limit: int, weights: dict | None = None, *, enrich:
                 ranked_cache[key] = (now, ranked)
     if post_url is not None:
         return post_details(ranked.source, post_url, ranker, limit, weights or ranking.WEIGHTS, now,
-                            enrich=enrich)
+                            enrich=enrich, search=search)
     extra_count = (weights or ranking.WEIGHTS)["enrich_count"] if enrich else 0
     with lock:
         cached, pending_keys = dict(cache), set(pending)
@@ -789,8 +803,13 @@ def ranked_feed(ranker: str, limit: int, weights: dict | None = None, *, enrich:
             "total": ranked.total, "pending": n_pending, "ranker": ranker}
 
 
+def matches_search(post: dict, search: str) -> bool:
+    text = " ".join(str(post.get(k) or "") for k in ("title", "description", "url", "feed", "site", "tags")).casefold()
+    return all(word in text for word in search.casefold().split())
+
+
 def post_details(source: list[dict], url: str, ranker: str, limit: int, weights: dict,
-                 now: float, *, enrich: bool = False) -> dict:
+                 now: float, *, enrich: bool = False, search: str = "") -> dict:
     """Related feeds use base scores: their order is series order or similarity, not feed spreading."""
     by_url = {p["url"]: p for p in source}
     target = by_url.get(url)
@@ -839,11 +858,12 @@ def post_details(source: list[dict], url: str, ranker: str, limit: int, weights:
                 groups.append(("titles:" + min(members), ordered[0].get("title") or "Series", None, ordered))
         for key, title, external, ordered in groups:
             ordered = list({p["url"]: by_url[p["url"]] for p in ordered if p["url"] in by_url}.values())
+            ordered = [p for p in ordered if matches_search(p, search)]
             series.append({"id": sub + ":" + key, "title": title, "url": external,
                            "items": cards(ordered[:limit]), "total": len(ordered)})
     matches = []
     for p in source:
-        if p["url"] != url and target.get("sub") and p.get("sub") == target["sub"]:
+        if matches_search(p, search) and p["url"] != url and target.get("sub") and p.get("sub") == target["sub"]:
             percent, _ = ranking.similarity(target, p, weights)
             if percent:
                 matches.append((percent, p))
@@ -970,7 +990,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Location", "/#settings")
             self.send_header("Content-Length", "0")
             self.end_headers()
-        elif path in ("/api/feed", "/api/post"):
+        elif path in ("/api/feed", "/api/post", "/api/subscription"):
             query = parse_qs(parsed.query)
             name = query.get("ranker", [self.server.ranker])[0]
             if name not in ranking.RANKERS:
@@ -982,17 +1002,27 @@ class Handler(BaseHTTPRequestHandler):
                     weights = ranking.check_weights(json.loads(query["weights"][0]))
                 except (ValueError, TypeError) as e:
                     return self._json({"error": f"weights: {e}"}, 400)
+            if path == "/api/subscription":
+                url = query.get("url", [""])[0]
+                if not url:
+                    return self._json({"error": "url is required"}, 400)
+                result = ranked_feed(name, max(int(limit), 1) if limit.isdigit() else MAX_ITEMS_SHOWN,
+                                     weights, enrich=query.get("enrich") == ["1"], subscription_url=url, search=query.get("q", [""])[0])
+                if "error" in result:
+                    return self._json(result, 404)
+                result["subscription"] = next((s for s in subscription_status() if s["url"] == url), None)
+                return self._feed_json(result)
             if path == "/api/post":
                 url = query.get("url", [""])[0]
                 if not url:
                     return self._json({"error": "url is required"}, 400)
                 result = ranked_feed(name, max(int(limit), 1) if limit.isdigit() else MAX_ITEMS_SHOWN,
-                                     weights, enrich=query.get("enrich") == ["1"], post_url=url)
+                                     weights, enrich=query.get("enrich") == ["1"], post_url=url, search=query.get("q", [""])[0])
                 if "error" in result:
                     return self._json(result, 404)
                 return self._feed_json(result)
             self._feed_json(feed(name, max(int(limit), 1) if limit.isdigit() else MAX_ITEMS_SHOWN, weights,
-                                 enrich=query.get("enrich") == ["1"]))
+                                 enrich=query.get("enrich") == ["1"], search=query.get("q", [""])[0]))
         elif path == "/api/subscriptions":
             self._json({"subscriptions": subscription_status(), "interval_minutes": feed_interval / 60})
         elif path == "/api/settings":
