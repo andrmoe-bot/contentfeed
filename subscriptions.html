@@ -50,7 +50,7 @@
     <p id="message" role="status"></p>
   </form>
   <div class="tools">
-    <input id="filter" type="search" placeholder="Filter by name, address or tag" aria-label="Filter subscriptions">
+    <input id="filter" type="search" placeholder="Search subscriptions by name, address or tag" aria-label="Search subscriptions">
     <select id="sort" aria-label="Sort subscriptions">
       <option value="file">Order in feeds.txt</option>
       <option value="name">Name</option>
@@ -179,7 +179,7 @@ function row(s) {
   });
 
   return el("section", { class: s.error ? "sub failed" : "sub" },
-    el("div", { class: "title" }, icon, el("a", { href: s.site || s.url, target: "_blank", rel: "noopener noreferrer" }, s.title)),
+    el("div", { class: "title" }, icon, el("a", { href: `/subscription?url=${encodeURIComponent(s.url)}` }, s.title)),
     addr,
     el("div", { class: "stats" }, stats),
     s.error ? el("div", { class: "error" }, `Last check failed: ${s.error}`) : null,

@@ -41,6 +41,64 @@ class PostPageTests(unittest.TestCase):
     def urls(self, items):
         return [p['url'] for p in items]
 
+    def test_subscription_feed_is_scoped_before_ranking_and_limiting(self):
+        other = 'https://other.example/feed'
+        server.FEEDS_FILE.write_text(self.sub + '\n' + other)
+        server.subscriptions[other] = {'title': 'Other', 'items': [dict(self.posts[0], url='https://other.example/post')]}
+        # A link also present in the subscription must still appear on its page.
+        server.LINKS_FILE.write_text(self.posts[0]['url'])
+        page = server.ranked_feed('score', 2, subscription_url=self.sub)
+        self.assertEqual(page['total'], 3)
+        self.assertEqual(len(page['items']), 2)
+        self.assertTrue(all(p['sub'] == self.sub for p in page['items']))
+        full = server.ranked_feed('score', 300, subscription_url=self.sub)
+        self.assertEqual(set(self.urls(full['items'])), set(self.urls(self.posts)))
+        self.assertEqual(server.viewed, {})
+
+    def test_subscription_feed_missing_and_empty(self):
+        self.assertEqual(server.ranked_feed('score', 300, subscription_url='missing'),
+                         {'error': 'Subscription not found'})
+        server.subscriptions[self.sub]['items'] = []
+        page = server.ranked_feed('score', 300, subscription_url=self.sub)
+        self.assertEqual(page['total'], 0)
+        self.assertEqual(page['items'], [])
+
+    def test_search_filters_before_limit_and_keeps_caches_separate(self):
+        self.posts[2]['description'] = 'Rare Needle'
+        result = server.ranked_feed('score', 1, search='rare NEEDLE')
+        self.assertEqual(result['total'], 1)
+        self.assertEqual(self.urls(result['items']), [self.posts[2]['url']])
+        self.assertEqual(self.page(search='rare NEEDLE')['item']['url'], self.url)
+        self.assertEqual(server.ranked_feed('score', 1, search='rare NEEDLE')['total'], 1)
+        self.assertEqual(server.ranked_feed('score', 1)['total'], 3)
+        self.assertEqual(server.ranked_feed('score', 1, search='absent')['total'], 0)
+        self.assertEqual(server.ranked_feed('score', 1, subscription_url=self.sub, search='needle')['total'], 1)
+
+    def test_post_search_keeps_target_and_filters_related_posts(self):
+        page = self.page(search='Part 1', limit=1)
+        self.assertEqual(page['item']['url'], self.url)
+        self.assertEqual(self.urls(page['series'][0]['items']), [self.posts[2]['url']])
+        self.assertEqual(page['similar']['total'], 1)
+        self.assertEqual(self.urls(page['similar']['items']), [self.posts[2]['url']])
+
+    def test_subscription_stats_cover_all_posts_and_current_view_state(self):
+        server.viewed[self.posts[0]['url']] = 200
+        server.viewed[self.posts[1]['url']] = 100
+        server.skipped[self.posts[1]['url']] = 300
+        server.colors[self.posts[0]['url']] = 'green'
+        server.colors[self.posts[2]['url']] = 'red'
+        stats = server.subscription_status()[0]
+        self.assertEqual((stats['opened'], stats['skipped'], stats['unseen']), (1, 1, 1))
+        self.assertEqual(stats['color_counts'], {'green': 1, 'white': 1, 'red': 1})
+        self.assertEqual(stats['last_viewed'], 300)
+        server.viewed[self.posts[1]['url']] = 400
+        stats = server.subscription_status()[0]
+        self.assertEqual((stats['opened'], stats['skipped']), (2, 0))
+        server.subscriptions[self.sub]['items'] = []
+        stats = server.subscription_status()[0]
+        self.assertEqual(stats['unseen'], 0)
+        self.assertIsNone(stats['last_viewed'])
+
     def test_numbered_series_order_and_similarity(self):
         page = self.page()
         self.assertEqual(page['item']['url'], self.url)
