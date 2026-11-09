@@ -453,7 +453,7 @@ function scoreDetail(item, reason) {
     const remaining = 100 * (1 - like.hours / w.similar_hours);
     return `${rate(w.similar_penalty)} × ${like.percent}% similarity × ${n(remaining)}% remaining · ${like.hours}/${rate(w.similar_hours)} h elapsed`;
   }
-  if (label.startsWith("estimated ")) return `${n(item.estimated_minutes)} min × ${rate(w.length_per_minute)} pts/min`;
+  if (label.startsWith("estimated ")) return `|${n(item.estimated_minutes)} − ${rate(w.length_target_minutes)}| min × ${rate(w.length_per_minute)} pts/min`;
   if (label.startsWith("age ")) {
     return `${rate(w.age_per_year)} pts/year`;
   }
@@ -637,8 +637,9 @@ const SETTINGS = [
     hint: "For links straight to a picture. Below 0: a penalty." },
   { key: "article_bonus", label: "Article", before: "", after: "points",
     hint: "For everything else: articles, blog posts and other pages. Below 0: a penalty." },
-  { key: "length_per_minute", label: "Content length", before: "", after: "points per minute",
-    hint: "Estimated runtime, or reading time at 200 words per minute. Positive favors longer content; negative favors shorter content. Unknown lengths have no adjustment. Default: 0." },
+  { key: "length_per_minute", label: "Content length", before: "", after: "points per minute away from",
+    extra: { key: "length_target_minutes", type: "number", after: "target minutes" },
+    hint: "Weight × absolute distance from the target runtime or reading time at 200 words per minute. Negative favors content near the target; positive favors content farther away. Unknown lengths have no adjustment. Weight and target default to 0." },
   { key: "age_per_year", label: "Age", before: "", after: "points per year",
     hint: "Fractional 365-day years since publication for posts, or since addition for links, updated in whole hours. Negative favors newer items; positive favors older items. Future dates count as age 0. Default: 0." },
   { key: "green_bonus_points", label: "Green", before: "", after: "points", hint: "For items you marked green." },
@@ -776,7 +777,7 @@ function showFormula() {
     ["video_bonus", `${plus(w.video_bonus)} if video`],
     ["image_bonus", `${plus(w.image_bonus)} if image`],
     ["article_bonus", `${plus(w.article_bonus)} if article`],
-    ["length_per_minute", `${plus(w.length_per_minute)} × estimated minutes`],
+    ["length_per_minute", `${plus(w.length_per_minute)} × |estimated minutes − ${fmt(w.length_target_minutes)} target minutes|`],
     ["age_per_year", `${plus(w.age_per_year)} × age in years`],
     ["green_bonus_points", `${plus(w.green_bonus_points)} if green`],
     ["above_similarity_penalty", `${plus(w.above_similarity_penalty)} × summed similarity to posts above`],

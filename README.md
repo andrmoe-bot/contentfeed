@@ -253,7 +253,7 @@ All scoring terms add their configured signed points; negative values subtract p
 - −40 × similarity × the fraction of the 24-hour window remaining since opening, using the strongest remaining penalty (see below)
 - 0 for its media type: video (YouTube, Jellyfin, NRK TV, pages with a video file), image (a link straight to a picture) or
   article (anything else). Each has its own setting, which may be negative, to favor or hold back that type.
-- 0 per **estimated minute of content** by default. Set Content length to positive points per minute to favor longer content, or negative to favor shorter content. Runtime metadata is used where available; text is estimated at 200 words per minute (at least one minute). Feed text may be only an excerpt, and page estimates can include surrounding text. Unknown lengths have no adjustment. When the site loads, the five highest-ranked posts with incomplete data are updated in the background, regardless of score weights. YouTube updates fetch runtime and exact publication time together. Change this count with “Update incomplete posts” in Settings (0–100; 0 disables it). Routine polling does not start additional batches; unavailable data stays unknown and recent attempts are skipped for six hours.
+- 0 per **minute away from the target content length** by default. Content length adds `weight × |estimated minutes − target minutes|`. Set a negative weight to favor content near the target, or a positive weight to favor content farther away. The target defaults to 0 minutes, preserving existing scores; both the weight and target are configurable in Settings. Runtime metadata is used where available; text is estimated at 200 words per minute (at least one minute). Feed text may be only an excerpt, and page estimates can include surrounding text. Unknown lengths have no adjustment. When the site loads, the five highest-ranked posts with incomplete data are updated in the background, regardless of score weights. YouTube updates fetch runtime and exact publication time together. Change this count with “Update incomplete posts” in Settings (0–100; 0 disables it). Routine polling does not start additional batches; unavailable data stays unknown and recent attempts are skipped for six hours.
 - 0 if green; red items go to the bottom
 - −15 × the **sum of similarities to posts above it**. A 100% match contributes −15,
   a 50% match contributes −7.5; two 50% matches contribute −15 together. It uses the same
@@ -304,7 +304,7 @@ How alike two items are, from 0 to 100%:
 - Settings exposes the three weights and the publish-time window. Publish time defaults to
   weight 1, content length and title to weight 0. Increase
   **Title similarity** to include titles; set all three to 1 for an equal mix. The separate
-  Content length points-per-minute score is unchanged.
+  Content length distance-from-target scoring is separate from similarity.
 - If either length is unknown/invalid or either title has no meaningful words, omit that
   component and its weight. Use the remaining components; with no available component,
   distinct same-subscription posts retain the subscription base.

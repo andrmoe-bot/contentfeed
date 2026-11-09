@@ -75,7 +75,8 @@ DEFAULT_WEIGHTS = {
     "image_bonus": 0,
     "article_bonus": 0,
     "enrich_count": 5,  # highest-ranked incomplete posts to enrich on page load
-    "length_per_minute": 0,  # signed points per estimated minute of content
+    "length_per_minute": 0,  # signed points per minute away from the target length
+    "length_target_minutes": 0,  # target runtime or reading time; 0 preserves the original linear score
     "age_per_year": 0,  # signed points per fractional 365-day year since publication (or addition for links)
 }
 WEIGHTS = dict(DEFAULT_WEIGHTS)
@@ -511,7 +512,10 @@ def score(item: dict, now: float, weights: dict) -> Reasons:
         reasons.append((kind, w[f"{kind}_bonus"]))
     minutes = item.get("estimated_minutes")
     if w["length_per_minute"] and valid_minutes(minutes):
-        reasons.append((f"estimated {points(minutes)} minutes", points(minutes * w["length_per_minute"])))
+        distance = abs(minutes - w["length_target_minutes"])
+        target = points(w["length_target_minutes"])
+        reasons.append((f"estimated {points(minutes)} minutes, {points(distance)} minutes from target {target}",
+                        points(distance * w["length_per_minute"])))
     if w["age_per_year"]:
         hours = hours_since(now, item["date"])
         reasons.append((f"age {hours_label(hours)}", points(hours / (24 * 365) * w["age_per_year"])))
