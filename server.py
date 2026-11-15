@@ -902,6 +902,7 @@ def add_link(line: str) -> bool:
 # own login. Only videos of posts in the feed are relayed, and only the parts a player needs.
 RELAY = re.compile(r"^/jellyfin/([0-9a-f]{12})(/videos/([0-9a-f-]{32,36})/(?:stream|master\.m3u8|main\.m3u8|hls1/\w+/-?\d+\.(?:mp4|ts)))$",
                    re.I)
+IMAGE_RELAY = re.compile(r"^/jellyfin/([0-9a-f]{12})/images/([0-9a-f]{32})$", re.I)
 
 
 def relay_key(server: str) -> str:
@@ -927,6 +928,44 @@ def jellyfin_relay_target(key: str, item: str) -> tuple[str, dict] | None:
         if target and relay_key(target[0]) == key.lower():
             return target
     return None
+
+
+def jellyfin_image_target(key: str, item: str) -> tuple[tuple[str, dict], str] | None:
+    """The authenticated Jellyfin image URL for a pictured post in the feed."""
+    item = jellyfin.normal_id(item)
+    with lock:
+        posts = [p for s in subscriptions.values() for p in s.get("items", [])
+                 if p.get("jellyfin") and jellyfin.normal_id(jellyfin.item_id(p["url"]) or "") == item
+                 and p.get("image")]
+    for post in posts:
+        target = jellyfin_post(post["url"])
+        if not target or relay_key(target[0]) != key.lower():
+            continue
+        # The source address came from Jellyfin metadata; relay only its path and query.
+        image = urlparse(post.get("_jellyfin_image", ""))
+        if image.scheme in ("http", "https") and image.netloc == urlparse(target[0]).netloc and image.path.startswith("/Items/"):
+            return target, image.path + (f"?{image.query}" if image.query else "")
+    return None
+
+
+def migrate_jellyfin_images() -> bool:
+    """Move cached Jellyfin thumbnails onto the feed origin after upgrading."""
+    changed = False
+    with lock:
+        for subscription in subscriptions.values():
+            for post in subscription.get("items", []):
+                source = post.get("image")
+                if not post.get("jellyfin") or not source or post.get("_jellyfin_image"):
+                    continue
+                image = urlparse(source)
+                server = jellyfin.server_of(post["url"])
+                item = jellyfin.item_id(post["url"])
+                if (item and image.scheme in ("http", "https")
+                        and image.netloc == urlparse(server).netloc and image.path.startswith("/Items/")):
+                    post["_jellyfin_image"] = source
+                    post["image"] = f"/jellyfin/{relay_key(server)}/images/{jellyfin.normal_id(item)}"
+                    changed = True
+    return changed
 
 
 def jellyfin_play(url: str) -> dict:
@@ -1030,6 +1069,8 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/jellyfin/play":
             result = jellyfin_play(parse_qs(parsed.query).get("url", [""])[0])
             self._json(result, 400 if "error" in result else 200)
+        elif IMAGE_RELAY.fullmatch(path):
+            self._relay_image(IMAGE_RELAY.fullmatch(path))
         elif RELAY.match(path):
             self._relay(RELAY.match(path), parsed.query)
         else:
@@ -1061,6 +1102,31 @@ class Handler(BaseHTTPRequestHandler):
                 while chunk := r.read(256 * 1024):
                     self.wfile.write(chunk)
             except (BrokenPipeError, ConnectionResetError):  # the player stopped or seeked elsewhere
+                pass
+
+    def _relay_image(self, m):
+        """Serve a Jellyfin preview through this origin to avoid browser mixed content blocking."""
+        result = jellyfin_image_target(m.group(1), m.group(2))
+        if result is None:
+            return self._send(404, b"Not found", "text/plain")
+        (server, login), path = result
+        try:
+            r = jellyfin.stream(server, login, path, {})
+        except urllib.error.HTTPError as e:
+            return self._send(e.code, f"HTTP {e.code} from Jellyfin".encode(), "text/plain")
+        except (OSError, feeds.FeedError) as e:
+            return self._send(502, f"couldn't reach Jellyfin: {e}".encode(), "text/plain")
+        with r:
+            self.send_response(r.status)
+            self.send_header("Content-Type", r.headers.get("Content-Type", "application/octet-stream"))
+            if r.headers.get("Content-Length"):
+                self.send_header("Content-Length", r.headers["Content-Length"])
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            try:
+                while chunk := r.read(256 * 1024):
+                    self.wfile.write(chunk)
+            except (BrokenPipeError, ConnectionResetError):
                 pass
 
     def do_POST(self):
@@ -1157,6 +1223,8 @@ def main():
     cache.update(load_json(CACHE_FILE))
     added.update(load_json(ADDED_FILE))
     subscriptions.update(load_json(FEED_CACHE_FILE))
+    if migrate_jellyfin_images():
+        save_json(FEED_CACHE_FILE, subscriptions, affects_feed=False)
     viewed.update(load_json(VIEWED_FILE))
     skipped.update(load_json(SKIPPED_FILE))
     colors.update(load_json(COLORS_FILE))
