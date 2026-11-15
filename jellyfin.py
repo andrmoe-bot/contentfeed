@@ -15,6 +15,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 from urllib.parse import parse_qs, quote, urlencode, urljoin, urlparse
+import outbound
 
 from feeds import FETCH_TIMEOUT, FeedError
 
@@ -122,7 +123,7 @@ def open_url(server: str, path: str, token: str | None = None, body: dict | None
     if body is not None:
         h["Content-Type"] = "application/json"
     req = urllib.request.Request(server + path, json.dumps(body).encode() if body is not None else None, h)
-    return urllib.request.urlopen(req, timeout=timeout)
+    return outbound.urlopen(req, timeout=timeout)
 
 
 def request(server: str, path: str, token: str | None = None, body: dict | None = None):
@@ -210,7 +211,7 @@ def parse_date(value: str | None) -> float | None:
 
 def icon(server: str) -> str | None:
     try:
-        with urllib.request.urlopen(urllib.request.Request(server + "/web/", headers={"User-Agent": USER_AGENT}),
+        with outbound.urlopen(urllib.request.Request(server + "/web/", headers={"User-Agent": USER_AGENT}),
                                     timeout=FETCH_TIMEOUT) as r:
             page = r.read(1_000_000).decode("utf-8", errors="replace")
     except OSError:

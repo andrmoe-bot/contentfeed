@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
 from urllib.parse import parse_qs, urljoin, urlparse
+import outbound
 
 from content_length import duration_minutes, reading_minutes, youtube_minutes
 
@@ -43,7 +44,7 @@ def open_url(url: str, accept: str, headers: dict | None = None):
     h = {"User-Agent": USER_AGENT, "Accept": accept, **(headers or {})}
     if urlparse(url).netloc.lower().endswith("youtube.com"):
         h["Cookie"] = "SOCS=CAI"
-    return urllib.request.urlopen(urllib.request.Request(url, headers=h), timeout=FETCH_TIMEOUT)
+    return outbound.urlopen(urllib.request.Request(url, headers=h), timeout=FETCH_TIMEOUT)
 
 
 def youtube_id(url: str) -> str | None:
@@ -460,7 +461,7 @@ def channel_playlists(feed_url):
                 req = urllib.request.Request(
                     "https://www.youtube.com/youtubei/v1/browse?prettyPrint=false", data=json.dumps(body).encode(),
                     headers={"User-Agent": USER_AGENT, "Content-Type": "application/json", "Cookie": "SOCS=CAI"})
-                with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT) as r:
+                with outbound.urlopen(req, timeout=FETCH_TIMEOUT) as r:
                     more, token = parse(json.loads(r.read(MAX_FEED_BYTES)))
                 entries.extend(more)
             return entries
@@ -502,7 +503,7 @@ def older_videos(feed_url: str, limit: int = MAX_OLDER_VIDEOS) -> list[dict]:
             req = urllib.request.Request(
                 "https://www.youtube.com/youtubei/v1/browse?prettyPrint=false", data=json.dumps(body).encode(),
                 headers={"User-Agent": USER_AGENT, "Content-Type": "application/json", "Cookie": "SOCS=CAI"})
-            with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT) as r:
+            with outbound.urlopen(req, timeout=FETCH_TIMEOUT) as r:
                 more, token = videos_on_page(json.loads(r.read(MAX_FEED_BYTES)))
             if not more:
                 break
