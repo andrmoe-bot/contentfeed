@@ -8,6 +8,7 @@ The login for each server is kept in jellyfin.json in the data directory, never 
 """
 
 import calendar
+import hashlib
 import json
 import re
 import time
@@ -185,11 +186,17 @@ def title(item: dict) -> str:
 
 def post(server: str, item: dict) -> dict:
     added = item.get("DateCreated") or item.get("PremiereDate")
+    picture = image(server, item)
+    if picture:
+        # Keep preview loading on the feed origin; the server relays the image with its Jellyfin login.
+        key = hashlib.sha256(server.encode()).hexdigest()[:12]
+        picture = f"/jellyfin/{key}/images/{normal_id(item['Id'])}"
     p = {
         "url": f"{server}/web/#/details?id={quote(item['Id'])}&serverId={quote(item.get('ServerId', ''))}",
         "title": title(item)[:300],
         "description": (item.get("Overview") or "")[:500],
-        "image": image(server, item),
+        "image": picture,
+        "_jellyfin_image": image(server, item),
         "youtube": None,
         "published": parse_date(added),
         "jellyfin": True,
