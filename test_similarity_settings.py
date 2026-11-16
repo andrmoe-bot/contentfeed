@@ -116,6 +116,10 @@ class SimilaritySettingsTests(unittest.TestCase):
                 defaults = request('/api/settings')['defaults']
                 self.assertEqual(defaults['similar_publish_weight'], 1)
                 self.assertEqual(defaults['similar_length_weight'], 0)
+                self.assertEqual(defaults['event_bonus'], 0)
+                self.assertEqual(defaults['task_bonus'], 0)
+                self.assertEqual(defaults['event_urgency_bonus'], 200)
+                self.assertEqual(defaults['task_deadline_bonus'], 200)
                 self.assertEqual(candidate()['similar']['percent'], 75)
                 equal = dict(defaults, similar_length_weight=1)
                 self.assertTrue(request('/api/settings', equal)['ok'])
@@ -148,6 +152,8 @@ class SimilaritySettingsTests(unittest.TestCase):
                 self.assertIn('label: "Publish time similarity"', html)
                 self.assertIn('label: "Content length similarity"', html)
                 self.assertIn('label: "Title similarity"', html)
+                self.assertIn('key: "event_bonus", label: "Event"', html)
+                self.assertIn('key: "task_bonus", label: "Task"', html)
                 self.assertIn('term: "similarity"', html)
                 with urllib.request.urlopen(base + '/subscriptions', timeout=5) as response:
                     self.assertIn(f'ContentFeed · v{server.VERSION}', response.read().decode())

@@ -653,6 +653,11 @@ def load_settings():
     # Preserve the old repeat setting as the new per-100%-similarity amount.
     if "above_similarity_penalty" not in weights and "repeat_per_post" in weights:
         weights["above_similarity_penalty"] = weights["repeat_per_post"]
+    # The previous calendar fields controlled urgency ramps; event_bonus/task_bonus now mean
+    # fixed per-item points, so move saved urgency settings to their explicit names.
+    for old, new in (("event_bonus", "event_urgency_bonus"), ("task_bonus", "task_deadline_bonus")):
+        if old in weights and new not in weights:
+            weights[new] = weights.pop(old)
     weights = {k: v for k, v in weights.items() if k in ranking.DEFAULT_WEIGHTS}
     try:
         ranking.WEIGHTS.update(ranking.check_weights({**ranking.DEFAULT_WEIGHTS, **weights}))
