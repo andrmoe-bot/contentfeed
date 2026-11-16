@@ -55,7 +55,7 @@ def _retry_after(value):
             return 0
 
 
-def urlopen(request, timeout=10):
+def urlopen(request, timeout=10, *, redirect_handler=None):
     """Open one request at a time per host, with a one second gap and 429 cooldown."""
     url = request.full_url if hasattr(request, "full_url") else str(request)
     host = urlparse(url).netloc.lower()
@@ -65,7 +65,11 @@ def urlopen(request, timeout=10):
             _condition.wait(max(0.01, state["next"] - time.monotonic()) if not state["active"] else None)
         state["active"] = True
     try:
-        response = urllib.request.urlopen(request, timeout=timeout)
+        if redirect_handler is None:
+            response = urllib.request.urlopen(request, timeout=timeout)
+        else:
+            opener = urllib.request.build_opener(redirect_handler)
+            response = opener.open(request, timeout=timeout)
     except urllib.error.HTTPError as error:
         with _condition:
             if error.code == 429:

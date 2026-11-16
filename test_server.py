@@ -15,7 +15,7 @@ class FeedCacheTests(unittest.TestCase):
         self.addCleanup(self.stack.close)
         root = Path(self.stack.enter_context(tempfile.TemporaryDirectory()))
         for name in ("LINKS_FILE", "FEEDS_FILE", "CACHE_FILE", "ADDED_FILE", "FEED_CACHE_FILE",
-                     "VIEWED_FILE", "SKIPPED_FILE", "COLORS_FILE", "SETTINGS_FILE", "JELLYFIN_FILE"):
+                     "VIEWED_FILE", "SKIPPED_FILE", "COLORS_FILE", "SETTINGS_FILE", "JELLYFIN_FILE", "CALDAV_FILE"):
             self.stack.enter_context(patch.object(server, name, root / name, create=True))
         for name in ("subscriptions", "cache", "added", "viewed", "skipped", "colors", "ranked_cache"):
             self.stack.enter_context(patch.object(server, name, {}))
@@ -70,6 +70,38 @@ class FeedCacheTests(unittest.TestCase):
         discover.assert_not_called()
         self.assertEqual(server.subscriptions[url]["items"][0]["calendar_kind"], "event")
         self.assertGreater(server.subscriptions[url]["fetched"], 0)
+
+    def test_caldav_login_is_loaded_server_side_and_passed_to_fetch(self):
+        url = "https://calendar.example/work/"
+        login = {"username": "reader", "password": "secret"}
+        fresh = {"title": "Work", "site": url, "items": [], "complete": True}
+        with patch.object(server.caldav, "read_logins", return_value=({url: login}, None)), \
+                patch.object(server.caldav, "fetch", return_value=fresh) as fetch:
+            self.assertIsNone(server.subscribe(url))
+        fetch.assert_called_once_with(url, login)
+        self.assertNotIn("secret", server.subscription_status()[0]["url"])
+
+    def test_subscription_rejects_credentials_embedded_in_url(self):
+        error = server.subscribe("https://reader:secret@calendar.example/work/")
+        self.assertIn("caldav.json", error)
+
+    def test_legacy_calendar_url_credentials_are_moved_out_of_feed_files(self):
+        old_url = "https://reader:p%40ss@calendar.example/work/"
+        clean_url = "https://calendar.example/work/"
+        server.FEEDS_FILE.write_text(old_url + " home\n")
+        server.subscriptions.clear()
+        server.subscriptions[old_url] = {"title": "Work", "items": []}
+        self.assertEqual(server.migrate_caldav_url_credentials(), 1)
+        logins, problem = server.caldav.read_logins(server.CALDAV_FILE)
+        self.assertIsNone(problem)
+        self.assertEqual(logins[clean_url], {"username": "reader", "password": "p@ss"})
+        self.assertEqual(server.CALDAV_FILE.stat().st_mode & 0o077, 0)
+        self.assertEqual(server.FEEDS_FILE.read_text(), clean_url + " home\n")
+        self.assertNotIn("p%40ss", server.FEEDS_FILE.read_text())
+        self.assertNotIn("p%40ss", server.FEED_CACHE_FILE.read_text())
+        self.assertIn(clean_url, server.subscriptions)
+        self.assertNotIn(old_url, server.subscriptions)
+        self.assertNotIn("p@ss", str(server.subscription_status()))
 
     def test_first_rss_subscription_falls_back_after_caldav_probe(self):
         url = "https://example.test/articles"

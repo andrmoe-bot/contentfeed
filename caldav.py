@@ -1,10 +1,13 @@
 """Read public iCalendar files and CalDAV collections (including Radicale)."""
 
 import base64
+import json
+import os
 import urllib.error
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
+from pathlib import Path
 
 import outbound
 from icalendar_parser import ICalendarError, parse_calendar_data, parse_calendar_resource
@@ -12,6 +15,7 @@ from icalendar_parser import ICalendarError, parse_calendar_data, parse_calendar
 USER_AGENT = "Mozilla/5.0 (compatible; ContentFeed/1.0)"
 TIMEOUT = 10
 MAX_BYTES = 20_000_000
+READ_ONLY_METHODS = {"GET", "PROPFIND", "REPORT"}
 DAV = "DAV:"
 CAL = "urn:ietf:params:xml:ns:caldav"
 
@@ -20,31 +24,117 @@ class CalDAVError(Exception):
     pass
 
 
-def _url_and_auth(url):
+class CredentialsInURL(CalDAVError):
+    pass
+
+
+def _origin(url):
+    parsed = urllib.parse.urlsplit(url)
+    return parsed.scheme.lower(), (parsed.hostname or "").lower(), parsed.port
+
+
+class _SameOriginRedirect(urllib.request.HTTPRedirectHandler):
+    """Keep Basic credentials on redirects only when scheme, host and port stay the same."""
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if _origin(req.full_url) != _origin(newurl):
+            return None
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def _url_and_auth(url, login=None):
     p = urllib.parse.urlsplit(url)
     if p.scheme not in ("http", "https") or not p.hostname:
         raise CalDAVError("That isn't a valid CalDAV web address.")
+    if p.username is not None or p.password is not None:
+        raise CredentialsInURL("Don't put CalDAV credentials in the subscription URL; store them in caldav.json.")
     try:
-        port = p.port
+        p.port  # validate the port before making a request
     except ValueError as e:
         raise CalDAVError("That CalDAV address has an invalid port.") from e
     auth = None
-    if p.username is not None:
-        raw = f"{urllib.parse.unquote(p.username)}:{urllib.parse.unquote(p.password or '')}"
+    if login is not None:
+        if (not isinstance(login, dict) or not isinstance(login.get("username"), str)
+                or not login["username"] or not isinstance(login.get("password"), str)):
+            raise CalDAVError("The login in caldav.json must include a username and password.")
+        raw = f"{login['username']}:{login['password']}"
         auth = "Basic " + base64.b64encode(raw.encode()).decode()
-        hostname = f"[{p.hostname}]" if ":" in p.hostname and not p.hostname.startswith("[") else p.hostname
-        host = hostname + (f":{port}" if port else "")
-        url = urllib.parse.urlunsplit((p.scheme, host, p.path, p.query, p.fragment))
     return url, auth
 
 
+def _credential_key(url):
+    """A credential is scoped to this exact collection address, ignoring fragments and host casing."""
+    parsed = urllib.parse.urlsplit(url)
+    if parsed.username is not None or parsed.password is not None:
+        return None
+    host = parsed.hostname or ""
+    if ":" in host:
+        host = f"[{host}]"
+    try:
+        port = parsed.port
+    except ValueError:
+        return None
+    netloc = host + (f":{port}" if port else "")
+    return urllib.parse.urlunsplit((parsed.scheme.lower(), netloc.lower(), parsed.path, parsed.query, ""))
+
+
+def extract_url_login(url):
+    """For migration only: separate credentials from a legacy credential-bearing subscription URL."""
+    parsed = urllib.parse.urlsplit(url)
+    if parsed.username is None and parsed.password is None:
+        return url, None
+    try:
+        port = parsed.port
+    except ValueError as e:
+        raise CalDAVError("A saved CalDAV address has an invalid port.") from e
+    host = parsed.hostname or ""
+    if ":" in host:
+        host = f"[{host}]"
+    netloc = host + (f":{port}" if port else "")
+    clean = urllib.parse.urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment))
+    login = {"username": urllib.parse.unquote(parsed.username or ""),
+             "password": urllib.parse.unquote(parsed.password or "")}
+    return clean, login
+
+
+def login_for(url, logins):
+    key = _credential_key(url)
+    if key is None or not isinstance(logins, dict):
+        return None
+    return next((login for address, login in logins.items()
+                 if _credential_key(address) == key and isinstance(login, dict)), None)
+
+
+def read_logins(path: Path):
+    """Read service-side CalDAV credentials without exposing them through feed status."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return {}, None
+    except (OSError, UnicodeDecodeError) as e:
+        return {}, f"couldn't read {path}: {getattr(e, 'strerror', None) or e}"
+    if os.name == "posix" and path.stat().st_mode & 0o077:
+        return {}, f"{path} must not be accessible by group or others; set its mode to 600"
+    if not text.strip():
+        return {}, f"{path} is empty"
+    try:
+        logins = json.loads(text)
+    except json.JSONDecodeError as e:
+        return {}, f"{path} isn't valid JSON: {e.msg.lower()} at line {e.lineno}, column {e.colno}"
+    if not isinstance(logins, dict):
+        return {}, f"{path} should hold an object of calendar addresses"
+    return logins, None
+
+
 def _request(url, method="GET", body=None, headers=None, auth=None):
+    if method not in READ_ONLY_METHODS:
+        raise CalDAVError(f"CalDAV method {method} is not allowed; calendars are read-only.")
     h = {"User-Agent": USER_AGENT, **(headers or {})}
     if auth:
         h["Authorization"] = auth
     request = urllib.request.Request(url, data=body, headers=h, method=method)
     try:
-        with outbound.urlopen(request, timeout=TIMEOUT) as response:
+        opener = _SameOriginRedirect() if auth else None
+        with outbound.urlopen(request, timeout=TIMEOUT, redirect_handler=opener) as response:
             payload = response.read(MAX_BYTES + 1)
             if len(payload) > MAX_BYTES:
                 raise CalDAVError("The calendar response is too large.")
@@ -55,9 +145,9 @@ def _request(url, method="GET", body=None, headers=None, auth=None):
         raise CalDAVError(f"couldn't fetch calendar {url}: {e}") from e
 
 
-def fetch(url):
-    """Fetch an .ics URL or query a CalDAV collection. URL userinfo supplies Basic auth."""
-    clean_url, auth = _url_and_auth(url)
+def fetch(url, login=None):
+    """Fetch an .ics URL or collection using optional service-side Basic credentials."""
+    clean_url, auth = _url_and_auth(url, login)
     path = urllib.parse.urlsplit(clean_url).path
     # Shared iCalendar files are plain GET URLs. Probe only .ics paths so RSS
     # subscriptions do not incur a DAV request on every refresh.

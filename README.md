@@ -52,6 +52,7 @@ It holds:
 - `colors.json`: the items you marked green or red
 - `settings.json`: your score settings from the feed's score panel, if you changed them
 - `jellyfin.json`: logins for Jellyfin servers you subscribe to (see Jellyfin), if any
+- `caldav.json`: logins for private CalDAV calendars you subscribe to, if any
 - `cache.json` and `feeds.json`: fetched page details and subscription posts
 
 To back up or move your feed, copy this directory.
@@ -95,8 +96,15 @@ It can also be a blog or news page without a feed (see Pages without a feed), a 
 Calendar events and incomplete tasks appear as cards. Events gain up to 200 points during the hour
 before they start; tasks with a due date gain up to 200 points over the last 30 days. Tasks use the
 similarity settings against other tasks in the same calendar. Events ignore the feed's other scoring
-rules. A CalDAV URL can include basic-auth
-credentials as `https://user:password@server/...` when the server requires them.
+rules. For a private CalDAV calendar, put its login in `caldav.json` in the data directory and subscribe
+to the calendar's URL without credentials. Use a dedicated account with read-only access if the server
+supports it; ContentFeed only sends calendar-reading requests.
+
+For example, `caldav.json` maps the calendar collection URL to its login:
+
+    {"https://radicale.example/user/calendar/": {"username": "contentfeed", "password": "…"}}
+
+Keep this file readable only by the service account (for example, `chown contentfeed: /var/lib/contentfeed/caldav.json && chmod 600 /var/lib/contentfeed/caldav.json`). ContentFeed refuses to use it when group or other users have access. Use HTTPS unless the connection stays on a trusted private network. The password stays server-side; it is not included in `feeds.txt` or subscription status. Authenticated redirects are followed only when they keep the same origin. Older credential-bearing calendar URLs are moved into this file at startup.
 The server finds the feed, also where a page doesn't link to it: it tries the usual addresses, such as
 `/feed`, `/rss.xml` and `/index.xml`, under the page and at the top of the site. It also tries them when a
 site turns away the server but not its feed (OpenAI's news page, say). The server checks it every 30 minutes (`--feed-interval MINUTES`), and adds
