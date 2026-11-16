@@ -81,6 +81,20 @@ class FeedCacheTests(unittest.TestCase):
         fetch.assert_called_once_with(url, login)
         self.assertNotIn("secret", server.subscription_status()[0]["url"])
 
+    def test_selected_calendar_urls_can_be_added_separately_with_parent_login(self):
+        parent = "https://calendar.example/andreas/"
+        urls = [parent + "work/", parent + "family/"]
+        login = {"username": "reader", "password": "secret"}
+        fresh = [{"title": name, "site": url, "items": [], "complete": True}
+                 for url, name in zip(urls, ("Work", "Family"))]
+        with patch.object(server.caldav, "read_logins", return_value=({parent: login}, None)), \
+                patch.object(server.caldav, "fetch", side_effect=fresh) as fetch:
+            for url in urls:
+                self.assertIsNone(server.subscribe(url))
+        self.assertEqual([call.args for call in fetch.call_args_list], [(urls[0], login), (urls[1], login)])
+        self.assertEqual(server.FEEDS_FILE.read_text(), "\n".join((self.url, *urls)) + "\n")
+        self.assertTrue(set(urls).issubset({entry["url"] for entry in server.subscription_status()}))
+
     def test_subscription_rejects_credentials_embedded_in_url(self):
         error = server.subscribe("https://reader:secret@calendar.example/work/")
         self.assertIn("caldav.json", error)

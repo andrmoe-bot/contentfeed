@@ -302,6 +302,16 @@ class CalendarFetchTests(unittest.TestCase):
         self.assertIsNone(problem)
         self.assertEqual(caldav.login_for(url, logins), login)
 
+    def test_parent_credentials_apply_to_child_calendars_but_not_sibling_paths(self):
+        parent = "http://calendar.example/andreas/"
+        login = {"username": "reader", "password": "secret"}
+        logins = {parent: login}
+        self.assertEqual(caldav.login_for(parent + "work/", logins), login)
+        self.assertEqual(caldav.login_for("http://calendar.example/andreas", logins), login)
+        self.assertIsNone(caldav.login_for("http://calendar.example/andreas2/work/", logins))
+        self.assertIsNone(caldav.login_for("http://calendar.example/andreas/%2e%2e/private/", logins))
+        self.assertIsNone(caldav.login_for("https://calendar.example/andreas/work/", logins))
+
     def test_calendar_credentials_file_must_be_private(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "caldav.json"

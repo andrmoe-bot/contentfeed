@@ -96,13 +96,15 @@ It can also be a blog or news page without a feed (see Pages without a feed), a 
 Calendar events and incomplete tasks appear as cards. Events gain up to 200 points during the hour
 before they start; tasks with a due date gain up to 200 points over the last 30 days. Tasks use the
 similarity settings against other tasks in the same calendar. Events ignore the feed's other scoring
-rules. For a private CalDAV calendar, put its login in `caldav.json` in the data directory and subscribe
-to the calendar's URL without credentials. Use a dedicated account with read-only access if the server
-supports it; ContentFeed only sends calendar-reading requests.
+rules. Paste each calendar's own URL into the Subscriptions page to add it; repeat for each calendar you
+want. A parent collection URL isn't a substitute for an individual calendar URL. For private calendars,
+put the login in `caldav.json` in the data directory and keep credentials out of the URL. A login mapped
+to a parent collection URL applies to calendars beneath that path. Use a dedicated account with
+read-only access if the server supports it; ContentFeed only sends calendar-reading requests.
 
-For example, `caldav.json` maps the calendar collection URL to its login:
+For example, `caldav.json` can map the Radicale user collection to a login used by selected child calendars:
 
-    {"https://radicale.example/user/calendar/": {"username": "contentfeed", "password": "…"}}
+    {"https://radicale.example/andreas/": {"username": "contentfeed", "password": "…"}}
 
 Keep this file readable only by the service account (for example, `chown contentfeed: /var/lib/contentfeed/caldav.json && chmod 600 /var/lib/contentfeed/caldav.json`). ContentFeed refuses to use it when group or other users have access. Use HTTPS unless the connection stays on a trusted private network. The password stays server-side; it is not included in `feeds.txt` or subscription status. Authenticated redirects are followed only when they keep the same origin. Older credential-bearing calendar URLs are moved into this file at startup.
 The server finds the feed, also where a page doesn't link to it: it tries the usual addresses, such as
