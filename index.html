@@ -119,7 +119,7 @@
   <form class="bar" id="add">
     <input id="url" type="text" autocomplete="off" placeholder="Paste a link or feed, optionally followed by tags" required>
     <button class="primary" type="submit" value="link" title="Add this page to links.txt">Add link</button>
-    <button type="submit" value="subscribe" title="Follow a feed, YouTube channel, subreddit, blog, NRK TV series, Jellyfin server… (feeds.txt)">Subscribe</button>
+    <button type="submit" value="subscribe" title="Follow a feed, CalDAV calendar, .ics link, YouTube channel, blog, NRK TV series, Jellyfin server… (feeds.txt)">Subscribe</button>
     <button type="button" id="refresh" title="Re-fetch every link and check every subscription now">Refresh all</button>
     <p id="message" role="status"></p>
   </form>
@@ -330,8 +330,18 @@ function card(item) {
   const source = item.kind === "subscription" ? item.feed : item.site || domain;
   // Older YouTube videos only have dates like "3 years ago", so theirs are approximate. Jellyfin's are when
   // the movie or episode was added to the server.
-  const when = item.kind === "link" || item.jellyfin ? `added ${ago(item.date)}`
-    : item.date_approx ? `about ${ago(item.date)}` : ago(item.date);
+  const relative = (unix) => {
+    const seconds = Math.abs(Date.now() / 1000 - unix);
+    const unit = seconds >= 86400 ? 86400 : seconds >= 3600 ? 3600 : 60;
+    const amount = Math.max(1, Math.round(seconds / unit));
+    const name = unit === 86400 ? "day" : unit === 3600 ? "hour" : "minute";
+    return unix > Date.now() / 1000 ? `in ${amount} ${name}${amount === 1 ? "" : "s"}` : `${amount} ${name}${amount === 1 ? "" : "s"} ago`;
+  };
+  const calendarDate = item.calendar_kind === "event" ? item.calendar_start : item.deadline;
+  const when = item.calendar_kind
+    ? calendarDate ? `${item.calendar_kind === "event" ? "starts" : "due"} ${relative(calendarDate)}` : "no deadline"
+    : item.kind === "link" || item.jellyfin ? `added ${ago(item.date)}`
+      : item.date_approx ? `about ${ago(item.date)}` : ago(item.date);
 
   const body = el("div", { class: "body" },
     el("div", { class: "source" }, icon, `${source} · ${when}`),
