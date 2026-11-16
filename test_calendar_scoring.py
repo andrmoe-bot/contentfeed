@@ -18,6 +18,22 @@ class CalendarScoringTests(unittest.TestCase):
         ranking.similar_to_recent([task, opened_task, opened_event], NOW, ranking.WEIGHTS)
         self.assertEqual(task["similar"]["url"], "opened-task")
 
+    def test_task_urgency_scales_to_its_deadline_and_is_optional(self):
+        for deadline, expected in ((None, 0), (NOW + 30 * 86400, 0),
+                                   (NOW + 15 * 86400, 100), (NOW, 200), (NOW - 1, 200)):
+            task = dict(item("task"), calendar_kind="task", deadline=deadline)
+            reasons = ranking.score(task, NOW, ranking.DEFAULT_WEIGHTS)
+            self.assertEqual(sum(points for _, points in reasons), expected)
+
+    def test_task_score_applies_recent_task_similarity(self):
+        task = dict(item("task", "calendar"), calendar_kind="task")
+        opened = dict(item("opened", "calendar", age=1), calendar_kind="task")
+        ranking.similar_to_recent([task, opened], NOW, ranking.WEIGHTS)
+        reasons = ranking.score(task, NOW, ranking.WEIGHTS)
+        self.assertEqual(len(reasons), 1)
+        self.assertLess(reasons[0][1], 0)
+        self.assertIn("like “opened”", reasons[0][0])
+
     def test_above_similarity_spreads_tasks_within_the_calendar(self):
         weights = dict(ranking.DEFAULT_WEIGHTS, similar_penalty=0, above_similarity_penalty=-15)
         first = dict(item("first", "calendar"), calendar_kind="task")

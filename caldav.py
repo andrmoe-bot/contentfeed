@@ -2,14 +2,14 @@
 
 import base64
 import calendar
-import re
 import math
+import re
 import time as clock_time
 import urllib.error
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import outbound
@@ -126,7 +126,10 @@ def _occurrences(component, start):
     freq = rules.get("FREQ")
     if not start or freq not in ("DAILY", "WEEKLY", "MONTHLY", "YEARLY"):
         return [start]
-    interval = max(1, int(rules.get("INTERVAL", "1")))
+    try:
+        interval = max(1, int(rules.get("INTERVAL", "1")))
+    except ValueError:
+        return [start]
     count = int(rules["COUNT"]) if rules.get("COUNT", "").isdigit() else None
     until = _date("", "")
     if rules.get("UNTIL"):
@@ -164,14 +167,16 @@ def _occurrences(component, start):
         selected = sorted(byday or [dt.weekday()])
         anchor = dt - timedelta(days=dt.weekday())
         week_index = max(0, int((datetime.fromtimestamp(lower, timezone.utc) - anchor).days // (7 * interval)))
-        seen = 0
         for week in range(week_index, week_index + 100):
             for weekday in selected:
                 occurrence = anchor + timedelta(days=week * 7 * interval + weekday)
                 stamp = occurrence.timestamp()
                 if stamp < start:
                     continue
-                ordinal = week * len(selected) + selected.index(weekday) - sum(day < dt.weekday() for day in selected)
+                index = selected.index(weekday)
+                first_week_count = sum(day >= dt.weekday() for day in selected)
+                ordinal = (index - sum(day < dt.weekday() for day in selected) if week == 0
+                           else first_week_count + (week - 1) * len(selected) + index)
                 if (count is not None and ordinal >= count) or stamp > upper:
                     break
                 if (until is None or stamp <= until) and stamp >= lower:
@@ -235,20 +240,32 @@ def _calendar_data(body, resource_url):
 def fetch(url):
     """Fetch an .ics URL or query a CalDAV collection. URL userinfo supplies Basic auth."""
     clean_url, auth = _url_and_auth(url)
-    # A shared .ics calendar is often a plain HTTP GET rather than a DAV collection.
-    raw_calendar = None
-    try:
-        body, final_url, headers = _request(clean_url, headers={"Accept": "text/calendar, */*"}, auth=auth)
-        if body.lstrip().startswith(b"BEGIN:VCALENDAR") or "text/calendar" in headers.get("Content-Type", "").lower():
-            raw_calendar = (body, final_url)
-            path = urllib.parse.urlsplit(clean_url).path
-            if path.lower().endswith(".ics") and not path.endswith("/"):
+    path = urllib.parse.urlsplit(clean_url).path
+    # Shared iCalendar files are plain GET URLs. Probe only .ics paths so RSS
+    # subscriptions do not incur a DAV request on every refresh.
+    if path.lower().endswith(".ics") and not path.endswith("/"):
+        try:
+            body, final_url, headers = _request(clean_url, headers={"Accept": "text/calendar, */*"}, auth=auth)
+            if body.lstrip().startswith(b"BEGIN:VCALENDAR") or "text/calendar" in headers.get("Content-Type", "").lower():
                 return _calendar_data(body, final_url)
-    except CalDAVError:
-        pass  # collection URLs commonly reject GET and require REPORT
+        except CalDAVError:
+            pass  # Some CalDAV collection URLs also end in .ics.
+
+    propfind = f'''<?xml version="1.0" encoding="utf-8"?>
+<D:propfind xmlns:D="{DAV}"><D:prop><D:resourcetype/><D:displayname/></D:prop></D:propfind>'''.encode()
+    body, _, _ = _request(clean_url, "PROPFIND", propfind,
+        {"Depth": "0", "Content-Type": "application/xml; charset=utf-8", "Accept": "application/xml"}, auth)
+    try:
+        root = ET.fromstring(body)
+    except ET.ParseError as e:
+        raise CalDAVError("The CalDAV server returned invalid XML.") from e
+    resources = root.findall(f".//{{{DAV}}}resourcetype")
+    if not any(resource.find(f"{{{CAL}}}calendar") is not None for resource in resources):
+        raise CalDAVError("That address is not a CalDAV calendar collection or .ics file.")
+    display = root.find(f".//{{{DAV}}}displayname")
+    title = display.text if display is not None else None
 
     items = []
-    title = None
     report_succeeded = False
     for component in ("VEVENT", "VTODO"):
         report = f'''<?xml version="1.0" encoding="utf-8"?>
@@ -261,8 +278,6 @@ def fetch(url):
                 {"Depth": "1", "Content-Type": "application/xml; charset=utf-8", "Accept": "application/xml"}, auth)
             report_succeeded = True
         except CalDAVError:
-            if not report_succeeded and raw_calendar:
-                return _calendar_data(*raw_calendar)
             if report_succeeded:
                 continue
             raise
@@ -276,8 +291,6 @@ def fetch(url):
             data = response.find(f".//{{{CAL}}}calendar-data")
             if data is not None and data.text:
                 items.extend(_items(data.text, resource_url))
-    if not report_succeeded and raw_calendar:
-        return _calendar_data(*raw_calendar)
     items.sort(key=lambda item: item.get("published") or 0, reverse=True)
     return {"title": title or urllib.parse.unquote(urllib.parse.urlsplit(clean_url).path.rstrip("/").split("/")[-1]) or "Calendar",
             "site": clean_url, "icon": None, "items": items[:1000], "complete": True}

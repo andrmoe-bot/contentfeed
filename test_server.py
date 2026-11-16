@@ -55,6 +55,33 @@ class FeedCacheTests(unittest.TestCase):
             server.feed("score")
         self.assertEqual(rank.call_count, 1)
 
+    def test_known_rss_refresh_does_not_probe_caldav(self):
+        with patch.object(server.caldav, "fetch", side_effect=AssertionError("unexpected CalDAV probe")):
+            self.refresh({"title": "Example", "items": [copy.deepcopy(self.post)]})
+
+    def test_caldav_subscription_does_not_fall_through_to_feed_discovery(self):
+        url = "https://calendar.example/work/"
+        event = {"url": url + "#item=event", "title": "Event", "published": 2_000_000,
+                 "calendar_kind": "event", "calendar_start": 2_000_000, "deadline": None}
+        fresh = {"title": "Work", "site": url, "items": [event], "complete": True}
+        with patch.object(server.caldav, "fetch", return_value=fresh), \
+                patch.object(server.feeds, "discover") as discover:
+            self.assertIsNone(server.subscribe(url))
+        discover.assert_not_called()
+        self.assertEqual(server.subscriptions[url]["items"][0]["calendar_kind"], "event")
+
+    def test_first_rss_subscription_falls_back_after_caldav_probe(self):
+        url = "https://example.test/articles"
+        fresh = {"title": "Articles", "feed_url": "https://example.test/articles.xml",
+                 "items": [dict(self.post, url="https://example.test/post")]}
+        with patch.object(server.caldav, "fetch", side_effect=server.caldav.CalDAVError("not CalDAV")), \
+                patch.object(server.feeds, "discover", return_value=fresh["feed_url"]) as discover, \
+                patch.object(server.feeds, "fetch", return_value=fresh) as fetch:
+            self.assertIsNone(server.subscribe(url))
+        discover.assert_called_once_with(url)
+        fetch.assert_called_once_with(fresh["feed_url"])
+        self.assertEqual(server.subscriptions[url]["title"], "Articles")
+
     def test_failed_refresh_preserves_cache(self):
         with patch.object(ranking, "rank", wraps=ranking.rank) as rank:
             server.feed("score")
