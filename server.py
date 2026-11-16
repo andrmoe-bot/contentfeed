@@ -19,6 +19,7 @@ import hashlib
 import json
 import re
 import threading
+import tempfile
 import urllib.error
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -38,7 +39,7 @@ import ranking
 ROOT = Path(__file__).resolve().parent  # code and pages; the server never writes here
 DEFAULT_DATA_DIR = ROOT / "data"
 # Data files; set_data_dir() points these into the data directory at startup.
-LINKS_FILE = FEEDS_FILE = CACHE_FILE = ADDED_FILE = FEED_CACHE_FILE = VIEWED_FILE = SKIPPED_FILE = COLORS_FILE = SETTINGS_FILE = JELLYFIN_FILE = Path()
+LINKS_FILE = FEEDS_FILE = CACHE_FILE = ADDED_FILE = FEED_CACHE_FILE = VIEWED_FILE = SKIPPED_FILE = COLORS_FILE = SETTINGS_FILE = JELLYFIN_FILE = CALDAV_FILE = Path()
 TEMPLATES = {
     "links.txt": """\
 # One link per line, optionally followed by tags: https://example.com music longread
@@ -51,6 +52,7 @@ TEMPLATES = {
 # or playlist, a subreddit, a blog, a Mastodon profile, and so on. A blog or news page without a feed
 # works too: its posts are read from the page. Lines starting with # are ignored.
 # A Jellyfin server, or a library or series on one, needs its login in jellyfin.json; see the README.
+# A private CalDAV calendar needs its login in caldav.json; credentials don't go in this list.
 # A series on NRK TV is its address, such as https://tv.nrk.no/serie/skam.
 #
 # https://www.youtube.com/@veritasium science video
@@ -85,12 +87,12 @@ executor = ThreadPoolExecutor(max_workers=8)
 
 def set_data_dir(path: Path):
     """Use path for all data files, creating it and the starter lists if they don't exist yet."""
-    global LINKS_FILE, FEEDS_FILE, CACHE_FILE, ADDED_FILE, FEED_CACHE_FILE, VIEWED_FILE, SKIPPED_FILE, COLORS_FILE, SETTINGS_FILE, JELLYFIN_FILE
+    global LINKS_FILE, FEEDS_FILE, CACHE_FILE, ADDED_FILE, FEED_CACHE_FILE, VIEWED_FILE, SKIPPED_FILE, COLORS_FILE, SETTINGS_FILE, JELLYFIN_FILE, CALDAV_FILE
     path.mkdir(parents=True, exist_ok=True)
     LINKS_FILE, FEEDS_FILE = path / "links.txt", path / "feeds.txt"
     CACHE_FILE, ADDED_FILE, FEED_CACHE_FILE = path / "cache.json", path / "added.json", path / "feeds.json"
     VIEWED_FILE, SKIPPED_FILE, COLORS_FILE = path / "viewed.json", path / "skipped.json", path / "colors.json"
-    SETTINGS_FILE, JELLYFIN_FILE = path / "settings.json", path / "jellyfin.json"
+    SETTINGS_FILE, JELLYFIN_FILE, CALDAV_FILE = path / "settings.json", path / "jellyfin.json", path / "caldav.json"
     for name, text in TEMPLATES.items():
         if not (path / name).exists():
             (path / name).write_text(text, encoding="utf-8")
@@ -182,6 +184,46 @@ def load_json(path: Path) -> dict:
         return {}
 
 
+def migrate_caldav_url_credentials() -> int:
+    """Move legacy credentials out of feeds.txt and cached subscription keys into caldav.json."""
+    if not FEEDS_FILE.exists():
+        return 0
+    lines = FEEDS_FILE.read_text(encoding="utf-8").splitlines()
+    migrated, rewritten, replacements = 0, [], {}
+    logins, problem = caldav.read_logins(CALDAV_FILE)
+    for line in lines:
+        parts = line.split()
+        if not parts or parts[0].startswith("#"):
+            rewritten.append(line)
+            continue
+        clean_url, login = caldav.extract_url_login(parts[0])
+        if login is None:
+            rewritten.append(line)
+            continue
+        if problem:
+            raise RuntimeError(f"Can't migrate saved CalDAV credentials: {problem}")
+        logins.setdefault(clean_url, login)
+        replacements[parts[0]] = clean_url
+        rewritten.append(" ".join([clean_url, *parts[1:]]))
+        migrated += 1
+    if not migrated:
+        return 0
+
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=CALDAV_FILE.parent, delete=False) as f:
+        json.dump(logins, f, indent=2)
+        credential_temp = Path(f.name)
+    credential_temp.chmod(0o600)
+    credential_temp.replace(CALDAV_FILE)
+    FEEDS_FILE.write_text("\n".join(rewritten) + "\n", encoding="utf-8")
+    with lock:
+        for old_url, clean_url in replacements.items():
+            if old_url in subscriptions:
+                subscriptions.setdefault(clean_url, subscriptions[old_url])
+                subscriptions.pop(old_url, None)
+    save_json(FEED_CACHE_FILE, subscriptions, affects_feed=False)
+    return migrated
+
+
 def refresh(url: str):
     try:
         item = fetch_metadata(url)
@@ -244,8 +286,15 @@ def refresh_subscription(url: str, force: bool = False):
                         fresh = feeds.fetch(feed_url, *(() if force else (old.get("etag"), old.get("modified"))))
                     else:
                         try:
-                            fresh = caldav.fetch(url)
-                        except caldav.CalDAVError:
+                            caldav_logins, caldav_problem = caldav.read_logins(CALDAV_FILE)
+                            login = caldav.login_for(url, caldav_logins)
+                            fresh = caldav.fetch(url, login)
+                        except caldav.CredentialsInURL as e:
+                            raise feeds.FeedError(str(e)) from e
+                        except caldav.CalDAVError as e:
+                            if "HTTP 401" in str(e):
+                                detail = caldav_problem or f"add a username and password for this calendar to {CALDAV_FILE}"
+                                raise feeds.FeedError(f"CalDAV requires a login: {detail}") from e
                             feed_url = feeds.discover(url)
                             fresh = feeds.fetch(feed_url, *(() if force else (old.get("etag"), old.get("modified"))))
                 except feeds.FeedError as e:
@@ -353,6 +402,8 @@ def subscribe(line: str) -> str | None:
     url, *tags = line.split() or [""]
     if urlparse(url).scheme not in ("http", "https"):
         return "That isn't a web address."
+    if urlparse(url).username is not None or urlparse(url).password is not None:
+        return "Don't put credentials in a subscription URL. For CalDAV, store them in caldav.json."
     if url in read_entries(FEEDS_FILE):
         return "Already subscribed."
     with lock:
@@ -1231,6 +1282,9 @@ def main():
     cache.update(load_json(CACHE_FILE))
     added.update(load_json(ADDED_FILE))
     subscriptions.update(load_json(FEED_CACHE_FILE))
+    migrated_credentials = migrate_caldav_url_credentials()
+    if migrated_credentials:
+        print(f"Moved credentials out of {FEEDS_FILE} for {migrated_credentials} CalDAV subscription(s).")
     if migrate_jellyfin_images():
         save_json(FEED_CACHE_FILE, subscriptions, affects_feed=False)
     viewed.update(load_json(VIEWED_FILE))

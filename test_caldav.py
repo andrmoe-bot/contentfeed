@@ -1,6 +1,8 @@
 import unittest
 from datetime import datetime, timezone
 from email.message import Message
+from pathlib import Path
+import tempfile
 from unittest.mock import patch
 from xml.sax.saxutils import escape
 
@@ -266,22 +268,61 @@ class CalendarFetchTests(unittest.TestCase):
             (report(event_text, "/user/calendar/event.ics"), collection, Message()),
             (report(task_text, "/user/calendar/task.ics"), collection, Message()),
         ]
+        login = {"username": "reader", "password": "secret"}
         with patch.object(caldav, "_request", side_effect=responses) as request:
-            result = caldav.fetch(collection)
+            result = caldav.fetch(collection, login)
         self.assertEqual(result["title"], "Work")
         self.assertEqual({it["calendar_kind"] for it in result["items"]}, {"event", "task"})
         self.assertEqual([call.args[1] for call in request.call_args_list], ["PROPFIND", "REPORT", "REPORT"])
         self.assertIn(b'name="VEVENT"', request.call_args_list[1].args[2])
         self.assertIn(b'name="VTODO"', request.call_args_list[2].args[2])
+        self.assertTrue(all(call.args[4] == "Basic cmVhZGVyOnNlY3JldA==" for call in request.call_args_list))
 
-    def test_auth_userinfo_is_removed_from_request_and_encoded_as_basic(self):
-        clean, auth = caldav._url_and_auth("https://alice:p%40ss@example.test/cal/")
+    def test_auth_comes_from_login_and_credentials_in_url_are_rejected(self):
+        clean, auth = caldav._url_and_auth("https://example.test/cal/", {"username": "alice", "password": "p@ss"})
         self.assertEqual(clean, "https://example.test/cal/")
         self.assertEqual(auth, "Basic YWxpY2U6cEBzcw==")
-        ipv6, _ = caldav._url_and_auth("https://alice:secret@[::1]:5232/calendar/")
+        ipv6, _ = caldav._url_and_auth("https://[::1]:5232/calendar/")
         self.assertEqual(ipv6, "https://[::1]:5232/calendar/")
+        with self.assertRaises(caldav.CredentialsInURL):
+            caldav._url_and_auth("https://alice:secret@example.test/calendar/")
         with self.assertRaises(caldav.CalDAVError):
-            caldav._url_and_auth("https://alice:secret@example.test:bad/calendar/")
+            caldav._url_and_auth("https://example.test:bad/calendar/")
+
+    def test_calendar_credentials_are_scoped_to_exact_collection_and_stay_in_server_file(self):
+        url = "https://calendar.example/work/"
+        login = {"username": "reader", "password": "secret"}
+        self.assertEqual(caldav.login_for("HTTPS://CALENDAR.EXAMPLE/work/", {url: login}), login)
+        self.assertIsNone(caldav.login_for("https://calendar.example/other/", {url: login}))
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "caldav.json"
+            path.write_text('{"https://calendar.example/work/": {"username": "reader", "password": "secret"}}')
+            path.chmod(0o600)
+            logins, problem = caldav.read_logins(path)
+        self.assertIsNone(problem)
+        self.assertEqual(caldav.login_for(url, logins), login)
+
+    def test_calendar_credentials_file_must_be_private(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "caldav.json"
+            path.write_text("{}")
+            path.chmod(0o644)
+            logins, problem = caldav.read_logins(path)
+        if caldav.os.name == "posix":
+            self.assertEqual(logins, {})
+            self.assertIn("mode to 600", problem)
+
+    def test_authenticated_redirects_cannot_cross_origins_or_downgrade_to_http(self):
+        handler = caldav._SameOriginRedirect()
+        request = caldav.urllib.request.Request("https://calendar.example/a", headers={"Authorization": "Basic secret"})
+        same_origin = handler.redirect_request(request, None, 302, "Found", Message(), "https://calendar.example/b")
+        self.assertEqual(same_origin.get_header("Authorization"), "Basic secret")
+        self.assertIsNone(handler.redirect_request(request, None, 302, "Found", Message(), "https://other.example/b"))
+        self.assertIsNone(handler.redirect_request(request, None, 302, "Found", Message(), "http://calendar.example/b"))
+
+    def test_caldav_transport_rejects_write_methods(self):
+        with self.assertRaisesRegex(caldav.CalDAVError, "read-only"):
+            caldav._request("https://calendar.example/work/", "PUT")
 
     def test_rejects_non_calendar_collection_and_invalid_addresses(self):
         propfind = f'''<D:multistatus xmlns:D="{caldav.DAV}"><D:response><D:propstat>
