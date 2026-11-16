@@ -3,6 +3,7 @@
 import base64
 import json
 import os
+import posixpath
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -77,6 +78,14 @@ def _credential_key(url):
     return urllib.parse.urlunsplit((parsed.scheme.lower(), netloc.lower(), parsed.path, parsed.query, ""))
 
 
+def _normalized_path(path):
+    """Normalize decoded path segments before applying collection credential scopes."""
+    path = urllib.parse.unquote(path)
+    if "\\" in path:
+        return None
+    return posixpath.normpath("/" + path.lstrip("/"))
+
+
 def extract_url_login(url):
     """For migration only: separate credentials from a legacy credential-bearing subscription URL."""
     parsed = urllib.parse.urlsplit(url)
@@ -97,11 +106,27 @@ def extract_url_login(url):
 
 
 def login_for(url, logins):
-    key = _credential_key(url)
-    if key is None or not isinstance(logins, dict):
+    target = _credential_key(url)
+    if target is None or not isinstance(logins, dict):
         return None
-    return next((login for address, login in logins.items()
-                 if _credential_key(address) == key and isinstance(login, dict)), None)
+    target_parts = urllib.parse.urlsplit(target)
+    matches = []
+    for address, login in logins.items():
+        scope = _credential_key(address)
+        if scope is None or not isinstance(login, dict):
+            continue
+        scope_parts = urllib.parse.urlsplit(scope)
+        if _origin(scope) != _origin(target) or (scope_parts.query and scope_parts.query != target_parts.query):
+            continue
+        scope_path = _normalized_path(scope_parts.path)
+        target_path = _normalized_path(target_parts.path)
+        if scope_path is None or target_path is None:
+            continue
+        in_scope = (scope_path == "/" or target_path == scope_path
+                    or target_path.startswith(scope_path.rstrip("/") + "/"))
+        if in_scope:
+            matches.append((len(scope_path), login))
+    return max(matches, key=lambda match: match[0])[1] if matches else None
 
 
 def read_logins(path: Path):
@@ -146,7 +171,7 @@ def _request(url, method="GET", body=None, headers=None, auth=None):
 
 
 def fetch(url, login=None):
-    """Fetch an .ics URL or collection using optional service-side Basic credentials."""
+    """Fetch an .ics URL or calendar collection using optional service-side Basic credentials."""
     clean_url, auth = _url_and_auth(url, login)
     path = urllib.parse.urlsplit(clean_url).path
     # Shared iCalendar files are plain GET URLs. Probe only .ics paths so RSS

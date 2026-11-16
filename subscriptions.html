@@ -8,6 +8,7 @@
 <style>
   .tools { max-width: 720px; margin: 0 auto; padding: 0 16px 12px; display: flex; gap: 8px; flex-wrap: wrap; }
   .tools input { flex: 1 1 200px; }
+  .subscription-hint { flex-basis: 100%; margin: 0; color: var(--muted); font-size: 13px; }
   select {
     padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border);
     background: var(--card); color: var(--text); font: inherit;
@@ -47,6 +48,7 @@
   <form class="bar" id="add">
     <input id="url" type="text" autocomplete="off" placeholder="Feed, CalDAV calendar, .ics link, YouTube channel, blog, Jellyfin…" required>
     <button class="primary" type="submit">Subscribe</button>
+    <p class="subscription-hint">For Radicale, paste the URL of each calendar you want here, one at a time.</p>
     <p id="message" role="status"></p>
   </form>
   <div class="tools">
@@ -195,7 +197,7 @@ document.getElementById("add").addEventListener("submit", async (e) => {
   const input = document.getElementById("url");
   const button = e.submitter;
   button.disabled = true;
-  say("Looking for a feed…");
+  say("Checking subscription…");
   const { ok, data } = await api("/api/subscriptions", { url: input.value });
   button.disabled = false;
   if (ok) {
