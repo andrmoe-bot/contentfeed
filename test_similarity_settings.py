@@ -143,10 +143,16 @@ class SimilaritySettingsTests(unittest.TestCase):
                 self.assertTrue(all(it['similar'] is None for it in request('/api/feed')['items']))
                 with urllib.request.urlopen(base + '/', timeout=5) as response:
                     html = response.read().decode()
+                self.assertIn(f'ContentFeed · v{server.VERSION}', html)
+                self.assertNotIn('{{VERSION}}', html)
                 self.assertIn('label: "Publish time similarity"', html)
                 self.assertIn('label: "Content length similarity"', html)
                 self.assertIn('label: "Title similarity"', html)
                 self.assertIn('term: "similarity"', html)
+                with urllib.request.urlopen(base + '/subscriptions', timeout=5) as response:
+                    self.assertIn(f'ContentFeed · v{server.VERSION}', response.read().decode())
+                with urllib.request.urlopen(base + '/post?url=' + urllib.parse.quote(posts[0]['url']), timeout=5) as response:
+                    self.assertIn(f'ContentFeed · v{server.VERSION}', response.read().decode())
             finally:
                 httpd.shutdown()
                 thread.join(timeout=5)
