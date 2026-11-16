@@ -13,11 +13,23 @@ class CalendarScoringTests(unittest.TestCase):
             self.assertEqual(sum(points for _, points in reasons), expected)
 
     def test_event_and_task_urgency_amounts_are_configurable(self):
-        weights = dict(ranking.DEFAULT_WEIGHTS, event_bonus=80, task_bonus=80)
+        weights = dict(ranking.DEFAULT_WEIGHTS, event_urgency_bonus=80, task_deadline_bonus=80)
         event = dict(item("event"), calendar_kind="event", calendar_start=NOW + 1800)
         task = dict(item("task"), calendar_kind="task", deadline=NOW + 15 * 86400)
         self.assertEqual(ranking.score(event, NOW, weights)[0][1], 40)
         self.assertEqual(ranking.score(task, NOW, weights)[0][1], 40)
+
+    def test_event_and_task_fixed_terms_default_to_zero_and_accept_penalties(self):
+        self.assertEqual(ranking.DEFAULT_WEIGHTS["event_bonus"], 0)
+        self.assertEqual(ranking.DEFAULT_WEIGHTS["task_bonus"], 0)
+        event = dict(item("event"), calendar_kind="event", calendar_start=NOW + 7200)
+        task = dict(item("task"), calendar_kind="task")
+        for kind, item_ in (("event", event), ("task", task)):
+            with self.subTest(kind=kind):
+                self.assertFalse(any(label == kind for label, _ in ranking.score(item_, NOW, ranking.DEFAULT_WEIGHTS)))
+                for value in (-25, 25):
+                    reasons = ranking.score(item_, NOW, dict(ranking.DEFAULT_WEIGHTS, **{f"{kind}_bonus": value}))
+                    self.assertIn((kind, value), reasons)
 
     def test_past_event_penalty_starts_after_event_end(self):
         event = dict(item("event"), calendar_kind="event", calendar_start=NOW - 3600, deadline=NOW + 3600)
