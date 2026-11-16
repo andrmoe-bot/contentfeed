@@ -37,6 +37,7 @@ from content_length import page_minutes, youtube_minutes
 import ranking
 
 ROOT = Path(__file__).resolve().parent  # code and pages; the server never writes here
+VERSION = (ROOT / "VERSION").read_text(encoding="ascii").strip()
 DEFAULT_DATA_DIR = ROOT / "data"
 # Data files; set_data_dir() points these into the data directory at startup.
 LINKS_FILE = FEEDS_FILE = CACHE_FILE = ADDED_FILE = FEED_CACHE_FILE = VIEWED_FILE = SKIPPED_FILE = COLORS_FILE = SETTINGS_FILE = JELLYFIN_FILE = CALDAV_FILE = Path()
@@ -1082,7 +1083,10 @@ class Handler(BaseHTTPRequestHandler):
         path = parsed.path
         if path in PAGES:
             name, ctype = PAGES[path]
-            self._send(200, (ROOT / name).read_bytes(), ctype)
+            body = (ROOT / name).read_bytes()
+            if ctype.startswith("text/html"):
+                body = body.replace(b"{{VERSION}}", VERSION.encode("ascii"))
+            self._send(200, body, ctype)
         elif path == "/settings":  # the old Settings page is now the feed's score panel
             self.send_response(302)
             self.send_header("Location", "/#settings")
