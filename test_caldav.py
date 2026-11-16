@@ -5,6 +5,7 @@ from unittest.mock import patch
 from xml.sax.saxutils import escape
 
 import caldav
+import icalendar_parser
 
 
 NOW = datetime(2026, 11, 16, 12, tzinfo=timezone.utc).timestamp()
@@ -29,15 +30,15 @@ class CalendarParserTests(unittest.TestCase):
     def test_unfolds_lines_and_unescapes_text(self):
         body = calendar_data("BEGIN:VEVENT\r\nUID:x\r\nDTSTART:20261117T120000Z\r\n"
                              "SUMMARY:Folded title \r\n continued\\, with\\nnewline\r\nEND:VEVENT")
-        item = caldav._items(body.decode(), "https://calendar.test/cal/")[0]
+        item = icalendar_parser.parse_calendar_resource(body.decode(), "https://calendar.test/cal/")[0]
         self.assertEqual(item["title"], "Folded title continued, with\nnewline")
 
     def test_parses_utc_all_day_and_named_timezone_dates(self):
-        self.assertEqual(caldav._date("20261117T120000Z"), NOW + 86400)
-        self.assertEqual(caldav._date("20261117"), datetime(2026, 11, 17, tzinfo=timezone.utc).timestamp())
-        new_york = caldav._date("20261117T120000", ";TZID=America/New_York")
+        self.assertEqual(icalendar_parser._date("20261117T120000Z"), NOW + 86400)
+        self.assertEqual(icalendar_parser._date("20261117"), datetime(2026, 11, 17, tzinfo=timezone.utc).timestamp())
+        new_york = icalendar_parser._date("20261117T120000", ";TZID=America/New_York")
         self.assertEqual(new_york, datetime(2026, 11, 17, 17, tzinfo=timezone.utc).timestamp())
-        self.assertIsNone(caldav._date("not-a-date"))
+        self.assertIsNone(icalendar_parser._date("not-a-date"))
 
     def test_events_tasks_statuses_and_deadlines(self):
         body = calendar_data(
@@ -49,7 +50,7 @@ class CalendarParserTests(unittest.TestCase):
             todo("cancelled", "Cancelled", "STATUS:CANCELLED\r\n"),
             "BEGIN:VEVENT\r\nUID:cancelled-event\r\nSTATUS:CANCELLED\r\nEND:VEVENT",
         )
-        items = caldav._items(body.decode(), "https://calendar.test/cal/")
+        items = icalendar_parser.parse_calendar_resource(body.decode(), "https://calendar.test/cal/")
         self.assertEqual([it["title"] for it in items], ["A, B", "Task", "No deadline"])
         self.assertIsNotNone(items[0]["deadline"])
         self.assertEqual(items[1]["calendar_kind"], "task")
@@ -62,8 +63,8 @@ class CalendarParserTests(unittest.TestCase):
         data = calendar_data("BEGIN:VEVENT\r\nUID:monthly\r\nDTSTART:20261016T120000Z\r\n"
                              "RRULE:FREQ=MONTHLY;COUNT=4\r\n"
                              "EXDATE:20261116T120000Z\r\nSUMMARY:Monthly\r\nEND:VEVENT")
-        with patch.object(caldav.clock_time, "time", return_value=NOW):
-            items = caldav._items(data.decode(), "https://calendar.test/cal/event.ics")
+        with patch.object(icalendar_parser.clock_time, "time", return_value=NOW):
+            items = icalendar_parser.parse_calendar_resource(data.decode(), "https://calendar.test/cal/event.ics")
         starts = [it["calendar_start"] for it in items]
         self.assertEqual(starts, [datetime(2026, 12, 16, 12, tzinfo=timezone.utc).timestamp(),
                                   datetime(2027, 1, 16, 12, tzinfo=timezone.utc).timestamp()])
@@ -75,8 +76,8 @@ class CalendarParserTests(unittest.TestCase):
         data = calendar_data("BEGIN:VEVENT\r\nUID:month-end\r\nDTSTART:20260131T120000Z\r\n"
                              "RRULE:FREQ=MONTHLY;COUNT=4\r\nSUMMARY:Month end\r\nEND:VEVENT")
         now = datetime(2026, 2, 15, 12, tzinfo=timezone.utc).timestamp()
-        with patch.object(caldav.clock_time, "time", return_value=now):
-            items = caldav._items(data.decode(), "https://calendar.test/cal/")
+        with patch.object(icalendar_parser.clock_time, "time", return_value=now):
+            items = icalendar_parser.parse_calendar_resource(data.decode(), "https://calendar.test/cal/")
         self.assertEqual([it["calendar_start"] for it in items], [
             datetime(2026, 3, 31, 12, tzinfo=timezone.utc).timestamp(),
         ])
@@ -88,8 +89,8 @@ class CalendarParserTests(unittest.TestCase):
             "BEGIN:VEVENT\r\nUID:last-friday\r\nDTSTART:20261030T120000Z\r\n"
             "RRULE:FREQ=MONTHLY;BYDAY=-1FR;COUNT=3\r\nSUMMARY:Last Friday\r\nEND:VEVENT",
         )
-        with patch.object(caldav.clock_time, "time", return_value=NOW):
-            items = caldav._items(data.decode(), "https://calendar.test/cal/")
+        with patch.object(icalendar_parser.clock_time, "time", return_value=NOW):
+            items = icalendar_parser.parse_calendar_resource(data.decode(), "https://calendar.test/cal/")
         by_title = {title: [it["calendar_start"] for it in items if it["title"] == title]
                     for title in ("First Monday", "Last Friday")}
         self.assertEqual(by_title["First Monday"], [
@@ -106,16 +107,16 @@ class CalendarParserTests(unittest.TestCase):
         data = calendar_data("BEGIN:VEVENT\r\nUID:leap-day\r\nDTSTART:20240229T120000Z\r\n"
                              "RRULE:FREQ=YEARLY;COUNT=4\r\nSUMMARY:Leap day\r\nEND:VEVENT")
         now = datetime(2027, 1, 1, 12, tzinfo=timezone.utc).timestamp()
-        with patch.object(caldav.clock_time, "time", return_value=now):
-            items = caldav._items(data.decode(), "https://calendar.test/cal/")
+        with patch.object(icalendar_parser.clock_time, "time", return_value=now):
+            items = icalendar_parser.parse_calendar_resource(data.decode(), "https://calendar.test/cal/")
         self.assertEqual(items, [])
 
     def test_weekly_byday_keeps_dtstart_even_when_it_is_not_selected(self):
         component = {"RRULE": [("", "FREQ=WEEKLY;BYDAY=MO,FR;COUNT=3")]}
         start = datetime(2026, 11, 11, 12, tzinfo=timezone.utc).timestamp()  # Wednesday
         now = datetime(2026, 11, 10, 12, tzinfo=timezone.utc).timestamp()
-        with patch.object(caldav.clock_time, "time", return_value=now):
-            occurrences = caldav._occurrences(component, start)
+        with patch.object(icalendar_parser.clock_time, "time", return_value=now):
+            occurrences = icalendar_parser._occurrences(component, start)
         self.assertEqual(occurrences, [
             start,
             datetime(2026, 11, 13, 12, tzinfo=timezone.utc).timestamp(),
@@ -125,8 +126,8 @@ class CalendarParserTests(unittest.TestCase):
     def test_daily_byday_filters_nonworking_days_and_counts_instances(self):
         component = {"RRULE": [("", "FREQ=DAILY;BYDAY=MO,TU,WE,TH,FR;COUNT=7")]}
         start = datetime(2026, 11, 16, 12, tzinfo=timezone.utc).timestamp()  # Monday
-        with patch.object(caldav.clock_time, "time", return_value=NOW):
-            occurrences = caldav._occurrences(component, start)
+        with patch.object(icalendar_parser.clock_time, "time", return_value=NOW):
+            occurrences = icalendar_parser._occurrences(component, start)
         self.assertEqual(occurrences, [
             datetime(2026, 11, 16, 12, tzinfo=timezone.utc).timestamp(),
             datetime(2026, 11, 17, 12, tzinfo=timezone.utc).timestamp(),
@@ -141,8 +142,8 @@ class CalendarParserTests(unittest.TestCase):
         data = calendar_data("BEGIN:VEVENT\r\nUID:rdate\r\nDTSTART:20261115T120000Z\r\n"
                              "RDATE:20261117T120000Z,20261118T120000Z,20261119T120000Z\r\n"
                              "EXDATE:20261118T120000Z,20261119T120000Z\r\nSUMMARY:Extra dates\r\nEND:VEVENT")
-        with patch.object(caldav.clock_time, "time", return_value=NOW):
-            items = caldav._items(data.decode(), "https://calendar.test/cal/")
+        with patch.object(icalendar_parser.clock_time, "time", return_value=NOW):
+            items = icalendar_parser.parse_calendar_resource(data.decode(), "https://calendar.test/cal/")
         self.assertEqual([it["calendar_start"] for it in items], [
             datetime(2026, 11, 15, 12, tzinfo=timezone.utc).timestamp(),
             datetime(2026, 11, 17, 12, tzinfo=timezone.utc).timestamp(),
@@ -155,8 +156,8 @@ class CalendarParserTests(unittest.TestCase):
             "BEGIN:VEVENT\r\nUID:meeting\r\nRECURRENCE-ID:20261123T120000Z\r\n"
             "DTSTART:20261123T140000Z\r\nSUMMARY:Rescheduled\r\nEND:VEVENT",
         )
-        with patch.object(caldav.clock_time, "time", return_value=NOW):
-            items = caldav._items(data.decode(), "https://calendar.test/cal/")
+        with patch.object(icalendar_parser.clock_time, "time", return_value=NOW):
+            items = icalendar_parser.parse_calendar_resource(data.decode(), "https://calendar.test/cal/")
         starts = {it["title"]: it["calendar_start"] for it in items}
         self.assertEqual(starts["Rescheduled"], datetime(2026, 11, 23, 14, tzinfo=timezone.utc).timestamp())
         self.assertEqual(sum(it["calendar_start"] == datetime(2026, 11, 23, 12, tzinfo=timezone.utc).timestamp()
@@ -169,8 +170,8 @@ class CalendarParserTests(unittest.TestCase):
             "BEGIN:VEVENT\r\nUID:meeting\r\nRECURRENCE-ID:20261123T120000Z\r\n"
             "STATUS:CANCELLED\r\nEND:VEVENT",
         )
-        with patch.object(caldav.clock_time, "time", return_value=NOW):
-            items = caldav._items(data.decode(), "https://calendar.test/cal/")
+        with patch.object(icalendar_parser.clock_time, "time", return_value=NOW):
+            items = icalendar_parser.parse_calendar_resource(data.decode(), "https://calendar.test/cal/")
         self.assertEqual([it["calendar_start"] for it in items], [
             datetime(2026, 11, 16, 12, tzinfo=timezone.utc).timestamp(),
             datetime(2026, 11, 30, 12, tzinfo=timezone.utc).timestamp(),
@@ -179,8 +180,8 @@ class CalendarParserTests(unittest.TestCase):
     def test_recurring_tasks_shift_due_date_from_dtstart(self):
         data = calendar_data(todo("daily-task", "Daily task",
             "DTSTART:20261116T080000Z\r\nDUE:20261116T160000Z\r\nRRULE:FREQ=DAILY;COUNT=3\r\n"))
-        with patch.object(caldav.clock_time, "time", return_value=NOW):
-            items = caldav._items(data.decode(), "https://calendar.test/cal/")
+        with patch.object(icalendar_parser.clock_time, "time", return_value=NOW):
+            items = icalendar_parser.parse_calendar_resource(data.decode(), "https://calendar.test/cal/")
         self.assertEqual([it["deadline"] for it in items], [
             datetime(2026, 11, 16, 16, tzinfo=timezone.utc).timestamp(),
             datetime(2026, 11, 17, 16, tzinfo=timezone.utc).timestamp(),
@@ -190,26 +191,26 @@ class CalendarParserTests(unittest.TestCase):
     def test_weekly_byday_count_and_daily_recurrence(self):
         weekly = {"RRULE": [("", "FREQ=WEEKLY;BYDAY=MO,WE,FR;COUNT=5")]}
         start = datetime(2026, 11, 11, 12, tzinfo=timezone.utc).timestamp()  # Wednesday
-        with patch.object(caldav.clock_time, "time", return_value=NOW):
-            occurrences = caldav._occurrences(weekly, start)
+        with patch.object(icalendar_parser.clock_time, "time", return_value=NOW):
+            occurrences = icalendar_parser._occurrences(weekly, start)
         self.assertEqual(occurrences, [
             datetime(2026, 11, 16, 12, tzinfo=timezone.utc).timestamp(),
             datetime(2026, 11, 18, 12, tzinfo=timezone.utc).timestamp(),
             datetime(2026, 11, 20, 12, tzinfo=timezone.utc).timestamp(),
         ])
         daily = {"RRULE": [("", "FREQ=DAILY;COUNT=5")]}
-        with patch.object(caldav.clock_time, "time", return_value=NOW):
-            occurrences = caldav._occurrences(daily, NOW - 2 * 86400)
+        with patch.object(icalendar_parser.clock_time, "time", return_value=NOW):
+            occurrences = icalendar_parser._occurrences(daily, NOW - 2 * 86400)
         self.assertEqual(occurrences, [NOW - 86400, NOW, NOW + 86400, NOW + 2 * 86400])
 
     def test_weekly_timezone_recurrence_keeps_local_time_across_dst(self):
-        zone = caldav.ZoneInfo("Europe/Oslo")
+        zone = icalendar_parser.ZoneInfo("Europe/Oslo")
         start = datetime(2026, 3, 22, 9, tzinfo=zone)
         start_value = "20260322T090000"
         component = {"RRULE": [("", "FREQ=WEEKLY;COUNT=4")]}
         now = datetime(2026, 3, 20, 12, tzinfo=timezone.utc).timestamp()
-        with patch.object(caldav.clock_time, "time", return_value=now):
-            occurrences = caldav._occurrences(component, start.timestamp(), start_value, ";TZID=Europe/Oslo")
+        with patch.object(icalendar_parser.clock_time, "time", return_value=now):
+            occurrences = icalendar_parser._occurrences(component, start.timestamp(), start_value, ";TZID=Europe/Oslo")
         self.assertEqual(len(occurrences), 4)
         self.assertEqual([datetime.fromtimestamp(t, zone).hour for t in occurrences], [9, 9, 9, 9])
         self.assertEqual(datetime.fromtimestamp(occurrences[0], timezone.utc).hour, 8)
