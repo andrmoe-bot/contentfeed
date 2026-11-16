@@ -29,11 +29,16 @@ def _url_and_auth(url):
     p = urllib.parse.urlsplit(url)
     if p.scheme not in ("http", "https") or not p.hostname:
         raise CalDAVError("That isn't a valid CalDAV web address.")
+    try:
+        port = p.port
+    except ValueError as e:
+        raise CalDAVError("That CalDAV address has an invalid port.") from e
     auth = None
     if p.username is not None:
         raw = f"{urllib.parse.unquote(p.username)}:{urllib.parse.unquote(p.password or '')}"
         auth = "Basic " + base64.b64encode(raw.encode()).decode()
-        host = p.hostname + (f":{p.port}" if p.port else "")
+        hostname = f"[{p.hostname}]" if ":" in p.hostname and not p.hostname.startswith("[") else p.hostname
+        host = hostname + (f":{port}" if port else "")
         url = urllib.parse.urlunsplit((p.scheme, host, p.path, p.query, p.fragment))
     return url, auth
 
@@ -55,16 +60,16 @@ def _request(url, method="GET", body=None, headers=None, auth=None):
         raise CalDAVError(f"couldn't fetch calendar {url}: {e}") from e
 
 
-def _date(value, params=""):
+def _datetime(value, params=""):
     if not value:
         return None
     value = value.strip()
     try:
         if re.fullmatch(r"\d{8}", value):
-            dt = datetime.combine(datetime.strptime(value, "%Y%m%d").date(), time.min, timezone.utc)
-        elif re.fullmatch(r"\d{8}T\d{6}Z", value):
-            dt = datetime.strptime(value, "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
-        elif re.fullmatch(r"\d{8}T\d{6}", value):
+            return datetime.combine(datetime.strptime(value, "%Y%m%d").date(), time.min, timezone.utc)
+        if re.fullmatch(r"\d{8}T\d{6}Z", value):
+            return datetime.strptime(value, "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
+        if re.fullmatch(r"\d{8}T\d{6}", value):
             dt = datetime.strptime(value, "%Y%m%dT%H%M%S")
             tzid = re.search(r'(?:^|;)TZID="?([^;:"]+)', params)
             if tzid:
@@ -74,11 +79,15 @@ def _date(value, params=""):
                     dt = dt.replace(tzinfo=timezone.utc)
             else:
                 dt = dt.replace(tzinfo=timezone.utc)
-        else:
-            return None
-        return dt.timestamp()
+            return dt
     except ValueError:
         return None
+    return None
+
+
+def _date(value, params=""):
+    dt = _datetime(value, params)
+    return dt.timestamp() if dt else None
 
 
 def _unescape(value):
@@ -120,62 +129,147 @@ def _prop(component, name):
     return values[0] if values else ("", "")
 
 
-def _occurrences(component, start):
+def _date_prop(component, name):
+    params, value = _prop(component, name)
+    return _date(value, params)
+
+
+def _occurrences(component, start, base_value="", base_params=""):
     """Expand common daily, weekly, monthly and yearly RRULEs for the next 90 days."""
     rules = dict(part.split("=", 1) for part in _prop(component, "RRULE")[1].upper().split(";") if "=" in part)
     freq = rules.get("FREQ")
     if not start or freq not in ("DAILY", "WEEKLY", "MONTHLY", "YEARLY"):
         return [start]
+    lower, upper = clock_time.time() - 86400, clock_time.time() + 90 * 86400
     try:
         interval = max(1, int(rules.get("INTERVAL", "1")))
     except ValueError:
         return [start]
-    count = int(rules["COUNT"]) if rules.get("COUNT", "").isdigit() else None
+    if interval > 1_000_000:
+        return [start] if lower <= start <= upper else []
+    count_text = rules.get("COUNT", "")
+    count = int(count_text) if count_text.isdigit() and len(count_text) < 10 else None
     until = _date("", "")
     if rules.get("UNTIL"):
         until = _date(rules["UNTIL"])
-    lower, upper = clock_time.time() - 86400, clock_time.time() + 90 * 86400
-    dt = datetime.fromtimestamp(start, timezone.utc)
+    dt = _datetime(base_value, base_params) or datetime.fromtimestamp(start, timezone.utc)
+    lower_local = datetime.fromtimestamp(lower, dt.tzinfo)
+    upper_local = datetime.fromtimestamp(upper, dt.tzinfo)
     out = []
     weekdays = ["MO", "TU", "WE", "TH", "FR", "SA", "SU"]
-    byday = [weekdays.index(d) for d in rules.get("BYDAY", "").split(",") if d in weekdays]
+    byday_specs = []
+    for token in rules.get("BYDAY", "").split(","):
+        match = re.fullmatch(r"([+-]?\d{1,2})?(MO|TU|WE|TH|FR|SA|SU)", token)
+        if match:
+            ordinal = int(match.group(1)) if match.group(1) else None
+            if ordinal:
+                byday_specs.append((ordinal, weekdays.index(match.group(2))))
+            elif ordinal is None:
+                byday_specs.append((None, weekdays.index(match.group(2))))
+    byday = sorted({weekday for _, weekday in byday_specs})
 
     def month_date(index):
         month = dt.year * 12 + (dt.month - 1) + index * interval
         year, month0 = divmod(month, 12)
         month = month0 + 1
-        return dt.replace(year=year, month=month, day=min(dt.day, calendar.monthrange(year, month)[1]))
+        last_day = calendar.monthrange(year, month)[1]
+        return dt.replace(year=year, month=month, day=dt.day) if dt.day <= last_day else None
 
-    if freq in ("DAILY", "WEEKLY") and not (freq == "WEEKLY" and byday):
-        step = interval * (86400 if freq == "DAILY" else 7 * 86400)
-        first = max(0, int(math.ceil((lower - start) / step)))
-        last = int((upper - start) // step)
-        indices = range(first, min(last + 1, count or last + 1, first + 100))
-        out = [start + i * step for i in indices]
-    elif freq in ("MONTHLY", "YEARLY"):
-        period = interval if freq == "MONTHLY" else 12 * interval
-        months_apart = (datetime.fromtimestamp(lower, timezone.utc).year - dt.year) * 12 + datetime.fromtimestamp(lower, timezone.utc).month - dt.month
-        first = max(0, months_apart // period)
-        for index in range(first, first + 100):
-            occurrence = month_date(index if freq == "MONTHLY" else index * 12)
+    if freq == "DAILY" and byday:
+        step_days = interval
+        day_delta = (lower_local.date() - dt.date()).days
+        first = max(0, day_delta // step_days - 1)
+        last = max(first, (upper_local.date() - dt.date()).days // step_days + 1)
+        cycle = 7 // math.gcd(step_days, 7)
+        pattern = [((dt.weekday() + k * step_days) % 7) in byday for k in range(1, cycle + 1)]
+        prior_periods, prior_days = divmod(max(0, first - 1), cycle)
+        ordinal = (1 if first else 0) + prior_periods * sum(pattern) + sum(pattern[:prior_days])
+        for index in range(first, min(last + 1, first + 100)):
+            occurrence = dt + timedelta(days=index * step_days)
             stamp = occurrence.timestamp()
-            if stamp > upper or (count is not None and index >= count):
+            if index and occurrence.weekday() not in byday:
+                continue
+            if stamp > upper or (until is not None and stamp > until) or (count is not None and ordinal >= count):
                 break
             if stamp >= lower:
                 out.append(stamp)
+            ordinal += 1
+    elif freq in ("DAILY", "WEEKLY") and not (freq == "WEEKLY" and byday):
+        step_days = interval * (1 if freq == "DAILY" else 7)
+        day_delta = (lower_local.date() - dt.date()).days
+        first = max(0, day_delta // step_days - 1)
+        last = max(first, (upper_local.date() - dt.date()).days // step_days + 1)
+        stop = min(last + 1, first + 100, count if count is not None else last + 1)
+        out = [(dt + timedelta(days=i * step_days)).timestamp() for i in range(first, stop)
+               if lower <= (dt + timedelta(days=i * step_days)).timestamp() <= upper]
+    elif freq == "MONTHLY" and byday_specs:
+        months_apart = (lower_local.year - dt.year) * 12 + lower_local.month - dt.month
+        months_until = (upper_local.year - dt.year) * 12 + upper_local.month - dt.month
+        first = max(0, months_apart // interval - 1)
+        last = max(first, months_until // interval + 1)
+        ordinal = 0
+        for index in range(0 if count is not None else first, last + 1):
+            month_index = dt.year * 12 + dt.month - 1 + index * interval
+            year, month0 = divmod(month_index, 12)
+            month = month0 + 1
+            matching = {}
+            for nth, weekday in byday_specs:
+                days = [day for day in range(1, calendar.monthrange(year, month)[1] + 1)
+                        if datetime(year, month, day).weekday() == weekday]
+                chosen = days if nth is None else [days[nth - 1] if nth > 0 and nth <= len(days)
+                                                   else days[nth] if nth < 0 and -nth <= len(days) else None]
+                matching.update((day, dt.replace(year=year, month=month, day=day))
+                                for day in chosen if day is not None)
+            if index == 0:
+                matching.setdefault(dt.day, dt)
+            for occurrence in (candidate for day, candidate in sorted(matching.items()) if candidate >= dt):
+                stamp = occurrence.timestamp()
+                if stamp > upper or (until is not None and stamp > until) or (count is not None and ordinal >= count):
+                    break
+                if stamp >= lower:
+                    out.append(stamp)
+                ordinal += 1
+            else:
+                continue
+            break
+    elif freq in ("MONTHLY", "YEARLY"):
+        period = interval if freq == "MONTHLY" else 12 * interval
+        months_apart = (lower_local.year - dt.year) * 12 + lower_local.month - dt.month
+        first = max(0, months_apart // period - 1)
+        months_until = (upper_local.year - dt.year) * 12 + upper_local.month - dt.month
+        last = max(first, months_until // period + 1)
+        ordinal = 0
+        for index in range(first):
+            if month_date(index if freq == "MONTHLY" else index * 12) is not None:
+                ordinal += 1
+        for index in range(first, min(first + 100, last + 1)):
+            occurrence = month_date(index if freq == "MONTHLY" else index * 12)
+            if occurrence is None:
+                continue
+            stamp = occurrence.timestamp()
+            if stamp > upper or (count is not None and ordinal >= count):
+                break
+            if stamp >= lower:
+                out.append(stamp)
+            ordinal += 1
     else:  # weekly with BYDAY
         selected = sorted(byday or [dt.weekday()])
+        start_is_selected = dt.weekday() in selected
         anchor = dt - timedelta(days=dt.weekday())
-        week_index = max(0, int((datetime.fromtimestamp(lower, timezone.utc) - anchor).days // (7 * interval)))
-        for week in range(week_index, week_index + 100):
+        week_index = max(0, (lower_local.date() - anchor.date()).days // (7 * interval) - 1)
+        last_week = max(week_index, (upper_local.date() - anchor.date()).days // (7 * interval) + 1)
+        if (not start_is_selected and start >= lower and start <= upper
+                and (until is None or start <= until) and (count is None or count > 0)):
+            out.append(start)
+        for week in range(week_index, min(week_index + 100, last_week + 1)):
             for weekday in selected:
                 occurrence = anchor + timedelta(days=week * 7 * interval + weekday)
                 stamp = occurrence.timestamp()
                 if stamp < start:
                     continue
                 index = selected.index(weekday)
-                first_week_count = sum(day >= dt.weekday() for day in selected)
-                ordinal = (index - sum(day < dt.weekday() for day in selected) if week == 0
+                first_week_count = sum(day >= dt.weekday() for day in selected) + (not start_is_selected)
+                ordinal = (index - sum(day < dt.weekday() for day in selected) + (not start_is_selected) if week == 0
                            else first_week_count + (week - 1) * len(selected) + index)
                 if (count is not None and ordinal >= count) or stamp > upper:
                     break
@@ -190,7 +284,13 @@ def _occurrences(component, start):
 
 def _items(calendar_data, resource_url):
     out = []
-    for comp in _components(calendar_data):
+    components = list(_components(calendar_data))
+    overrides = set()
+    for component in components:
+        recurrence = _date_prop(component, "RECURRENCE-ID")
+        if recurrence is not None:
+            overrides.add((_prop(component, "UID")[1], recurrence))
+    for comp in components:
         kind = "event" if comp["_type"] == "VEVENT" else "task"
         title = _unescape(_prop(comp, "SUMMARY")[1]) or "Untitled calendar item"
         description = _unescape(_prop(comp, "DESCRIPTION")[1])
@@ -202,18 +302,26 @@ def _items(calendar_data, resource_url):
                     else (_date(end_value, end_params) or _date(due_value, due_params)))
         start = _date(start_value, start_params)
         status = _prop(comp, "STATUS")[1].upper()
-        if (kind == "task" and status in ("COMPLETED", "CANCELLED")) or (kind == "event" and status == "CANCELLED"):
+        completed = bool(_prop(comp, "COMPLETED")[1])
+        if (kind == "task" and (status in ("COMPLETED", "CANCELLED") or completed)) or (kind == "event" and status == "CANCELLED"):
             continue
         uid = _prop(comp, "UID")[1] or title
-        recur = _date(*_prop(comp, "RECURRENCE-ID"))
+        recur = _date_prop(comp, "RECURRENCE-ID")
         external = _unescape(_prop(comp, "URL")[1])
-        base = start if kind == "event" else (deadline or start)
-        occurrences = [recur] if recur else _occurrences(comp, base)
-        excluded = {_date(value, params) for params, value in comp.get("EXDATE", [])}
+        base = start if kind == "event" or start is not None else deadline
+        base_value, base_params = ((start_value, start_params) if base == start
+                                   else (due_value, due_params))
+        occurrences = [recur] if recur else _occurrences(comp, base, base_value, base_params)
+        for params, value in comp.get("RDATE", []):
+            occurrences.extend(stamp for stamp in (_date(part, params) for part in value.split(",")) if stamp is not None)
+        occurrences = sorted(set(occurrences), key=lambda stamp: stamp if stamp is not None else float("-inf"))
+        excluded = {_date(part, params) for params, value in comp.get("EXDATE", []) for part in value.split(",")}
         for occurrence in occurrences:
             if occurrence in excluded:
                 continue
-            shift = occurrence - base if occurrence is not None and base is not None else 0
+            if recur is None and occurrence is not None and (uid, occurrence) in overrides:
+                continue
+            shift = occurrence - base if recur is None and occurrence is not None and base is not None else 0
             item_start = start + shift if start is not None else None
             item_deadline = deadline + shift if deadline is not None else None
             stable = urllib.parse.quote(uid, safe="") + (f"-{int(occurrence)}" if occurrence else "")
@@ -232,9 +340,12 @@ def _items(calendar_data, resource_url):
 
 def _calendar_data(body, resource_url):
     text = body.decode("utf-8-sig", errors="replace")
+    if not re.search(r"(?im)^BEGIN:VCALENDAR\s*$", text) or not re.search(r"(?im)^END:VCALENDAR\s*$", text):
+        raise CalDAVError("The .ics response is not a complete iCalendar object.")
     items = _items(text, resource_url)
+    items.sort(key=lambda item: item.get("published") or 0, reverse=True)
     return {"title": urllib.parse.unquote(urllib.parse.urlsplit(resource_url).path.rstrip("/").split("/")[-1]) or "Calendar",
-            "site": resource_url, "icon": None, "items": items, "complete": True}
+            "site": resource_url, "icon": None, "items": items[:1000], "complete": True}
 
 
 def fetch(url):

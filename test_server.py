@@ -69,6 +69,7 @@ class FeedCacheTests(unittest.TestCase):
             self.assertIsNone(server.subscribe(url))
         discover.assert_not_called()
         self.assertEqual(server.subscriptions[url]["items"][0]["calendar_kind"], "event")
+        self.assertGreater(server.subscriptions[url]["fetched"], 0)
 
     def test_first_rss_subscription_falls_back_after_caldav_probe(self):
         url = "https://example.test/articles"

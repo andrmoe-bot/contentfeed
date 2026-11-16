@@ -45,6 +45,7 @@ class CalendarParserTests(unittest.TestCase):
             todo("due", "Task", "DUE:20261120T120000Z\r\n"),
             todo("none", "No deadline", "CREATED:20261115T120000Z\r\n"),
             todo("done", "Completed", "STATUS:COMPLETED\r\n"),
+            todo("done-property", "Completed property", "COMPLETED:20261115T120000Z\r\n"),
             todo("cancelled", "Cancelled", "STATUS:CANCELLED\r\n"),
             "BEGIN:VEVENT\r\nUID:cancelled-event\r\nSTATUS:CANCELLED\r\nEND:VEVENT",
         )
@@ -70,6 +71,122 @@ class CalendarParserTests(unittest.TestCase):
         self.assertEqual(len({it["url"] for it in items}), len(items))
         self.assertIn("item=monthly-", items[0]["url"])
 
+    def test_monthly_recurrence_skips_invalid_day_of_month(self):
+        data = calendar_data("BEGIN:VEVENT\r\nUID:month-end\r\nDTSTART:20260131T120000Z\r\n"
+                             "RRULE:FREQ=MONTHLY;COUNT=4\r\nSUMMARY:Month end\r\nEND:VEVENT")
+        now = datetime(2026, 2, 15, 12, tzinfo=timezone.utc).timestamp()
+        with patch.object(caldav.clock_time, "time", return_value=now):
+            items = caldav._items(data.decode(), "https://calendar.test/cal/")
+        self.assertEqual([it["calendar_start"] for it in items], [
+            datetime(2026, 3, 31, 12, tzinfo=timezone.utc).timestamp(),
+        ])
+
+    def test_monthly_ordinal_weekdays(self):
+        data = calendar_data(
+            "BEGIN:VEVENT\r\nUID:first-monday\r\nDTSTART:20261102T120000Z\r\n"
+            "RRULE:FREQ=MONTHLY;BYDAY=1MO;COUNT=4\r\nSUMMARY:First Monday\r\nEND:VEVENT",
+            "BEGIN:VEVENT\r\nUID:last-friday\r\nDTSTART:20261030T120000Z\r\n"
+            "RRULE:FREQ=MONTHLY;BYDAY=-1FR;COUNT=3\r\nSUMMARY:Last Friday\r\nEND:VEVENT",
+        )
+        with patch.object(caldav.clock_time, "time", return_value=NOW):
+            items = caldav._items(data.decode(), "https://calendar.test/cal/")
+        by_title = {title: [it["calendar_start"] for it in items if it["title"] == title]
+                    for title in ("First Monday", "Last Friday")}
+        self.assertEqual(by_title["First Monday"], [
+            datetime(2026, 12, 7, 12, tzinfo=timezone.utc).timestamp(),
+            datetime(2027, 1, 4, 12, tzinfo=timezone.utc).timestamp(),
+            datetime(2027, 2, 1, 12, tzinfo=timezone.utc).timestamp(),
+        ])
+        self.assertEqual(by_title["Last Friday"], [
+            datetime(2026, 11, 27, 12, tzinfo=timezone.utc).timestamp(),
+            datetime(2026, 12, 25, 12, tzinfo=timezone.utc).timestamp(),
+        ])
+
+    def test_yearly_leap_day_recurrence_does_not_shift_to_february_28(self):
+        data = calendar_data("BEGIN:VEVENT\r\nUID:leap-day\r\nDTSTART:20240229T120000Z\r\n"
+                             "RRULE:FREQ=YEARLY;COUNT=4\r\nSUMMARY:Leap day\r\nEND:VEVENT")
+        now = datetime(2027, 1, 1, 12, tzinfo=timezone.utc).timestamp()
+        with patch.object(caldav.clock_time, "time", return_value=now):
+            items = caldav._items(data.decode(), "https://calendar.test/cal/")
+        self.assertEqual(items, [])
+
+    def test_weekly_byday_keeps_dtstart_even_when_it_is_not_selected(self):
+        component = {"RRULE": [("", "FREQ=WEEKLY;BYDAY=MO,FR;COUNT=3")]}
+        start = datetime(2026, 11, 11, 12, tzinfo=timezone.utc).timestamp()  # Wednesday
+        now = datetime(2026, 11, 10, 12, tzinfo=timezone.utc).timestamp()
+        with patch.object(caldav.clock_time, "time", return_value=now):
+            occurrences = caldav._occurrences(component, start)
+        self.assertEqual(occurrences, [
+            start,
+            datetime(2026, 11, 13, 12, tzinfo=timezone.utc).timestamp(),
+            datetime(2026, 11, 16, 12, tzinfo=timezone.utc).timestamp(),
+        ])
+
+    def test_daily_byday_filters_nonworking_days_and_counts_instances(self):
+        component = {"RRULE": [("", "FREQ=DAILY;BYDAY=MO,TU,WE,TH,FR;COUNT=7")]}
+        start = datetime(2026, 11, 16, 12, tzinfo=timezone.utc).timestamp()  # Monday
+        with patch.object(caldav.clock_time, "time", return_value=NOW):
+            occurrences = caldav._occurrences(component, start)
+        self.assertEqual(occurrences, [
+            datetime(2026, 11, 16, 12, tzinfo=timezone.utc).timestamp(),
+            datetime(2026, 11, 17, 12, tzinfo=timezone.utc).timestamp(),
+            datetime(2026, 11, 18, 12, tzinfo=timezone.utc).timestamp(),
+            datetime(2026, 11, 19, 12, tzinfo=timezone.utc).timestamp(),
+            datetime(2026, 11, 20, 12, tzinfo=timezone.utc).timestamp(),
+            datetime(2026, 11, 23, 12, tzinfo=timezone.utc).timestamp(),
+            datetime(2026, 11, 24, 12, tzinfo=timezone.utc).timestamp(),
+        ])
+
+    def test_rdate_and_multivalue_exdate_expand_and_exclude_instances(self):
+        data = calendar_data("BEGIN:VEVENT\r\nUID:rdate\r\nDTSTART:20261115T120000Z\r\n"
+                             "RDATE:20261117T120000Z,20261118T120000Z,20261119T120000Z\r\n"
+                             "EXDATE:20261118T120000Z,20261119T120000Z\r\nSUMMARY:Extra dates\r\nEND:VEVENT")
+        with patch.object(caldav.clock_time, "time", return_value=NOW):
+            items = caldav._items(data.decode(), "https://calendar.test/cal/")
+        self.assertEqual([it["calendar_start"] for it in items], [
+            datetime(2026, 11, 15, 12, tzinfo=timezone.utc).timestamp(),
+            datetime(2026, 11, 17, 12, tzinfo=timezone.utc).timestamp(),
+        ])
+
+    def test_recurrence_override_replaces_original_occurrence(self):
+        data = calendar_data(
+            "BEGIN:VEVENT\r\nUID:meeting\r\nDTSTART:20261116T120000Z\r\nRRULE:FREQ=WEEKLY;COUNT=3\r\n"
+            "SUMMARY:Weekly\r\nEND:VEVENT",
+            "BEGIN:VEVENT\r\nUID:meeting\r\nRECURRENCE-ID:20261123T120000Z\r\n"
+            "DTSTART:20261123T140000Z\r\nSUMMARY:Rescheduled\r\nEND:VEVENT",
+        )
+        with patch.object(caldav.clock_time, "time", return_value=NOW):
+            items = caldav._items(data.decode(), "https://calendar.test/cal/")
+        starts = {it["title"]: it["calendar_start"] for it in items}
+        self.assertEqual(starts["Rescheduled"], datetime(2026, 11, 23, 14, tzinfo=timezone.utc).timestamp())
+        self.assertEqual(sum(it["calendar_start"] == datetime(2026, 11, 23, 12, tzinfo=timezone.utc).timestamp()
+                             for it in items), 0)
+
+    def test_cancelled_recurrence_override_suppresses_the_master_instance(self):
+        data = calendar_data(
+            "BEGIN:VEVENT\r\nUID:meeting\r\nDTSTART:20261116T120000Z\r\nRRULE:FREQ=WEEKLY;COUNT=3\r\n"
+            "SUMMARY:Weekly\r\nEND:VEVENT",
+            "BEGIN:VEVENT\r\nUID:meeting\r\nRECURRENCE-ID:20261123T120000Z\r\n"
+            "STATUS:CANCELLED\r\nEND:VEVENT",
+        )
+        with patch.object(caldav.clock_time, "time", return_value=NOW):
+            items = caldav._items(data.decode(), "https://calendar.test/cal/")
+        self.assertEqual([it["calendar_start"] for it in items], [
+            datetime(2026, 11, 16, 12, tzinfo=timezone.utc).timestamp(),
+            datetime(2026, 11, 30, 12, tzinfo=timezone.utc).timestamp(),
+        ])
+
+    def test_recurring_tasks_shift_due_date_from_dtstart(self):
+        data = calendar_data(todo("daily-task", "Daily task",
+            "DTSTART:20261116T080000Z\r\nDUE:20261116T160000Z\r\nRRULE:FREQ=DAILY;COUNT=3\r\n"))
+        with patch.object(caldav.clock_time, "time", return_value=NOW):
+            items = caldav._items(data.decode(), "https://calendar.test/cal/")
+        self.assertEqual([it["deadline"] for it in items], [
+            datetime(2026, 11, 16, 16, tzinfo=timezone.utc).timestamp(),
+            datetime(2026, 11, 17, 16, tzinfo=timezone.utc).timestamp(),
+            datetime(2026, 11, 18, 16, tzinfo=timezone.utc).timestamp(),
+        ])
+
     def test_weekly_byday_count_and_daily_recurrence(self):
         weekly = {"RRULE": [("", "FREQ=WEEKLY;BYDAY=MO,WE,FR;COUNT=5")]}
         start = datetime(2026, 11, 11, 12, tzinfo=timezone.utc).timestamp()  # Wednesday
@@ -85,6 +202,19 @@ class CalendarParserTests(unittest.TestCase):
             occurrences = caldav._occurrences(daily, NOW - 2 * 86400)
         self.assertEqual(occurrences, [NOW - 86400, NOW, NOW + 86400, NOW + 2 * 86400])
 
+    def test_weekly_timezone_recurrence_keeps_local_time_across_dst(self):
+        zone = caldav.ZoneInfo("Europe/Oslo")
+        start = datetime(2026, 3, 22, 9, tzinfo=zone)
+        start_value = "20260322T090000"
+        component = {"RRULE": [("", "FREQ=WEEKLY;COUNT=4")]}
+        now = datetime(2026, 3, 20, 12, tzinfo=timezone.utc).timestamp()
+        with patch.object(caldav.clock_time, "time", return_value=now):
+            occurrences = caldav._occurrences(component, start.timestamp(), start_value, ";TZID=Europe/Oslo")
+        self.assertEqual(len(occurrences), 4)
+        self.assertEqual([datetime.fromtimestamp(t, zone).hour for t in occurrences], [9, 9, 9, 9])
+        self.assertEqual(datetime.fromtimestamp(occurrences[0], timezone.utc).hour, 8)
+        self.assertEqual(datetime.fromtimestamp(occurrences[1], timezone.utc).hour, 7)
+
 
 class CalendarFetchTests(unittest.TestCase):
     def test_shared_ics_is_fetched_directly(self):
@@ -95,6 +225,13 @@ class CalendarFetchTests(unittest.TestCase):
             result = caldav.fetch("https://example.test/a.ics")
         self.assertEqual([it["title"] for it in result["items"]], ["Event"])
         request.assert_called_once()
+
+    def test_rejects_truncated_ics_files(self):
+        headers = Message()
+        headers["Content-Type"] = "text/calendar"
+        with patch.object(caldav, "_request", return_value=(b"BEGIN:VCALENDAR\r\nVERSION:2.0\r\n", "https://example.test/a.ics", headers)):
+            with self.assertRaises(caldav.CalDAVError):
+                caldav.fetch("https://example.test/a.ics")
 
     def test_empty_calendar_is_a_valid_subscription(self):
         collection = "https://example.test/empty/"
@@ -140,6 +277,10 @@ class CalendarFetchTests(unittest.TestCase):
         clean, auth = caldav._url_and_auth("https://alice:p%40ss@example.test/cal/")
         self.assertEqual(clean, "https://example.test/cal/")
         self.assertEqual(auth, "Basic YWxpY2U6cEBzcw==")
+        ipv6, _ = caldav._url_and_auth("https://alice:secret@[::1]:5232/calendar/")
+        self.assertEqual(ipv6, "https://[::1]:5232/calendar/")
+        with self.assertRaises(caldav.CalDAVError):
+            caldav._url_and_auth("https://alice:secret@example.test:bad/calendar/")
 
     def test_rejects_non_calendar_collection_and_invalid_addresses(self):
         propfind = f'''<D:multistatus xmlns:D="{caldav.DAV}"><D:response><D:propstat>

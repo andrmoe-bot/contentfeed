@@ -267,7 +267,7 @@ def refresh_subscription(url: str, force: bool = False):
             if fresh.get("complete"):  # the source lists everything it has, so posts missing from it are gone
                 current = {post_key(p) for p in fresh["items"]}
                 kept = [p for p in kept if post_key(p) in current]
-            entry = {**old, **fresh, "items": merge_posts(kept, fresh["items"], now)}
+            entry = {**old, **fresh, "items": merge_posts(kept, fresh["items"], now), "fetched": now}
         entry.pop("error", None)
         with lock:
             affects_feed = any(old.get(field) != entry.get(field) for field in ("items", "title", "icon"))
