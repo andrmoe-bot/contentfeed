@@ -88,10 +88,15 @@ In the data directory, `links.txt` holds single links and `feeds.txt` holds subs
 optionally followed by space-separated tags (`https://example.com music longread`), and lines
 starting with `#` are comments.
 
-A subscription can be an RSS or Atom feed, or a page that has one: a YouTube channel
+A subscription can be an RSS or Atom feed, a CalDAV calendar collection or shared `.ics` link, or a page that has one: a YouTube channel
 (`youtube.com/@handle`, `/channel/…`) or playlist, a subreddit, a blog, a Mastodon profile and so on.
 It can also be a blog or news page without a feed (see Pages without a feed), a series on NRK TV
 (see NRK TV) or a Jellyfin server (see Jellyfin).
+Calendar events and incomplete tasks appear as cards. Events gain up to 200 points during the hour
+before they start; tasks with a due date gain up to 200 points over the last 30 days. Tasks use the
+similarity settings against other tasks in the same calendar. Events ignore the feed's other scoring
+rules. A CalDAV URL can include basic-auth
+credentials as `https://user:password@server/...` when the server requires them.
 The server finds the feed, also where a page doesn't link to it: it tries the usual addresses, such as
 `/feed`, `/rss.xml` and `/index.xml`, under the page and at the top of the site. It also tries them when a
 site turns away the server but not its feed (OpenAI's news page, say). The server checks it every 30 minutes (`--feed-interval MINUTES`), and adds

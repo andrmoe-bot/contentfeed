@@ -27,6 +27,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urljoin, urlparse
 
 import feeds
+import caldav
 import jellyfin
 import nrk
 import pages
@@ -238,8 +239,11 @@ def refresh_subscription(url: str, force: bool = False):
                 fresh = pages.fetch(url, {p["url"] for p in old.get("items", [])})
             else:
                 try:
-                    feed_url = old.get("feed_url") or feeds.discover(url)
-                    fresh = feeds.fetch(feed_url, *(() if force else (old.get("etag"), old.get("modified"))))
+                    try:
+                        fresh = caldav.fetch(url)
+                    except caldav.CalDAVError:
+                        feed_url = old.get("feed_url") or feeds.discover(url)
+                        fresh = feeds.fetch(feed_url, *(() if force else (old.get("etag"), old.get("modified"))))
                 except feeds.FeedError as e:
                     if jellyfin.is_jellyfin(url):
                         raise feeds.FeedError(jellyfin.missing_login(url, logins, problem, JELLYFIN_FILE)) from e

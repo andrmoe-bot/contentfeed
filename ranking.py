@@ -328,13 +328,16 @@ def explain_similarities(visible: list[dict], source: list[dict], weights: dict)
                 out["recent_match"] = similarity_breakdown(item, other, weights)
         if any(r["label"].startswith("similarity to ") for r in item["reasons"]):
             matches = []
-            for other in groups.get(item.get("sub"), []):
+            group = ("calendar-task", item.get("sub")) if item.get("calendar_kind") == "task" else ("sub", item.get("sub"))
+            for other in groups.get(group, []):
                 match = similarity_breakdown(item, other, weights)
                 if match["percent"]:
                     matches.append(match)
             out["above_matches"] = matches
-        if item.get("sub"):
-            groups.setdefault(item["sub"], []).append(item)
+        if item.get("sub") and not item.get("calendar_kind"):
+            groups.setdefault(("sub", item["sub"]), []).append(item)
+        elif item.get("sub") and item.get("calendar_kind") == "task":
+            groups.setdefault(("calendar-task", item["sub"]), []).append(item)
         explained.append(out)
     return explained
 
@@ -402,6 +405,12 @@ def similar_to_recent(items: list[dict], now: float, weights: dict, title_words:
         first = minutes if valid_minutes(minutes) else None
         candidates = recent_by_sub.get(it.get("sub"), [])
         own = recent_by_url.get(it["url"])
+        if it.get("calendar_kind") == "task":
+            candidates = [entry for entry in candidates if entry[0].get("calendar_kind") == "task"]
+        elif it.get("calendar_kind"):
+            candidates = []
+        else:
+            candidates = [entry for entry in candidates if not entry[0].get("calendar_kind")]
         if not it.get("sub"):
             candidates = [own] if own else []
         first_title = title_words.get(it["url"])
@@ -487,6 +496,35 @@ def score(item: dict, now: float, weights: dict) -> Reasons:
     something opened recently, its media type, and green. rank() then penalizes similarity to posts above it."""
     w = weights
     reasons = []
+    calendar_kind = item.get("calendar_kind")
+    if calendar_kind in ("event", "task"):
+        # Events ramp during their final hour; task urgency grows across the last month.
+        due = item.get("calendar_start") if calendar_kind == "event" else item.get("deadline")
+        if calendar_kind == "event" and due is not None and 0 <= due - now <= 3600:
+            minutes = max(0, int((due - now) // 60))
+            urgency = points(200 * (1 - minutes / 60))
+            if urgency:
+                reasons.append((f"event starts in {minutes} minute{'s' if minutes != 1 else ''}", urgency))
+        elif calendar_kind == "task" and due is not None:
+            hours = max(0, int((due - now) // 3600))
+            horizon = 30 * 24
+            if hours <= horizon:
+                urgency = points(200 * (1 - hours / horizon))
+                if urgency:
+                    reasons.append((f"task deadline in {hours_label(hours)}", urgency))
+        like = item.get("similar")
+        if calendar_kind == "task" and like and w["similar_penalty"]:
+            verb = "skipped" if like.get("skipped") else "opened"
+            when = f"{verb} {hours_label(like['hours'])} ago" if like["hours"] else f"{verb} in the last hour"
+            if like["why"] == "itself":
+                label = f"100% like itself, {when}"
+            else:
+                label = f"{like['percent']}% like “{short(like['title'])}”, {when} ({like['why']})"
+            label += f", {points(100 * (1 - like['hours'] / w['similar_hours']))}% penalty remaining"
+            reasons.append((label, points(w["similar_penalty"] * like["strength"] / 100)))
+        if item["color"] == "red":
+            reasons.append(("red", -RED))
+        return reasons
     if item.get("next_after") and "latest" not in item["tags"]:
         if w["next_up_bonus"]:
             reasons.append((f"next up after “{short(item['next_after'])}”", w["next_up_bonus"]))
@@ -607,7 +645,9 @@ def spread_by_similarity(scored: list[dict], penalty: float, metric: SimilarityM
     matches = [0] * len(scored)
     groups = {}
     for i, it in enumerate(scored):
-        key = ("sub", it["sub"]) if it.get("sub") else ("url", it["url"])
+        key = (("calendar-task", it.get("sub")) if it.get("calendar_kind") == "task"
+               else ("calendar", it["url"]) if it.get("calendar_kind")
+               else ("sub", it["sub"]) if it.get("sub") else ("url", it["url"]))
         groups.setdefault(key, []).append(i)
     queues = []
     for indices in groups.values():
