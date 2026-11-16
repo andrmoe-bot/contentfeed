@@ -70,6 +70,9 @@ DEFAULT_WEIGHTS = {
     "similar_days": 30,  # posts from the same subscription are alike if published within this many days
     "series_penalty": -30,  # added to a later part of a series when you haven't opened anything before it
     "above_similarity_penalty": -15,  # added per 100% similarity to each post above it
+    "event_bonus": 200,  # maximum points for an event starting now
+    "task_bonus": 200,  # maximum points for a task due now
+    "past_event_penalty": -100,  # added after an event ends
     "green_bonus_points": 0,
     "youtube_shorts_bonus": 0,
     "video_bonus": 0,  # for each media type (see media_type); below 0 is a penalty
@@ -86,6 +89,7 @@ SIGNED = {
     "next_up_bonus", "seen_bonus", "new_sub_bonus", "series_penalty", "similar_penalty",
     "above_similarity_penalty", "green_bonus_points", "video_bonus", "image_bonus",
     "article_bonus", "youtube_shorts_bonus", "length_per_minute", "age_per_year",
+    "event_bonus", "task_bonus", "past_event_penalty",
 }
 LIMIT = 10_000_000
 RED = 10_000_000  # red items sink below everything else
@@ -328,7 +332,8 @@ def explain_similarities(visible: list[dict], source: list[dict], weights: dict)
                 out["recent_match"] = similarity_breakdown(item, other, weights)
         if any(r["label"].startswith("similarity to ") for r in item["reasons"]):
             matches = []
-            group = ("calendar-task", item.get("sub")) if item.get("calendar_kind") == "task" else ("sub", item.get("sub"))
+            group = (("calendar", item["calendar_kind"], item.get("sub") or item["url"])
+                     if item.get("calendar_kind") in ("event", "task") else ("sub", item.get("sub")))
             for other in groups.get(group, []):
                 match = similarity_breakdown(item, other, weights)
                 if match["percent"]:
@@ -336,8 +341,8 @@ def explain_similarities(visible: list[dict], source: list[dict], weights: dict)
             out["above_matches"] = matches
         if item.get("sub") and not item.get("calendar_kind"):
             groups.setdefault(("sub", item["sub"]), []).append(item)
-        elif item.get("sub") and item.get("calendar_kind") == "task":
-            groups.setdefault(("calendar-task", item["sub"]), []).append(item)
+        elif item.get("sub") and item.get("calendar_kind") in ("event", "task"):
+            groups.setdefault(("calendar", item["calendar_kind"], item["sub"]), []).append(item)
         explained.append(out)
     return explained
 
@@ -506,20 +511,26 @@ def _similarity_reasons(item: dict, weights: dict) -> Reasons:
 
 
 def _calendar_score(item: dict, now: float, weights: dict) -> Reasons:
-    """Score calendar urgency and task similarity under calendar-specific rules."""
+    """Score calendar urgency and past events under calendar-specific rules."""
     kind = item["calendar_kind"]
     due = item.get("calendar_start") if kind == "event" else item.get("deadline")
     reasons = []
     if kind == "event" and due is not None and 0 <= due - now <= 3600:
         minutes = max(0, int((due - now) // 60))
-        urgency = points(200 * (1 - minutes / 60))
+        urgency = points(weights["event_bonus"] * (1 - minutes / 60))
         if urgency:
             reasons.append((f"event starts in {minutes} minute{'s' if minutes != 1 else ''}", urgency))
+    if kind == "event":
+        ended = item.get("deadline")
+        if ended is None:
+            ended = item.get("calendar_start")
+        if ended is not None and ended < now and weights["past_event_penalty"]:
+            reasons.append(("event has ended", weights["past_event_penalty"]))
     elif kind == "task" and due is not None:
         hours = max(0, int((due - now) // 3600))
         horizon = 30 * 24
         if hours <= horizon:
-            urgency = points(200 * (1 - hours / horizon))
+            urgency = points(weights["task_bonus"] * (1 - hours / horizon))
             if urgency:
                 reasons.append((f"task deadline in {hours_label(hours)}", urgency))
     if kind == "task":
@@ -649,8 +660,8 @@ def spread_by_similarity(scored: list[dict], penalty: float, metric: SimilarityM
     matches = [0] * len(scored)
     groups = {}
     for i, it in enumerate(scored):
-        key = (("calendar-task", it.get("sub")) if it.get("calendar_kind") == "task"
-               else ("calendar", it["url"]) if it.get("calendar_kind")
+        key = (("calendar", it["calendar_kind"], it.get("sub") or it["url"])
+               if it.get("calendar_kind") in ("event", "task")
                else ("sub", it["sub"]) if it.get("sub") else ("url", it["url"]))
         groups.setdefault(key, []).append(i)
     queues = []

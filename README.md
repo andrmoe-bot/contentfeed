@@ -94,11 +94,12 @@ A subscription can be an RSS or Atom feed, a CalDAV calendar collection or share
 (`youtube.com/@handle`, `/channel/…`) or playlist, a subreddit, a blog, a Mastodon profile and so on.
 It can also be a blog or news page without a feed (see Pages without a feed), a series on NRK TV
 (see NRK TV) or a Jellyfin server (see Jellyfin).
-Calendar events and incomplete tasks appear as cards. Events gain up to 200 points during the hour
-before they start; tasks with a due date gain up to 200 points over the last 30 days. Tasks use the
-similarity settings against other tasks in the same calendar. Events ignore the feed's other scoring
-rules. Paste each calendar's own URL into the Subscriptions page to add it; repeat for each calendar you
-want. A parent collection URL isn't a substitute for an individual calendar URL. For private calendars,
+Calendar events and incomplete tasks appear as cards. The score settings panel controls event urgency
+during the final hour before an event starts, task urgency during the final 30 days before a deadline,
+and the penalty for events after they end. Events and tasks also get the similar-posts-above penalty
+against items of the same kind in the same calendar. Paste each calendar's own URL into the
+Subscriptions page to add it; repeat for each calendar you want. A parent collection URL isn't a
+substitute for an individual calendar URL. For private calendars,
 put the login in `caldav.json` in the data directory and keep credentials out of the URL. A login mapped
 to a parent collection URL applies to calendars beneath that path. Use a dedicated account with
 read-only access if the server supports it; ContentFeed only sends calendar-reading requests.
