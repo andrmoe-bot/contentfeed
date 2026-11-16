@@ -97,9 +97,10 @@ It can also be a blog or news page without a feed (see Pages without a feed), a 
 Calendar events and incomplete tasks appear as cards. The score settings panel controls event urgency
 during the final hour before an event starts, task urgency during the final 30 days before a deadline,
 and the penalty for events after they end. Events and tasks also get the similar-posts-above penalty
-against items of the same kind in the same calendar. Paste each calendar's own URL into the
-Subscriptions page to add it; repeat for each calendar you want. A parent collection URL isn't a
-substitute for an individual calendar URL. For private calendars,
+against items of the same kind in the same calendar. Fixed Event and Task terms add points to every
+item of that kind; both default to 0. Paste each calendar's own URL into the Subscriptions page to add
+it; repeat for each calendar you want. A parent collection URL isn't a substitute for an individual
+calendar URL. For private calendars,
 put the login in `caldav.json` in the data directory and keep credentials out of the URL. A login mapped
 to a parent collection URL applies to calendars beneath that path. Use a dedicated account with
 read-only access if the server supports it; ContentFeed only sends calendar-reading requests.

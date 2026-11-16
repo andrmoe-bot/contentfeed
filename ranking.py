@@ -70,8 +70,10 @@ DEFAULT_WEIGHTS = {
     "similar_days": 30,  # posts from the same subscription are alike if published within this many days
     "series_penalty": -30,  # added to a later part of a series when you haven't opened anything before it
     "above_similarity_penalty": -15,  # added per 100% similarity to each post above it
-    "event_bonus": 200,  # maximum points for an event starting now
-    "task_bonus": 200,  # maximum points for a task due now
+    "event_urgency_bonus": 200,  # maximum points for an event starting now
+    "task_deadline_bonus": 200,  # maximum points for a task due now
+    "event_bonus": 0,  # fixed points added to every event
+    "task_bonus": 0,  # fixed points added to every task
     "past_event_penalty": -100,  # added after an event ends
     "green_bonus_points": 0,
     "youtube_shorts_bonus": 0,
@@ -89,7 +91,7 @@ SIGNED = {
     "next_up_bonus", "seen_bonus", "new_sub_bonus", "series_penalty", "similar_penalty",
     "above_similarity_penalty", "green_bonus_points", "video_bonus", "image_bonus",
     "article_bonus", "youtube_shorts_bonus", "length_per_minute", "age_per_year",
-    "event_bonus", "task_bonus", "past_event_penalty",
+    "event_urgency_bonus", "task_deadline_bonus", "event_bonus", "task_bonus", "past_event_penalty",
 }
 LIMIT = 10_000_000
 RED = 10_000_000  # red items sink below everything else
@@ -517,7 +519,7 @@ def _calendar_score(item: dict, now: float, weights: dict) -> Reasons:
     reasons = []
     if kind == "event" and due is not None and 0 <= due - now <= 3600:
         minutes = max(0, int((due - now) // 60))
-        urgency = points(weights["event_bonus"] * (1 - minutes / 60))
+        urgency = points(weights["event_urgency_bonus"] * (1 - minutes / 60))
         if urgency:
             reasons.append((f"event starts in {minutes} minute{'s' if minutes != 1 else ''}", urgency))
     if kind == "event":
@@ -530,11 +532,14 @@ def _calendar_score(item: dict, now: float, weights: dict) -> Reasons:
         hours = max(0, int((due - now) // 3600))
         horizon = 30 * 24
         if hours <= horizon:
-            urgency = points(weights["task_bonus"] * (1 - hours / horizon))
+            urgency = points(weights["task_deadline_bonus"] * (1 - hours / horizon))
             if urgency:
                 reasons.append((f"task deadline in {hours_label(hours)}", urgency))
     if kind == "task":
         reasons.extend(_similarity_reasons(item, weights))
+    type_bonus = weights[f"{kind}_bonus"]
+    if type_bonus:
+        reasons.append((kind, type_bonus))
     if item["color"] == "red":
         reasons.append(("red", -RED))
     return reasons

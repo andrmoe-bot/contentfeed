@@ -170,6 +170,17 @@ class FeedCacheTests(unittest.TestCase):
         server.load_settings()
         self.assertEqual(ranking.WEIGHTS, ranking.DEFAULT_WEIGHTS)
 
+    def test_old_calendar_urgency_values_migrate_to_renamed_settings(self):
+        old = {key: value for key, value in ranking.DEFAULT_WEIGHTS.items()
+               if key not in ("event_urgency_bonus", "task_deadline_bonus")}
+        old.update(event_bonus=80, task_bonus=60)
+        server.save_json(server.SETTINGS_FILE, {"weights": old})
+        server.load_settings()
+        self.assertEqual(ranking.WEIGHTS["event_urgency_bonus"], 80)
+        self.assertEqual(ranking.WEIGHTS["task_deadline_bonus"], 60)
+        self.assertEqual(ranking.WEIGHTS["event_bonus"], 0)
+        self.assertEqual(ranking.WEIGHTS["task_bonus"], 0)
+
     def test_state_changed_during_ranking_is_not_cached(self):
         original_rank = ranking.rank
 
