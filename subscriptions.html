@@ -24,7 +24,7 @@
   .title a { color: inherit; font-weight: 600; font-size: 16px; text-decoration: none; overflow-wrap: anywhere; }
   .title a:hover { text-decoration: underline; }
   .addr, .stats { font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
-  .addr a { color: inherit; }
+  .addr a, .stats a { color: inherit; }
   .error { font-size: 13px; color: var(--error); overflow-wrap: anywhere; }
   .tag-edit { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
   .tag-edit label { font-size: 13px; color: var(--muted); }
@@ -123,10 +123,24 @@ function row(s) {
   const icon = s.icon ? el("img", { src: s.icon, alt: "" }) : null;
   if (icon) icon.onerror = () => icon.remove();
 
-  const stats = s.checking ? "Checking…" : s.fetched
-    ? [`${s.posts} post${s.posts === 1 ? "" : "s"}`, s.latest ? `latest ${ago(s.latest)}` : null, `checked ${ago(s.fetched)}`,
-       s.older === "loading" ? "loading older videos…" : null].filter(Boolean).join(" · ")
-    : "Not checked yet";
+  const statsEl = el("div", { class: "stats" });
+  if (s.checking) {
+    statsEl.textContent = "Checking…";
+  } else if (s.fetched) {
+    const parts = [
+      `${s.posts} post${s.posts === 1 ? "" : "s"}`,
+      s.next_up ? el("a", { href: `/subscription?url=${encodeURIComponent(s.url)}&view=next-up` }, `${s.next_up} next up`) : null,
+      s.latest ? `latest ${ago(s.latest)}` : null,
+      `checked ${ago(s.fetched)}`,
+      s.older === "loading" ? "loading older videos…" : null,
+    ].filter(Boolean);
+    parts.forEach((p, i) => {
+      if (i > 0) statsEl.append(" · ");
+      statsEl.append(p);
+    });
+  } else {
+    statsEl.textContent = "Not checked yet";
+  }
 
   const addr = el("div", { class: "addr" }, el("a", { href: s.url, target: "_blank", rel: "noopener noreferrer" }, s.url));
   if (s.page) {
@@ -184,7 +198,7 @@ function row(s) {
   return el("section", { class: s.error ? "sub failed" : "sub" },
     el("div", { class: "title" }, icon, el("a", { href: `/subscription?url=${encodeURIComponent(s.url)}` }, s.title)),
     addr,
-    el("div", { class: "stats" }, stats),
+    statsEl,
     s.error ? el("div", { class: "error" }, `Last check failed: ${s.error}`) : null,
     s.older_error ? el("div", { class: "error" }, `${s.older_error[0].toUpperCase()}${s.older_error.slice(1)}; trying again later.`) : null,
     tagForm,

@@ -91,13 +91,51 @@ class PostPageTests(unittest.TestCase):
         self.assertEqual((stats['opened'], stats['skipped'], stats['unseen']), (1, 1, 1))
         self.assertEqual(stats['color_counts'], {'green': 1, 'white': 1, 'red': 1})
         self.assertEqual(stats['last_viewed'], 300)
+        self.assertEqual(stats['next_up'], 0)
         server.viewed[self.posts[1]['url']] = 400
         stats = server.subscription_status()[0]
         self.assertEqual((stats['opened'], stats['skipped']), (2, 0))
+        self.assertEqual(stats['next_up'], 1)
         server.subscriptions[self.sub]['items'] = []
         stats = server.subscription_status()[0]
         self.assertEqual(stats['unseen'], 0)
         self.assertIsNone(stats['last_viewed'])
+
+    def test_subscription_next_up_view_across_series(self):
+        s1 = [dict(url=f'https://example.com/s1/{i}', series='S1', episode=[1, i],
+                   title=f'Show 1 Ep {i}', first_seen=100, published=i * 100) for i in (3, 2, 1)]
+        s2 = [dict(url=f'https://example.com/s2/{i}', series='S2', episode=[1, i],
+                   title=f'Show 2 Ep {i}', first_seen=100, published=i * 100) for i in (2, 1)]
+        server.subscriptions[self.sub]['items'] = s1 + s2
+
+        page = server.ranked_feed('score', 300, subscription_url=self.sub)
+        self.assertEqual(page['next_up'], [])
+
+        server.viewed[s1[2]['url']] = 100  # Ep 1
+        server.viewed[s2[1]['url']] = 110  # Ep 1
+        server.ranked_cache.clear()
+
+        page = server.ranked_feed('score', 300, subscription_url=self.sub)
+        self.assertEqual(set(self.urls(page['next_up'])), {s1[1]['url'], s2[0]['url']})
+        for p in page['next_up']:
+            self.assertTrue(any('next up' in r['label'] for r in p['reasons']))
+
+        limited = server.ranked_feed('score', 1, subscription_url=self.sub)
+        self.assertEqual(len(limited['items']), 1)
+        self.assertEqual(set(self.urls(limited['next_up'])), {s1[1]['url'], s2[0]['url']})
+
+        searched = server.ranked_feed('score', 10, subscription_url=self.sub, search='Show 1')
+        self.assertEqual(self.urls(searched['next_up']), [s1[1]['url']])
+
+        server.skipped[s1[1]['url']] = 200
+        server.ranked_cache.clear()
+        page = server.ranked_feed('score', 300, subscription_url=self.sub)
+        self.assertEqual(self.urls(page['next_up']), [s2[0]['url']])
+
+        server.FEEDS_FILE.write_text(self.sub + ' latest')
+        server.ranked_cache.clear()
+        page = server.ranked_feed('score', 300, subscription_url=self.sub)
+        self.assertEqual(page['next_up'], [])
 
     def test_numbered_series_order_and_similarity(self):
         page = self.page()
@@ -214,3 +252,11 @@ class PostPageTests(unittest.TestCase):
         with urllib.request.urlopen(base + '/post?' + urllib.parse.urlencode({'url': self.url})) as response:
             self.assertEqual(response.status, 200)
             self.assertIn('Post & related', response.read().decode())
+        sub_query = '/api/subscription?' + urllib.parse.urlencode({'url': self.sub, 'view': 'next-up'})
+        with urllib.request.urlopen(base + sub_query) as response:
+            page = json.load(response)
+        self.assertIn('next_up', page)
+        self.assertEqual(page['items'], page['next_up'])
+        with urllib.request.urlopen(base + '/subscription/next-up?' + urllib.parse.urlencode({'url': self.sub})) as response:
+            self.assertEqual(response.status, 200)
+            self.assertIn('Next up', response.read().decode())

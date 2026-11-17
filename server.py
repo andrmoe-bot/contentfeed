@@ -64,6 +64,7 @@ TEMPLATES = {
 PAGES = {  # request path -> (file, content type)
     "/": ("index.html", "text/html; charset=utf-8"),
     "/subscription": ("index.html", "text/html; charset=utf-8"),
+    "/subscription/next-up": ("index.html", "text/html; charset=utf-8"),
     "/post": ("index.html", "text/html; charset=utf-8"),
     "/subscriptions": ("subscriptions.html", "text/html; charset=utf-8"),
     "/style.css": ("style.css", "text/css; charset=utf-8"),
@@ -425,10 +426,13 @@ def subscribe(line: str) -> str | None:
 def subscription_status() -> list[dict]:
     status = []
     with lock:
-        for url, tags in read_entries(FEEDS_FILE).items():
+        subs = read_entries(FEEDS_FILE)
+        next_up_map, _ = series_state(subs)
+        for url, tags in subs.items():
             s = subscriptions.get(url, {})
             dates = [it["published"] or it["first_seen"] for it in s.get("items", [])]
             states = [view_state(u) for u in {p["url"] for p in s.get("items", [])}]
+            next_up_count = sum(1 for p in s.get("items", []) if p["url"] in next_up_map and "latest" not in tags)
             status.append({
                 "url": url,
                 "tags": tags,
@@ -441,6 +445,7 @@ def subscription_status() -> list[dict]:
                 "opened": sum(state["last_viewed"] is not None and not state["skipped"] for state in states),
                 "skipped": sum(state["skipped"] for state in states),
                 "unseen": sum(state["last_viewed"] is None for state in states),
+                "next_up": next_up_count,
                 "color_counts": {color: sum(state["color"] == color for state in states) for color in COLORS},
                 "last_viewed": max((state["last_viewed"] for state in states if state["last_viewed"] is not None), default=None),
                 "latest": max(dates, default=None),
@@ -860,12 +865,22 @@ def ranked_feed(ranker: str, limit: int, weights: dict | None = None, *, enrich:
         cached, pending_keys = dict(cache), set(pending)
     match_key = lambda post: enrichment_key(post, cached, pending_keys, now)
     visible, extra = ranked.read(limit, extra_count, match_key)
-    if enrich:
-        enrich_posts(extra, extra_count)
     with lock:
         n_pending = len(pending)
-    return {"items": ranking.explain_similarities(visible, ranked.source, weights or ranking.WEIGHTS),
+    result = {"items": ranking.explain_similarities(visible, ranked.source, weights or ranking.WEIGHTS),
             "total": ranked.total, "pending": n_pending, "ranker": ranker}
+    if subscription_url is not None:
+        order = lambda it: (it["score"], it["last_viewed"] is None, it["date"], it["position"])
+        next_up_items = sorted(
+            [p for p in ranked.source if p.get("next_after") and "latest" not in p.get("tags", [])],
+            key=order, reverse=True
+        )
+        if enrich:
+            enrich_posts([*next_up_items, *extra], extra_count)
+        result["next_up"] = ranking.explain_similarities(next_up_items, ranked.source, weights or ranking.WEIGHTS)
+    elif enrich:
+        enrich_posts(extra, extra_count)
+    return result
 
 
 def matches_search(post: dict, search: str) -> bool:
@@ -1097,7 +1112,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Location", "/#settings")
             self.send_header("Content-Length", "0")
             self.end_headers()
-        elif path in ("/api/feed", "/api/post", "/api/subscription"):
+        elif path in ("/api/feed", "/api/post", "/api/subscription", "/api/subscription/next-up"):
             query = parse_qs(parsed.query)
             name = query.get("ranker", [self.server.ranker])[0]
             if name not in ranking.RANKERS:
@@ -1109,7 +1124,7 @@ class Handler(BaseHTTPRequestHandler):
                     weights = ranking.check_weights(json.loads(query["weights"][0]))
                 except (ValueError, TypeError) as e:
                     return self._json({"error": f"weights: {e}"}, 400)
-            if path == "/api/subscription":
+            if path in ("/api/subscription", "/api/subscription/next-up"):
                 url = query.get("url", [""])[0]
                 if not url:
                     return self._json({"error": "url is required"}, 400)
@@ -1118,6 +1133,9 @@ class Handler(BaseHTTPRequestHandler):
                 if "error" in result:
                     return self._json(result, 404)
                 result["subscription"] = next((s for s in subscription_status() if s["url"] == url), None)
+                if path == "/api/subscription/next-up" or query.get("view") in (["next_up"], ["next-up"]):
+                    result["items"] = result.get("next_up", [])
+                    result["total"] = len(result["items"])
                 return self._feed_json(result)
             if path == "/api/post":
                 url = query.get("url", [""])[0]
