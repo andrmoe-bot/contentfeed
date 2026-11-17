@@ -20,6 +20,11 @@
   .subscription-stats div { min-width: 100px; }
   .subscription-stats dt { color: var(--muted); font-size: 13px; }
   .subscription-stats dd { margin: 0; font-size: 16px; }
+  .subscription-views { max-width: 720px; margin: 0 auto; padding: 0 16px 12px; display: flex; gap: 8px; }
+  .view-btn { padding: 6px 14px; border-radius: 8px; border: 1px solid var(--border); background: var(--card); color: var(--text); font-size: 14px; cursor: pointer; }
+  .view-btn.active { background: var(--accent); border-color: var(--accent); color: var(--accent-text); font-weight: 600; }
+  .clickable-stat { cursor: pointer; }
+  .clickable-stat:hover dt { text-decoration: underline; color: var(--text); }
   .source { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; }
   .source img { width: 16px; height: 16px; border-radius: 3px; }
   h2 { font-size: 17px; margin: 4px 0; line-height: 1.3; overflow-wrap: anywhere; }
@@ -149,10 +154,12 @@
 
 <script src="/common.js"></script>
 <script>
-const subscriptionPage = location.pathname === "/subscription";
+const subscriptionPage = location.pathname === "/subscription" || location.pathname === "/subscription/next-up";
 const postPage = location.pathname === "/post";
 const postUrl = new URLSearchParams(location.search).get("url") || "";
 let postData = null;
+let subData = null;
+let currentSubView = (new URLSearchParams(location.search).get("view") || (location.pathname === "/subscription/next-up" ? "next-up" : "all")).toLowerCase();
 const searchEl = document.getElementById("search");
 searchEl.value = new URLSearchParams(location.search).get("q") || "";
 let searchTimer;
@@ -402,9 +409,50 @@ function arrange(list) {
 
 function render() {
   if (postPage) return renderPost();
+  if (subscriptionPage) return renderSubscription();
   const list = arrange(items);
   shown = list;
   renderList(feedEl, list, "feed");
+}
+
+function renderSubscription() {
+  if (!subData) return;
+  const nextUp = subData.next_up || [];
+  const isNextUpOnly = currentSubView === "next-up";
+  const search = searchEl.value.trim();
+  const groups = isNextUpOnly
+    ? [{
+        id: "next-up",
+        title: "Next up",
+        note: "Every next up post in this subscription",
+        items: nextUp,
+        empty: search ? "No next up posts match your search." : "No next up posts in this subscription yet."
+      }]
+    : [
+        ...(nextUp.length ? [{ id: "next-up", title: "Next up", note: "Next in each series or after what you opened", items: nextUp }] : []),
+        { id: "posts", title: nextUp.length ? "All posts" : "Posts", items: arrange(items), empty: search ? "No posts match your search." : "No posts in this subscription yet." },
+      ];
+  shown = [...new Map(groups.flatMap((g) => g.items).map((it) => [it.url, it])).values()];
+  const ids = new Set(groups.map((g) => g.id));
+  for (const [id, section] of sections) if (!ids.has(id)) { section.remove(); sections.delete(id); }
+  for (const group of groups) {
+    let section = sections.get(group.id);
+    if (!section) {
+      section = el("section", { class: "post-section", "aria-label": group.title },
+        el("h2", {}, group.title), el("p", { class: "section-note" }), el("div", { class: "post-section" }));
+      sections.set(group.id, section);
+    }
+    feedEl.append(section);
+    const heading = section.querySelector("h2");
+    heading.textContent = group.title;
+    section.children[1].textContent = group.note || "";
+    section.children[1].hidden = !group.note;
+    if (!group.items.length && group.empty) {
+      section.children[2].replaceChildren(el("p", { class: "empty" }, group.empty));
+    } else {
+      renderList(section.children[2], group.items, group.id);
+    }
+  }
 }
 
 function renderList(container, list, prefix) {
@@ -637,23 +685,52 @@ async function fetchFeed() {
       pollTimer = setTimeout(load, data.pending ? 1500 : 30000);
       return;
     }
-    if (subscriptionPage && data.subscription) {
-      const sub = data.subscription;
-      document.title = `${sub.title} · Content Feed`;
-      document.getElementById("subscription-title").textContent = sub.title;
-      document.getElementById("subscription-info").replaceChildren(
-        el("a", { href: sub.site || sub.url, target: "_blank", rel: "noopener noreferrer" }, "Visit source ↗"),
-        sub.tags.length ? ` · ${sub.tags.join(" · ")}` : "",
-        sub.error ? ` · Last check failed: ${sub.error}` : "");
-      const stats = [
-        ["Posts", sub.posts], ["Opened", sub.opened], ["Skipped", sub.skipped], ["Unseen", sub.unseen],
-        ["Green", sub.color_counts.green], ["White", sub.color_counts.white], ["Red", sub.color_counts.red],
-        ["Latest post", sub.latest ? ago(sub.latest) : "None yet"],
-        ["Last viewed or skipped", sub.last_viewed ? ago(sub.last_viewed) : "Never"],
-        ["Last checked", sub.checking ? "Checking…" : sub.fetched ? ago(sub.fetched) : "Not yet"],
-      ];
-      document.getElementById("subscription-stats").replaceChildren(...stats.map(([label, value]) =>
-        el("div", {}, el("dt", {}, label), el("dd", {}, String(value)))));
+    if (subscriptionPage) {
+      subData = data;
+      if (data.subscription) {
+        const sub = data.subscription;
+        document.title = currentSubView === "next-up"
+          ? `${sub.title} · Next up · Content Feed`
+          : `${sub.title} · Content Feed`;
+        document.getElementById("subscription-title").textContent = sub.title;
+        document.getElementById("subscription-info").replaceChildren(
+          el("a", { href: sub.site || sub.url, target: "_blank", rel: "noopener noreferrer" }, "Visit source ↗"),
+          sub.tags.length ? ` · ${sub.tags.join(" · ")}` : "",
+          sub.error ? ` · Last check failed: ${sub.error}` : "");
+        const nextUpCount = sub.next_up != null ? sub.next_up : (data.next_up ? data.next_up.length : 0);
+        const stats = [
+          ["Posts", sub.posts, "all"],
+          ["Next up", nextUpCount, "next-up"],
+          ["Opened", sub.opened], ["Skipped", sub.skipped], ["Unseen", sub.unseen],
+          ["Green", sub.color_counts.green], ["White", sub.color_counts.white], ["Red", sub.color_counts.red],
+          ["Latest post", sub.latest ? ago(sub.latest) : "None yet"],
+          ["Last viewed or skipped", sub.last_viewed ? ago(sub.last_viewed) : "Never"],
+          ["Last checked", sub.checking ? "Checking…" : sub.fetched ? ago(sub.fetched) : "Not yet"],
+        ];
+        document.getElementById("subscription-stats").replaceChildren(...stats.map(([label, value, view]) => {
+          const itemEl = el("div", view ? { class: "clickable-stat", title: `View ${label.toLowerCase()}` } : {},
+            el("dt", {}, label), el("dd", {}, String(value)));
+          if (view) itemEl.addEventListener("click", () => setSubView(view));
+          return itemEl;
+        }));
+        updateSubViewButtons(nextUpCount);
+      }
+      items = data.items;
+      render();
+      const more = document.getElementById("more");
+      if (currentSubView === "next-up") {
+        more.hidden = true;
+        const nextUpCount = (data.next_up || []).length;
+        statusEl.textContent = `${nextUpCount} next up item${nextUpCount === 1 ? "" : "s"}` + (data.pending ? ` · fetching ${data.pending}…` : "");
+      } else {
+        more.hidden = data.total <= items.length;
+        more.textContent = `Show ${Math.min(PAGE, data.total - items.length)} more (${data.total - items.length} not shown)`;
+        const count = data.total > items.length ? `top ${items.length} of ${data.total}` : `${data.total}`;
+        statusEl.textContent = `${count} items · ranked by ${data.ranker}` + (data.pending ? ` · fetching ${data.pending}…` : "");
+      }
+      rankerNote(data.ranker);
+      pollTimer = setTimeout(load, data.pending ? 1500 : 30000);
+      return;
     }
     items = data.items;
     render();
@@ -668,6 +745,7 @@ async function fetchFeed() {
   } catch (error) {
     statusEl.textContent = error.message || "Server unreachable";
     if (postPage && !postData) feedEl.replaceChildren(el("p", { role: "status", id: "post-loading" }, error.message || "Couldn't load this post."));
+    if (subscriptionPage && !subData) feedEl.replaceChildren(el("p", { role: "status", id: "post-loading" }, error.message || "Couldn't load this subscription."));
     pollTimer = setTimeout(load, 5000);
   }
 }
@@ -983,12 +1061,61 @@ async function loadSubscriptionCount() {
   document.getElementById("subs-link").textContent = `Subscriptions (${subscriptions.length})`;
 }
 
+function setSubView(view) {
+  currentSubView = view;
+  const url = new URL(location.href);
+  if (view === "next-up") url.searchParams.set("view", "next-up");
+  else url.searchParams.delete("view");
+  history.replaceState(null, "", url);
+  if (subData?.subscription) {
+    document.title = currentSubView === "next-up"
+      ? `${subData.subscription.title} · Next up · Content Feed`
+      : `${subData.subscription.title} · Content Feed`;
+  }
+  updateSubViewButtons(subData?.next_up?.length ?? 0);
+  if (subData) {
+    const more = document.getElementById("more");
+    if (currentSubView === "next-up") {
+      more.hidden = true;
+      const nextUpCount = (subData.next_up || []).length;
+      statusEl.textContent = `${nextUpCount} next up item${nextUpCount === 1 ? "" : "s"}` + (subData.pending ? ` · fetching ${subData.pending}…` : "");
+    } else {
+      more.hidden = subData.total <= items.length;
+      more.textContent = `Show ${Math.min(PAGE, subData.total - items.length)} more (${subData.total - items.length} not shown)`;
+      const count = subData.total > items.length ? `top ${items.length} of ${subData.total}` : `${subData.total}`;
+      statusEl.textContent = `${count} items · ranked by ${subData.ranker}` + (subData.pending ? ` · fetching ${subData.pending}…` : "");
+    }
+  }
+  render();
+}
+
+function updateSubViewButtons(count = 0) {
+  const container = document.getElementById("subscription-views");
+  if (!container) return;
+  const allBtn = container.querySelector('[data-view="all"]');
+  const nextUpBtn = container.querySelector('[data-view="next-up"]');
+  if (allBtn) allBtn.className = currentSubView !== "next-up" ? "view-btn active" : "view-btn";
+  if (nextUpBtn) {
+    nextUpBtn.className = currentSubView === "next-up" ? "view-btn active" : "view-btn";
+    nextUpBtn.textContent = count ? `Next up (${count})` : "Next up";
+  }
+}
+
 if (subscriptionPage) {
   document.querySelector("h1").replaceChildren(el("a", { href: "/" }, "← Content Feed"));
   document.getElementById("add").hidden = true;
+  searchEl.placeholder = "Search posts and next up";
+  searchEl.setAttribute("aria-label", "Search posts and next up");
+  const viewNav = el("div", { class: "bar subscription-views", id: "subscription-views" },
+    el("button", { type: "button", class: "view-btn active", "data-view": "all" }, "All posts"),
+    el("button", { type: "button", class: "view-btn", "data-view": "next-up" }, "Next up"));
+  viewNav.querySelector('[data-view="all"]').addEventListener("click", () => setSubView("all"));
+  viewNav.querySelector('[data-view="next-up"]').addEventListener("click", () => setSubView("next-up"));
   feedEl.before(el("div", { class: "bar" }, el("h2", { id: "subscription-title" }, "Subscription")),
     el("div", { class: "bar", id: "subscription-info" }),
-    el("dl", { class: "subscription-stats", id: "subscription-stats", "aria-label": "Subscription statistics" }));
+    el("dl", { class: "subscription-stats", id: "subscription-stats", "aria-label": "Subscription statistics" }),
+    viewNav);
+  updateSubViewButtons(0);
 }
 
 if (postPage) {

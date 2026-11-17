@@ -127,7 +127,9 @@ The feed shows 300 items at a time; "Show more" at the bottom loads the next 300
 so older videos are near the end.
 
 The Subscriptions page (`/subscriptions`, linked at the top of the feed) lists every subscription
-with its post count, latest post, last check and any errors. From there you can subscribe, edit
+with its post count, latest post, last check and any errors. Clicking a subscription opens its page
+(`/subscription?url=...`), with its stats, a view of every "next up" post in it (or choose the Next up view),
+and all its posts. From there you can subscribe, edit
 tags, check a feed now and unsubscribe. Every change is written straight to `feeds.txt`, keeping
 your comments in it. Unsubscribing also forgets which of its posts you opened or colored (unless a post is
 also in `links.txt` or another subscription), so subscribing again starts afresh. Removing a
