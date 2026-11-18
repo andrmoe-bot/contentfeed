@@ -35,7 +35,8 @@ exception is the stop-watching timer: while a stop time is in effect (see effect
 estimated length would run past it are left out of the feed, so each post shown can be finished first,
 and once the stop time has run out, content is left out entirely and the stop is shown instead. The
 post you're viewing (the one you opened most recently) is exempt, so it doesn't disappear as time
-passes; server.py applies that exemption, since viewing state lives there. Calendar events are not
+passes; server.py applies that exemption, since viewing state lives there — unless the stop was
+caused by an event whose lead time has been crossed, which overrides it. Calendar events are not
 feed items at all — they take place when scheduled — so they reach the feed only as stop times;
 server.py filters them out of the ranked items but keeps them for effective_stop.
 

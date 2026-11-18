@@ -170,10 +170,33 @@ class StopTimerServerTests(unittest.TestCase):
         self.assertEqual(result["total"], 1)
 
     def test_viewed_post_stays_when_the_stop_has_fired(self):
-        server.set_stop(time.time() - 10)  # the time ran out
+        server.set_stop(time.time() - 10)  # the timer ran out
         server.viewed[self.long["url"]] = time.time() - 60
         result = server.feed("score")
         self.assertEqual(self.urls(result), {self.long["url"]})  # what you're viewing stays
+        self.assertTrue(result["stopped"])
+
+    def test_event_stop_overrides_the_viewed_post(self):
+        """Crossing an event's lead time overrides the stay behavior: even the viewed post is left out."""
+        start = time.time() + 10 * 60  # within the 30-minute lead: the time has run out
+        event = {"url": self.url + "#item=dinner", "title": "Dinner", "first_seen": 1_000_000,
+                 "published": start, "calendar_kind": "event", "calendar_start": start,
+                 "deadline": start + 3600}
+        server.subscriptions[self.url]["items"].append(event)
+        server.viewed[self.long["url"]] = time.time() - 60  # you're watching the long one
+        result = server.feed("score")
+        self.assertTrue(result["stopped"])
+        self.assertEqual(self.urls(result), set())  # not even the viewed post stays
+        self.assertEqual(result["stop_event"]["title"], "Dinner")
+
+    def test_event_stop_still_keeps_the_open_post_page(self):
+        start = time.time() + 10 * 60  # within the 30-minute lead: the time has run out
+        event = {"url": self.url + "#item=dinner", "title": "Dinner", "first_seen": 1_000_000,
+                 "published": start, "calendar_kind": "event", "calendar_start": start,
+                 "deadline": start + 3600}
+        server.subscriptions[self.url]["items"].append(event)
+        result = server.ranked_feed("score", 300, post_url=self.long["url"])
+        self.assertEqual(result["item"]["url"], self.long["url"])  # its page keeps the post
         self.assertTrue(result["stopped"])
 
     def test_fired_timer_stops_the_feed_with_a_generic_message(self):
