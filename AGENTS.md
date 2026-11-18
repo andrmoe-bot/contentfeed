@@ -10,6 +10,7 @@ andrmoe-bot/feat/…" in the history.
 
 1. Branch off `main`: `git switch -c feat/<name>` (or `fix/<name>`).
 2. Run the tests before pushing: `python3 -m unittest` and `python3 -m py_compile *.py`.
+   Also increment the final number in `VERSION` for each change — the page footer displays it.
 3. Commit, then push the branch to the fork (this VM's credentials are used automatically;
    `gh` is authenticated as andrmoe-bot and git uses it as the HTTPS credential helper):
 
