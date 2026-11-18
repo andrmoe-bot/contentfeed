@@ -263,7 +263,9 @@ released when the event it was set for has ended too, so a timer set to get you 
 doesn't keep the feed stopped afterwards; a timer with no such event stays until you clear it. While
 a stop is in effect the page polls every 10 seconds, so the stop firing and the feed returning are
 both noticed promptly. A timer left over from a previous day (more than 24 hours past) is dropped
-at startup.
+at startup. The "Stop mode" button next to the timer switches between stop mode and the normal feed
+manually at any time — the feed is hidden (and playback stopped) until you switch back, whatever the
+server's stop state says.
 
 Events use the same system with a lead time: every event that hasn't ended acts as a stop time at
 its start minus the **Event lead time** setting in the score panel (30 minutes by default; 0 stops
