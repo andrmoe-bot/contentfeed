@@ -18,6 +18,7 @@ import gzip
 import hashlib
 import json
 import re
+import subprocess
 import threading
 import tempfile
 import urllib.error
@@ -38,6 +39,14 @@ import ranking
 
 ROOT = Path(__file__).resolve().parent  # code and pages; the server never writes here
 VERSION = (ROOT / "VERSION").read_text(encoding="ascii").strip()
+# Short hash of the latest commit, shown next to the version in the page footer.
+# The code runs from a git checkout (see deploy/), but stay quiet without one.
+COMMIT = ""
+try:
+    COMMIT = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "--short", "HEAD"],
+                            capture_output=True, text=True, timeout=5, check=True).stdout.strip()
+except (OSError, subprocess.SubprocessError):
+    pass
 DEFAULT_DATA_DIR = ROOT / "data"
 # Data files; set_data_dir() points these into the data directory at startup.
 LINKS_FILE = FEEDS_FILE = CACHE_FILE = ADDED_FILE = FEED_CACHE_FILE = VIEWED_FILE = SKIPPED_FILE = COLORS_FILE = SETTINGS_FILE = JELLYFIN_FILE = CALDAV_FILE = STOP_FILE = Path()
@@ -1157,6 +1166,8 @@ class Handler(BaseHTTPRequestHandler):
             body = (ROOT / name).read_bytes()
             if ctype.startswith("text/html"):
                 body = body.replace(b"{{VERSION}}", VERSION.encode("ascii"))
+                commit = f" ({COMMIT})" if COMMIT else ""
+                body = body.replace(b"{{COMMIT}}", commit.encode("ascii"))
             self._send(200, body, ctype)
         elif path == "/settings":  # the old Settings page is now the feed's score panel
             self.send_response(302)
