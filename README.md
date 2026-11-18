@@ -265,6 +265,11 @@ the feed filters by. So with dinner at 19:00 and the default lead, the feed show
 can finish by 18:30. Events themselves never appear as feed cards; the notice above the stopped
 feed names the event. Ended events don't stop watching anymore.
 
+Crossing an event's lead time overrides the stay behavior: even the post you're viewing is left
+out, any video or other media playing on the page is force-stopped, and the page sounds a short
+audio alert once per stop, next to the "Time to go" notice. (A stop caused by the timer alone keeps
+the post you're viewing.)
+
 ## Colors
 
 Each card has three dots in its bottom corner: green, white and red. They don't have proper names
