@@ -861,6 +861,13 @@ def ranked_feed(ranker: str, limit: int, terms: dict | None = None, *, enrich: b
                state_version)
         hit = ranked_cache.get(key)
         if hit and now - hit[0] < RANKED_TTL:
+            # Rebuild when the stop state has flipped since the cached build (a stop fired, or an
+            # event ended), so the feed returns promptly once the event is over instead of serving
+            # the stopped, empty ranking for the rest of the cache's lifetime.
+            eff, _ = ranking.effective_stop(hit[2], now, terms or ranking.TERMS, stop_at)
+            if (eff is not None and now >= eff) != hit[3]:
+                hit = None
+        if hit and now - hit[0] < RANKED_TTL:
             ranked, source = hit[1], hit[2]  # source keeps the events, for stop_fields
             items = None
             new = []
@@ -929,7 +936,7 @@ def ranked_feed(ranker: str, limit: int, terms: dict | None = None, *, enrich: b
             if len(ranked_cache) >= 20:
                 ranked_cache.pop(next(iter(ranked_cache)))
             if key[3] == state_version:
-                ranked_cache[key] = (now, ranked, source)
+                ranked_cache[key] = (now, ranked, source, effective is not None and now >= effective)
     if post_url is not None:
         result = post_details(ranked.source, post_url, ranker, limit, terms or ranking.TERMS, now,
                               enrich=enrich, search=search)

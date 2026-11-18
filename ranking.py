@@ -154,14 +154,28 @@ def valid_minutes(value) -> bool:
             and math.isfinite(value) and value > 0)
 
 
+def _timer_released(items: list[dict], now: float, stop_at: float) -> bool:
+    """Whether a fired timer's stop is over: an event that was still upcoming when the timer fired
+    (its end is after the stop time) has now ended. The timer was presumably set to get to that
+    event, so once the event is over the feed should return, not stay stopped until cleared."""
+    for it in items:
+        if it.get("calendar_kind") != "event":
+            continue
+        end = it.get("deadline") or it.get("calendar_start")
+        if end is not None and stop_at < end <= now:
+            return True
+    return False
+
+
 def effective_stop(items: list[dict], now: float, terms: dict, stop_at: float | None = None):
     """The stop-watching state: (stop, event), or (None, None) when nothing stops watching. The stop
-    timer (stop_at) if set, and every event that hasn't ended, at its start minus the event lead
+    timer (stop_at) if set — unless it has fired and the event it was set for has since ended (see
+    _timer_released) — and every event that hasn't ended, at its start minus the event lead
     time setting: you need the lead time to get to the event, so watching should stop by then. The
     earliest wins; event is the event that causes it, or None when it's the timer. A stop in the
     past means the time has run out: watching should stop now."""
     candidates = []
-    if stop_at is not None:
+    if stop_at is not None and not _timer_released(items, now, stop_at):
         candidates.append((stop_at, None))
     lead = terms["event_lead_minutes"] * 60
     for it in items:
