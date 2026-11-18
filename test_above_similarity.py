@@ -13,22 +13,22 @@ import ranking
 from test_ranking import item, NOW
 
 
-def reference_similarity(first, second, weights):
+def reference_similarity(first, second, terms):
     """Independent normalized calculation using exact rational arithmetic."""
     if first['url'] == second['url']:
         return 100
     if not first.get('sub') or first.get('sub') != second.get('sub'):
         return 0
-    publish = Fraction(str(weights['similar_publish_weight']))
-    length = Fraction(str(weights['similar_length_weight']))
-    days = Fraction(str(weights['similar_days']))
+    publish = Fraction(str(terms['similar_publish_weight']))
+    length = Fraction(str(terms['similar_length_weight']))
+    days = Fraction(str(terms['similar_days']))
     date_match = max(0, 1 - Fraction(str(abs(first['date'] - second['date']))) / (days * 86400)) if days else 0
     total, normalizer = publish * date_match, publish
     a, b = first.get('estimated_minutes'), second.get('estimated_minutes')
     if all(isinstance(n, (int, float)) and not isinstance(n, bool) and math.isfinite(n) and n > 0 for n in (a, b)):
         total += length * Fraction(str(min(a, b))) / Fraction(str(max(a, b)))
         normalizer += length
-    title_weight = Fraction(str(weights['similar_title_weight']))
+    title_weight = Fraction(str(terms['similar_title_weight']))
     def words(title):
         if not isinstance(title, str):
             return set()
@@ -37,22 +37,22 @@ def reference_similarity(first, second, weights):
     if first_words and second_words:
         total += title_weight * Fraction(2 * len(first_words & second_words), len(first_words) + len(second_words))
         normalizer += title_weight
-    base = Fraction(str(weights['similar_base_percent']))
+    base = Fraction(str(terms['similar_base_percent']))
     return round(base + (100 - base) * total / normalizer) if normalizer else round(base)
 
 
-def greedy_reference(items, weights):
+def greedy_reference(items, terms):
     """Rescore every remaining item against every placed item, then pick the best."""
-    base = ranking.rank('score', items, NOW, dict(weights, above_similarity_penalty=0))
+    base = ranking.rank('score', items, NOW, dict(terms, above_similarity_penalty=0))
     positions = {it['url']: i for i, it in enumerate(items)}
     remaining, out = copy.deepcopy(base), []
-    amount = weights['above_similarity_penalty']
-    if not (weights['similar_base_percent'] or weights['similar_publish_weight'] or weights['similar_length_weight'] or weights['similar_title_weight']):
+    amount = terms['above_similarity_penalty']
+    if not (terms['similar_base_percent'] or terms['similar_publish_weight'] or terms['similar_length_weight'] or terms['similar_title_weight']):
         amount = 0
     while remaining:
         candidates = []
         for it in remaining:
-            similarities = [reference_similarity(it, other, weights) for other in out] if amount else []
+            similarities = [reference_similarity(it, other, terms) for other in out] if amount else []
             total = sum(similarities)
             adjustment = round(Fraction(str(amount)) * total) / 100
             score = ranking.points(it['score'] + adjustment)
@@ -69,13 +69,13 @@ def greedy_reference(items, weights):
 
 
 class AboveSimilarityTests(unittest.TestCase):
-    def weights(self, **kwargs):
-        return dict(ranking.DEFAULT_WEIGHTS, similar_base_percent=0, **kwargs)
+    def terms(self, **kwargs):
+        return dict(ranking.DEFAULT_TERMS, similar_base_percent=0, **kwargs)
 
     def test_partial_matches_add_up_instead_of_fixed_repeat_counts(self):
         posts = [item('first', 'feed'), item('second', 'feed', date=NOW - 15 * 86400),
                  item('third', 'feed', date=NOW - 30 * 86400)]
-        result = ranking.rank('score', posts, NOW, self.weights())
+        result = ranking.rank('score', posts, NOW, self.terms())
         # The 30-day-old item is unrelated to the top post and overtakes the 15-day-old one.
         self.assertEqual([(it['url'], it['score']) for it in result],
                          [('first', 0), ('third', 0), ('second', -15)])
@@ -84,7 +84,7 @@ class AboveSimilarityTests(unittest.TestCase):
 
     def test_identical_posts_accumulate_one_full_penalty_each(self):
         posts = [dict(item(str(i), 'feed'), estimated_minutes=10) for i in range(4)]
-        result = ranking.rank('score', posts, NOW, self.weights(similar_length_weight=1))
+        result = ranking.rank('score', posts, NOW, self.terms(similar_length_weight=1))
         self.assertEqual([it['score'] for it in result], [0, -15, -30, -45])
         self.assertEqual([it['url'] for it in result], ['0', '1', '2', '3'])
 
@@ -94,57 +94,57 @@ class AboveSimilarityTests(unittest.TestCase):
         third = item('third', 'a', date=NOW - 60 * 86400)
         other = item('other', 'b', date=NOW - 90 * 86400)
         posts = [first, second, third, other]
-        result = ranking.rank('score', posts, NOW, self.weights(green_bonus_points=30))
+        result = ranking.rank('score', posts, NOW, self.terms(green_bonus_points=30))
         self.assertEqual([it['url'] for it in result], ['first', 'third', 'other', 'second'])
-        self.assertEqual(result, greedy_reference(posts, self.weights(green_bonus_points=30)))
+        self.assertEqual(result, greedy_reference(posts, self.terms(green_bonus_points=30)))
 
     def test_length_similarity_can_match_outside_publish_window(self):
         posts = [dict(item(str(i), 'feed', date=NOW - i * 60 * 86400), estimated_minutes=n)
                  for i, n in enumerate([10, 10, 100])]
-        result = ranking.rank('score', posts, NOW, self.weights(similar_publish_weight=0, similar_length_weight=1))
+        result = ranking.rank('score', posts, NOW, self.terms(similar_publish_weight=0, similar_length_weight=1))
         self.assertEqual([(it['url'], it['score']) for it in result], [('0', 0), ('2', -1.5), ('1', -16.5)])
 
     def test_missing_lengths_fall_back_to_publish_time(self):
         posts = [dict(item('known', 'feed'), estimated_minutes=20),
                  item('unknown', 'feed', date=NOW - 15 * 86400)]
-        result = ranking.rank('score', posts, NOW, self.weights(similar_length_weight=20))
+        result = ranking.rank('score', posts, NOW, self.terms(similar_length_weight=20))
         self.assertEqual(result[-1]['score'], -7.5)
-        self.assertEqual(result, greedy_reference(posts, self.weights(similar_length_weight=20)))
+        self.assertEqual(result, greedy_reference(posts, self.terms(similar_length_weight=20)))
 
     def test_different_subscriptions_and_independent_links_do_not_match(self):
         posts = [dict(item('a', 'a'), estimated_minutes=10), dict(item('b', 'b'), estimated_minutes=10),
                  dict(item('link-a'), estimated_minutes=10), dict(item('link-b'), estimated_minutes=10)]
-        result = ranking.rank('score', posts, NOW, self.weights(similar_length_weight=1))
+        result = ranking.rank('score', posts, NOW, self.terms(similar_length_weight=1))
         self.assertTrue(all(it['score'] == 0 and not it['reasons'] for it in result))
 
     def test_above_penalty_has_no_viewing_time_fade_or_dependency(self):
         posts = [item('first', 'feed', age=1000), item('second', 'feed')]
-        weights = self.weights(seen_bonus=0, similar_penalty=0, similar_hours=0)
-        result = ranking.rank('score', posts, NOW, weights)
+        terms = self.terms(seen_bonus=0, similar_penalty=0, similar_hours=0)
+        result = ranking.rank('score', posts, NOW, terms)
         self.assertEqual([it['url'] for it in result], ['second', 'first'])
         self.assertEqual(result[-1]['score'], -15)
 
     def test_rounding_uses_total_similarity_not_per_post_rounding(self):
         posts = [dict(item(str(i), 'feed'), estimated_minutes=10) for i in range(5)]
-        weights = self.weights(above_similarity_penalty=-0.004)
-        result = ranking.rank('score', posts, NOW, weights)
+        terms = self.terms(above_similarity_penalty=-0.004)
+        result = ranking.rank('score', posts, NOW, terms)
         self.assertEqual([it['score'] for it in result], [0, 0, -0.01, -0.01, -0.02])
-        self.assertEqual(result, greedy_reference(posts, weights))
+        self.assertEqual(result, greedy_reference(posts, terms))
         for it in result:
             self.assertEqual(it['score'], ranking.points(sum(reason['points'] for reason in it['reasons'])))
 
     def test_zero_amount_or_zero_components_skip_spreading(self):
         posts = [item('a', 'feed'), item('b', 'feed')]
-        for weights in [self.weights(above_similarity_penalty=0),
-                        self.weights(similar_publish_weight=0, similar_length_weight=0)]:
+        for terms in [self.terms(above_similarity_penalty=0),
+                        self.terms(similar_publish_weight=0, similar_length_weight=0)]:
             with patch.object(ranking, 'spread_by_similarity', wraps=ranking.spread_by_similarity) as spread:
-                result = ranking.rank('score', posts, NOW, weights)
+                result = ranking.rank('score', posts, NOW, terms)
             spread.assert_not_called()
             self.assertTrue(all(it['score'] == 0 for it in result))
 
     def test_chronological_ranker_remains_unaffected(self):
         posts = [item('old', 'feed', age=0, date=NOW - 86400), item('new', 'feed')]
-        result = ranking.rank('chronological', posts, NOW, self.weights(similar_length_weight=1))
+        result = ranking.rank('chronological', posts, NOW, self.terms(similar_length_weight=1))
         self.assertEqual([it['url'] for it in result], ['new', 'old'])
         self.assertTrue(all(it['score'] == 0 and not it['reasons'] for it in result))
 
@@ -168,13 +168,13 @@ class AboveSimilarityTests(unittest.TestCase):
                 if rng.random() < 0.2:
                     it['next_after'] = 'previous'
                 posts.append(it)
-            weights = self.weights(above_similarity_penalty=rng.choice([0, -0.05, -15, -100, 15]),
+            terms = self.terms(above_similarity_penalty=rng.choice([0, -0.05, -15, -100, 15]),
                                    green_bonus_points=10, length_per_minute=-0.5,
                                    similar_days=rng.choice([0, 0.5, 30]),
                                    similar_publish_weight=rng.choice([0, 1, 2]),
                                    similar_length_weight=rng.choice([0, 1, 3]))
             with self.subTest(seed=seed):
-                self.assertEqual(ranking.rank('score', posts, NOW, weights), greedy_reference(posts, weights))
+                self.assertEqual(ranking.rank('score', posts, NOW, terms), greedy_reference(posts, terms))
 
     def test_scale_50_subscriptions_10000_items_avoids_cross_subscription_work(self):
         posts = [dict(item(str(i), str(i % 50), date=NOW - (i // 50) * 2 * 86400),
@@ -188,7 +188,7 @@ class AboveSimilarityTests(unittest.TestCase):
             return original(metric, *args)
 
         with patch.object(ranking.SimilarityMetric, 'percent', counted):
-            result = ranking.rank('score', posts, NOW, self.weights())
+            result = ranking.rank('score', posts, NOW, self.terms())
         self.assertEqual(len(result), 10_000)
         self.assertEqual(len({it['url'] for it in result}), 10_000)
         # At most 15 neighboring dates in either direction, each unordered pair once.
@@ -200,9 +200,9 @@ class AboveSimilarityTests(unittest.TestCase):
         from benchmark_ranking import fixture
         posts = fixture(count=200, subscriptions=5)
         for length_weight in [0, 1]:
-            weights = self.weights(similar_length_weight=length_weight)
-            expected = ranking.rank('score', posts, NOW, weights)
-            lazy = ranking.rank('score', posts, NOW, weights, lazy=True)
+            terms = self.terms(similar_length_weight=length_weight)
+            expected = ranking.rank('score', posts, NOW, terms)
+            lazy = ranking.rank('score', posts, NOW, terms, lazy=True)
             first, _ = lazy.read(20)
             snapshot = copy.deepcopy(first)
             self.assertEqual(first, expected[:20])
@@ -254,7 +254,7 @@ class AboveSimilarityTests(unittest.TestCase):
             return original(metric, *args)
 
         with patch.object(ranking.SimilarityMetric, 'percent', counted):
-            lazy = ranking.rank('score', posts, NOW, self.weights(similar_length_weight=1), lazy=True)
+            lazy = ranking.rank('score', posts, NOW, self.terms(similar_length_weight=1), lazy=True)
             visible, _ = lazy.read(300)
         self.assertEqual(len(visible), 300)
         self.assertEqual(lazy.total, 10_000)

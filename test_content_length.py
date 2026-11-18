@@ -35,30 +35,30 @@ class ContentLengthTests(unittest.TestCase):
         short, long, unknown = item('short'), item('long'), item('unknown')
         short['estimated_minutes'], long['estimated_minutes'] = 2, 10
         for weight, first in [(2, 'long'), (-2, 'unknown')]:
-            weights = dict(ranking.DEFAULT_WEIGHTS, length_per_minute=weight)
-            ranking.check_weights(weights)
-            ranked = ranking.rank('score', [short, long, unknown], NOW, weights)
+            terms = dict(ranking.DEFAULT_TERMS, length_per_minute=weight)
+            ranking.check_terms(terms)
+            ranked = ranking.rank('score', [short, long, unknown], NOW, terms)
             self.assertEqual(ranked[0]['url'], first)
             result = next(it for it in ranked if it['url'] == 'long')
             self.assertEqual(result['score'], 10 * weight)
             self.assertEqual(result['reasons'], [{'label': 'estimated 10 minutes, 10 minutes from target 0', 'points': 10 * weight}])
-        self.assertEqual(ranking.DEFAULT_WEIGHTS['length_per_minute'], 0)
+        self.assertEqual(ranking.DEFAULT_TERMS['length_per_minute'], 0)
         self.assertTrue(all(it['score'] == 0 for it in ranking.rank('score', [short, long, unknown], NOW)))
 
     def test_weighted_distance_from_target(self):
         posts = [dict(item(str(minutes)), estimated_minutes=minutes) for minutes in (5, 10, 15, 20)]
         for weight in (-2, 2):
-            weights = dict(ranking.DEFAULT_WEIGHTS, length_per_minute=weight, length_target_minutes=10)
-            ranking.check_weights(weights)
-            ranked = ranking.rank('score', posts, NOW, weights)
+            terms = dict(ranking.DEFAULT_TERMS, length_per_minute=weight, length_target_minutes=10)
+            ranking.check_terms(terms)
+            ranked = ranking.rank('score', posts, NOW, terms)
             scores = {post['url']: post['score'] for post in ranked}
             self.assertEqual(scores, {'5': 5 * weight, '10': 0, '15': 5 * weight, '20': 10 * weight})
             self.assertEqual(ranked[0]['url'], '10' if weight < 0 else '20')
             for invalid in (None, 0, -1, True, float('nan'), float('inf')):
-                self.assertEqual(ranking.score(dict(item('unknown'), estimated_minutes=invalid), NOW, weights), [])
+                self.assertEqual(ranking.score(dict(item('unknown'), estimated_minutes=invalid), NOW, terms), [])
         for invalid in (-1, True, float('nan'), float('inf')):
             with self.assertRaises(ValueError):
-                ranking.check_weights(dict(weights, length_target_minutes=invalid))
+                ranking.check_terms(dict(terms, length_target_minutes=invalid))
 
     def test_watch_page_continues_after_date_to_find_runtime(self):
         import io

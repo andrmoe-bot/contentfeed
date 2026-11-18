@@ -29,7 +29,9 @@ Each item has its page metadata (url, title, description, domain, ...) plus thes
 rank() adds one more, "similar": the item you opened recently that this one is most like (see
 similarity), or None.
 
-Nothing is hidden: items you've opened or marked red are scored differently, not removed.
+Nothing is hidden: items you've opened or marked red are scored differently, not removed. The one
+exception is the stop-watching timer: while a stop time is in effect (see effective_stop), items whose
+estimated length would run past it are left out of the feed, so each post shown can be finished first.
 
 A ranker registered with spread=True penalizes similarity to posts above it (see rank).
 
@@ -55,9 +57,9 @@ Ranker = Callable[[dict, float, dict], Reasons]
 RANKERS: dict[str, Ranker] = {}
 DEFAULT = "score"
 
-# Settings for the "score" ranker, in points. These are the defaults; you can change them in the feed's score panel, and server.py keeps your
-# values in settings.json.
-DEFAULT_WEIGHTS = {
+# Terms of the "score" ranker, in points. These are the defaults; you can change them in the feed's score panel, and server.py keeps your
+# values in settings.json. Not every term is a weight: bonuses are flat points, and windows, counts and the event lead time are durations.
+DEFAULT_TERMS = {
     "next_up_bonus": 30,  # the post after the one you opened most recently in a subscription
     "seen_bonus": -30,  # items you've opened or skipped; below 0 puts them under unopened ones
     "new_sub_bonus": 0,  # for posts from a subscription you've never opened anything from
@@ -70,7 +72,7 @@ DEFAULT_WEIGHTS = {
     "similar_days": 30,  # posts from the same subscription are alike if published within this many days
     "series_penalty": -30,  # added to a later part of a series when you haven't opened anything before it
     "above_similarity_penalty": -15,  # added per 100% similarity to each post above it
-    "event_urgency_bonus": 200,  # maximum points for an event starting now
+    "event_lead_minutes": 30,  # an upcoming event stops watching this many minutes before it starts
     "task_deadline_bonus": 200,  # maximum points for a task due now
     "event_bonus": 0,  # fixed points added to every event
     "task_bonus": 0,  # fixed points added to every task
@@ -85,24 +87,24 @@ DEFAULT_WEIGHTS = {
     "length_target_minutes": 0,  # target runtime or reading time; 0 preserves the original linear score
     "age_per_year": 0,  # signed points per fractional 365-day year since publication (or addition for links)
 }
-WEIGHTS = dict(DEFAULT_WEIGHTS)
+TERMS = dict(DEFAULT_TERMS)
 # Every scoring coefficient is signed; windows, similarity parameters and counts are not.
 SIGNED = {
     "next_up_bonus", "seen_bonus", "new_sub_bonus", "series_penalty", "similar_penalty",
     "above_similarity_penalty", "green_bonus_points", "video_bonus", "image_bonus",
     "article_bonus", "youtube_shorts_bonus", "length_per_minute", "age_per_year",
-    "event_urgency_bonus", "task_deadline_bonus", "event_bonus", "task_bonus", "past_event_penalty",
+    "task_deadline_bonus", "event_bonus", "task_bonus", "past_event_penalty",
 }
 LIMIT = 10_000_000
 RED = 10_000_000  # red items sink below everything else
 
 
-def check_weights(weights: dict) -> dict:
-    """The weights as numbers, or ValueError if one is missing, unknown, out of range or not a number."""
-    if set(weights) != set(DEFAULT_WEIGHTS):
-        raise ValueError(f"expected exactly these settings: {', '.join(DEFAULT_WEIGHTS)}")
+def check_terms(terms: dict) -> dict:
+    """The terms as numbers, or ValueError if one is missing, unknown, out of range or not a number."""
+    if set(terms) != set(DEFAULT_TERMS):
+        raise ValueError(f"expected exactly these settings: {', '.join(DEFAULT_TERMS)}")
     out = {}
-    for key, value in weights.items():
+    for key, value in terms.items():
         low = -LIMIT if key in SIGNED else 0
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not low <= value <= LIMIT:
             raise ValueError(f"{key} must be a number from {low} to {LIMIT}")
@@ -144,6 +146,37 @@ def valid_minutes(value) -> bool:
     """Only positive, finite numeric estimates can contribute to length similarity."""
     return (isinstance(value, (int, float)) and not isinstance(value, bool)
             and math.isfinite(value) and value > 0)
+
+
+def effective_stop(items: list[dict], now: float, terms: dict, stop_at: float | None = None) -> float | None:
+    """The earliest time watching should stop, or None. The stop timer (stop_at) if it is still ahead,
+    and every event that hasn't ended, at its start minus the event lead time setting: you need the
+    lead time to get to the event, so watching should stop by then. The earliest of these wins."""
+    candidates = []
+    if stop_at is not None and stop_at > now:
+        candidates.append(stop_at)
+    lead = terms["event_lead_minutes"] * 60
+    for it in items:
+        if it.get("calendar_kind") != "event":
+            continue
+        start = it.get("calendar_start")
+        end = it.get("deadline") or start
+        if start is None or (end is not None and end <= now):
+            continue  # ended events don't stop watching anymore
+        candidates.append(start - lead)
+    return min(candidates) if candidates else None
+
+
+def fits_before_stop(item: dict, now: float, stop: float | None) -> bool:
+    """Whether the item can be finished before the stop time: an item with a known estimated length
+    fits when now + its minutes is at or before the stop. Events and tasks aren't watched, and items
+    without an estimated length can't be ruled out, so they always fit."""
+    if stop is None or item.get("calendar_kind"):
+        return True
+    minutes = item.get("estimated_minutes")
+    if not valid_minutes(minutes):
+        return True
+    return now + minutes * 60 <= stop
 
 
 TITLE_STOP_WORDS = frozenset("a an the and or but of for to in on at by with from is are be as it its this that these those how what why when where who".split())
@@ -221,15 +254,15 @@ def similarity_metric(days: float, publish_weight: float, length_weight: float, 
 
 # Only posts from the same subscription match; an item always matches itself.
 # Missing lengths and empty titles are omitted from the normalized weighted average.
-def similarity(item: dict, other: dict, weights: dict) -> tuple[int, str]:
+def similarity(item: dict, other: dict, terms: dict) -> tuple[int, str]:
     """Whole-percent similarity, plus the components that explain it."""
     if item["url"] == other["url"]:
         return 100, "itself"
     if not item.get("sub") or item.get("sub") != other.get("sub"):
         return 0, "different subscriptions"
 
-    metric = similarity_metric(weights["similar_days"], weights["similar_publish_weight"],
-                               weights["similar_length_weight"], weights["similar_title_weight"], weights["similar_base_percent"])
+    metric = similarity_metric(terms["similar_days"], terms["similar_publish_weight"],
+                               terms["similar_length_weight"], terms["similar_title_weight"], terms["similar_base_percent"])
     first, second = item.get("estimated_minutes"), other.get("estimated_minutes")
     first = first if valid_minutes(first) else None
     second = second if valid_minutes(second) else None
@@ -278,10 +311,10 @@ def highlighted_title_parts(title: str, shared: set | frozenset) -> list[dict]:
     return parts
 
 
-def similarity_breakdown(item: dict, other: dict, weights: dict) -> dict:
+def similarity_breakdown(item: dict, other: dict, terms: dict) -> dict:
     """Numeric inputs for a displayed match; uses the ranking metric unchanged."""
-    metric = similarity_metric(weights["similar_days"], weights["similar_publish_weight"],
-                               weights["similar_length_weight"], weights["similar_title_weight"], weights["similar_base_percent"])
+    metric = similarity_metric(terms["similar_days"], terms["similar_publish_weight"],
+                               terms["similar_length_weight"], terms["similar_title_weight"], terms["similar_base_percent"])
     first_minutes, second_minutes = item.get("estimated_minutes"), other.get("estimated_minutes")
     first_minutes = first_minutes if valid_minutes(first_minutes) else None
     second_minutes = second_minutes if valid_minutes(second_minutes) else None
@@ -294,50 +327,50 @@ def similarity_breakdown(item: dict, other: dict, weights: dict) -> dict:
         percent = 0
     components = []
     gap_days = abs(item["date"] - other["date"]) / 86400
-    if weights["similar_publish_weight"]:
-        value = max(0, 1 - gap_days / weights["similar_days"]) if weights["similar_days"] else 0
+    if terms["similar_publish_weight"]:
+        value = max(0, 1 - gap_days / terms["similar_days"]) if terms["similar_days"] else 0
         components.append({"label": "Published", "percent": points(100 * value),
-                           "weight": weights["similar_publish_weight"],
-                           "input": f"{points(gap_days)} / {weights['similar_days']} days apart"})
-    if weights["similar_length_weight"]:
+                           "weight": terms["similar_publish_weight"],
+                           "input": f"{points(gap_days)} / {terms['similar_days']} days apart"})
+    if terms["similar_length_weight"]:
         first, second = first_minutes, second_minutes
         known = first is not None and second is not None
         components.append({"label": "Length", "percent": points(100 * min(first, second) / max(first, second)) if known else None,
-                           "weight": weights["similar_length_weight"],
+                           "weight": terms["similar_length_weight"],
                            "input": f"{points(min(first, second))} ÷ {points(max(first, second))} min" if known else "unknown · omitted"})
-    if weights["similar_title_weight"]:
+    if terms["similar_title_weight"]:
         first, second = first_title, second_title
         known = bool(first and second)
         components.append({"label": "Title", "percent": points(100 * title_fraction(first, second)) if known else None,
-                           "weight": weights["similar_title_weight"],
+                           "weight": terms["similar_title_weight"],
                            "shared_words": sorted(first & second),
                            "input": f"2 × {len(first & second)} shared ÷ ({len(first)} + {len(second)}) words" if known else "unknown · omitted"})
     title = other.get("title") or "Untitled"
-    shared = (first_title & second_title) if weights["similar_title_weight"] and weights["similar_base_percent"] < 100 else frozenset()
+    shared = (first_title & second_title) if terms["similar_title_weight"] and terms["similar_base_percent"] < 100 else frozenset()
     return {"title": title, "url": other["url"], "percent": percent,
             "title_parts": highlighted_title_parts(title, shared) if shared else [{"text": title, "shared": False}],
-            "base_percent": weights["similar_base_percent"],
+            "base_percent": terms["similar_base_percent"],
             "self": item["url"] == other["url"], "components": components}
 
 
-def explain_similarities(visible: list[dict], source: list[dict], weights: dict) -> list[dict]:
+def explain_similarities(visible: list[dict], source: list[dict], terms: dict) -> list[dict]:
     """Enrich only displayed cards, keeping pair details out of the ranking cache."""
     by_url = {item["url"]: item for item in source}
     groups = {}
     explained = []
     for item in visible:
-        out = {**item, "score_weights": dict(weights)}
+        out = {**item, "score_terms": dict(terms)}
         recent = item.get("similar")
         if recent:
             other = by_url.get(recent.get("url"))
             if other:
-                out["recent_match"] = similarity_breakdown(item, other, weights)
+                out["recent_match"] = similarity_breakdown(item, other, terms)
         if any(r["label"].startswith("similarity to ") for r in item["reasons"]):
             matches = []
             group = (("calendar", item["calendar_kind"], item.get("sub") or item["url"])
                      if item.get("calendar_kind") in ("event", "task") else ("sub", item.get("sub")))
             for other in groups.get(group, []):
-                match = similarity_breakdown(item, other, weights)
+                match = similarity_breakdown(item, other, terms)
                 if match["percent"]:
                     matches.append(match)
             out["above_matches"] = matches
@@ -377,18 +410,18 @@ def similarity_reason(item: dict, other: dict, metric: SimilarityMetric, first, 
     return ", ".join(details)
 
 
-def similar_to_recent(items: list[dict], now: float, weights: dict, title_words: dict | None = None):
+def similar_to_recent(items: list[dict], now: float, terms: dict, title_words: dict | None = None):
     """Set each item's "similar" to the strongest match after linear recency decay, as
     {title, hours (since opened), percent, strength, why}, or None if all strengths are zero.
     Strength is similarity percent times the fraction of similar_hours remaining."""
     for it in items:
         it["similar"] = None
-    window = weights["similar_hours"]
-    if (not weights["similar_penalty"] or not window
-            or not (weights["similar_base_percent"] or weights["similar_publish_weight"] or weights["similar_length_weight"] or weights["similar_title_weight"])):
+    window = terms["similar_hours"]
+    if (not terms["similar_penalty"] or not window
+            or not (terms["similar_base_percent"] or terms["similar_publish_weight"] or terms["similar_length_weight"] or terms["similar_title_weight"])):
         return
-    metric = similarity_metric(weights["similar_days"], weights["similar_publish_weight"],
-                               weights["similar_length_weight"], weights["similar_title_weight"], weights["similar_base_percent"])
+    metric = similarity_metric(terms["similar_days"], terms["similar_publish_weight"],
+                               terms["similar_length_weight"], terms["similar_title_weight"], terms["similar_base_percent"])
     # Only posts from the same subscription can match. Links can only match themselves.
     # Compute recency once per viewed item, rather than once per comparison.
     title_words = title_words if title_words is not None else (
@@ -492,15 +525,15 @@ def ranker(name: str, spread: bool = False):
 
 
 @ranker("chronological")
-def chronological(item: dict, now: float, weights: dict) -> Reasons:
+def chronological(item: dict, now: float, terms: dict) -> Reasons:
     """No rules: every item scores 0, so the feed is simply newest first."""
     return []
 
 
-def _similarity_reasons(item: dict, weights: dict) -> Reasons:
+def _similarity_reasons(item: dict, terms: dict) -> Reasons:
     """Explain the recent-view similarity adjustment shared by posts and tasks."""
     like = item.get("similar")
-    if not like or not weights["similar_penalty"]:
+    if not like or not terms["similar_penalty"]:
         return []
     verb = "skipped" if like.get("skipped") else "opened"
     when = f"{verb} {hours_label(like['hours'])} ago" if like["hours"] else f"{verb} in the last hour"
@@ -508,36 +541,32 @@ def _similarity_reasons(item: dict, weights: dict) -> Reasons:
         label = f"100% like itself, {when}"
     else:
         label = f"{like['percent']}% like “{short(like['title'])}”, {when} ({like['why']})"
-    label += f", {points(100 * (1 - like['hours'] / weights['similar_hours']))}% penalty remaining"
-    return [(label, points(weights["similar_penalty"] * like["strength"] / 100))]
+    label += f", {points(100 * (1 - like['hours'] / terms['similar_hours']))}% penalty remaining"
+    return [(label, points(terms["similar_penalty"] * like["strength"] / 100))]
 
 
-def _calendar_score(item: dict, now: float, weights: dict) -> Reasons:
-    """Score calendar urgency and past events under calendar-specific rules."""
+def _calendar_score(item: dict, now: float, terms: dict) -> Reasons:
+    """Score calendar items under calendar-specific rules. Events don't ramp up as they approach:
+    they stop watching through the stop-time filter instead (see effective_stop)."""
     kind = item["calendar_kind"]
-    due = item.get("calendar_start") if kind == "event" else item.get("deadline")
+    due = item.get("deadline")
     reasons = []
-    if kind == "event" and due is not None and 0 <= due - now <= 3600:
-        minutes = max(0, int((due - now) // 60))
-        urgency = points(weights["event_urgency_bonus"] * (1 - minutes / 60))
-        if urgency:
-            reasons.append((f"event starts in {minutes} minute{'s' if minutes != 1 else ''}", urgency))
     if kind == "event":
         ended = item.get("deadline")
         if ended is None:
             ended = item.get("calendar_start")
-        if ended is not None and ended < now and weights["past_event_penalty"]:
-            reasons.append(("event has ended", weights["past_event_penalty"]))
+        if ended is not None and ended < now and terms["past_event_penalty"]:
+            reasons.append(("event has ended", terms["past_event_penalty"]))
     elif kind == "task" and due is not None:
         hours = max(0, int((due - now) // 3600))
         horizon = 30 * 24
         if hours <= horizon:
-            urgency = points(weights["task_deadline_bonus"] * (1 - hours / horizon))
+            urgency = points(terms["task_deadline_bonus"] * (1 - hours / horizon))
             if urgency:
                 reasons.append((f"task deadline in {hours_label(hours)}", urgency))
     if kind == "task":
-        reasons.extend(_similarity_reasons(item, weights))
-    type_bonus = weights[f"{kind}_bonus"]
+        reasons.extend(_similarity_reasons(item, terms))
+    type_bonus = terms[f"{kind}_bonus"]
     if type_bonus:
         reasons.append((kind, type_bonus))
     if item["color"] == "red":
@@ -546,10 +575,10 @@ def _calendar_score(item: dict, now: float, weights: dict) -> Reasons:
 
 
 @ranker("score", spread=True)
-def score(item: dict, now: float, weights: dict) -> Reasons:
+def score(item: dict, now: float, terms: dict) -> Reasons:
     """Points for next up, opened before, a new subscription, a later part of a series, being like
     something opened recently, its media type, and green. rank() then penalizes similarity to posts above it."""
-    w = weights
+    w = terms
     reasons = []
     calendar_kind = item.get("calendar_kind")
     if calendar_kind in ("event", "task"):
@@ -618,7 +647,7 @@ class RankedItems:
             return self.items[:limit], list(self.items) if extra_count else []
 
 
-def rank(name: str, items: list[dict], now: float, weights: dict | None = None,
+def rank(name: str, items: list[dict], now: float, terms: dict | None = None,
          *, lazy: bool = False) -> list[dict] | RankedItems:
     """Return items sorted by score, each with "score" and "reasons" filled in. Weights other than the
     saved ones are for previewing them, such as while you move a slider.
@@ -629,19 +658,19 @@ def rank(name: str, items: list[dict], now: float, weights: dict | None = None,
     viewing-time decay. Penalties are cumulative; different subscriptions don't match.
     """
     fn = RANKERS[name]
-    weights = weights or WEIGHTS
+    terms = terms or TERMS
     items = [dict(it) for it in items]
-    title_words = {it["url"]: title_tokens(it.get("title")) for it in items} if weights["similar_title_weight"] else {}
-    similar_to_recent(items, now, weights, title_words)
+    title_words = {it["url"]: title_tokens(it.get("title")) for it in items} if terms["similar_title_weight"] else {}
+    similar_to_recent(items, now, terms, title_words)
     scored = []
     for item in items:
-        reasons = [{"label": label, "points": points} for label, points in fn(item, now, weights)]
+        reasons = [{"label": label, "points": points} for label, points in fn(item, now, terms)]
         scored.append({**item, "score": points(sum(r["points"] for r in reasons)), "reasons": reasons})
     # On equal scores: things you haven't opened first, then newest first
     order = lambda it: (it["score"], it["last_viewed"] is None, it["date"], it["position"])
-    penalty = weights.get("above_similarity_penalty", 0) if fn.spread else 0
-    metric = similarity_metric(weights["similar_days"], weights["similar_publish_weight"],
-                               weights["similar_length_weight"], weights["similar_title_weight"], weights["similar_base_percent"])
+    penalty = terms.get("above_similarity_penalty", 0) if fn.spread else 0
+    metric = similarity_metric(terms["similar_days"], terms["similar_publish_weight"],
+                               terms["similar_length_weight"], terms["similar_title_weight"], terms["similar_base_percent"])
     iterator = (iter(sorted(scored, key=order, reverse=True)) if not penalty or not metric.enabled
                 else spread_by_similarity(scored, penalty, metric, title_words))
     return RankedItems(scored, iterator) if lazy else list(iterator)

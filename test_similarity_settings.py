@@ -23,54 +23,54 @@ class SimilaritySettingsTests(unittest.TestCase):
         self.path = Path(temporary.name) / 'settings.json'
         for target, key, value in [(server, 'SETTINGS_FILE', self.path),
                                    (server, 'state_version', 0),
-                                   (ranking, 'WEIGHTS', dict(ranking.DEFAULT_WEIGHTS))]:
+                                   (ranking, 'TERMS', dict(ranking.DEFAULT_TERMS))]:
             patcher = patch.object(target, key, value)
             patcher.start()
             self.addCleanup(patcher.stop)
 
     def test_missing_subscription_base_gets_default_and_saved_value_round_trips(self):
-        weights = dict(ranking.DEFAULT_WEIGHTS)
-        del weights['similar_base_percent']
-        self.path.write_text(json.dumps({'weights': weights}))
+        terms = dict(ranking.DEFAULT_TERMS)
+        del terms['similar_base_percent']
+        self.path.write_text(json.dumps({'terms': terms}))
         server.load_settings()
-        self.assertEqual(ranking.WEIGHTS['similar_base_percent'], 50)
+        self.assertEqual(ranking.TERMS['similar_base_percent'], 50)
         for base in [0, 12.5, 50, 100]:
-            self.assertIsNone(server.save_settings(dict(ranking.WEIGHTS, similar_base_percent=base)))
+            self.assertIsNone(server.save_settings(dict(ranking.TERMS, similar_base_percent=base)))
             server.load_settings()
-            self.assertEqual(ranking.WEIGHTS['similar_base_percent'], base)
+            self.assertEqual(ranking.TERMS['similar_base_percent'], base)
 
     def test_relative_weights_round_trip_including_zero_and_fractional_values(self):
         for publish, length, title in [(1, 1, 1), (0.25, 0.75, 0.5), (0, 1, 0), (0, 0, 1), (0, 0, 0)]:
             with self.subTest(publish=publish, length=length, title=title):
-                weights = dict(ranking.DEFAULT_WEIGHTS, similar_publish_weight=publish,
+                terms = dict(ranking.DEFAULT_TERMS, similar_publish_weight=publish,
                                similar_length_weight=length, similar_title_weight=title)
-                self.assertIsNone(server.save_settings(weights))
-                self.assertEqual(json.loads(self.path.read_text())['weights'], weights)
-                ranking.WEIGHTS.update(ranking.DEFAULT_WEIGHTS)
+                self.assertIsNone(server.save_settings(terms))
+                self.assertEqual(json.loads(self.path.read_text())['terms'], terms)
+                ranking.TERMS.update(ranking.DEFAULT_TERMS)
                 server.load_settings()
-                self.assertEqual(server.settings()['weights'], weights)
+                self.assertEqual(server.settings()['terms'], terms)
 
     def test_older_settings_keep_new_defaults_and_existing_preferences(self):
-        weights = dict(ranking.DEFAULT_WEIGHTS, similar_days=7, similar_penalty=60)
-        del weights['similar_publish_weight']
-        del weights['similar_length_weight']
-        del weights['similar_title_weight']
-        self.path.write_text(json.dumps({'weights': weights}))
+        terms = dict(ranking.DEFAULT_TERMS, similar_days=7, similar_penalty=60)
+        del terms['similar_publish_weight']
+        del terms['similar_length_weight']
+        del terms['similar_title_weight']
+        self.path.write_text(json.dumps({'terms': terms}))
         server.load_settings()
-        self.assertEqual(ranking.WEIGHTS['similar_days'], 7)
-        self.assertEqual(ranking.WEIGHTS['similar_penalty'], 60)
-        self.assertEqual(ranking.WEIGHTS['similar_publish_weight'], 1)
-        self.assertEqual(ranking.WEIGHTS['similar_length_weight'], 0)
-        self.assertEqual(ranking.WEIGHTS['similar_title_weight'], 0)
+        self.assertEqual(ranking.TERMS['similar_days'], 7)
+        self.assertEqual(ranking.TERMS['similar_penalty'], 60)
+        self.assertEqual(ranking.TERMS['similar_publish_weight'], 1)
+        self.assertEqual(ranking.TERMS['similar_length_weight'], 0)
+        self.assertEqual(ranking.TERMS['similar_title_weight'], 0)
 
     def test_invalid_weights_leave_saved_and_active_settings_unchanged(self):
-        original = dict(ranking.DEFAULT_WEIGHTS)
+        original = dict(ranking.DEFAULT_TERMS)
         self.assertIsNone(server.save_settings(original))
         saved = self.path.read_text()
         version = server.state_version
         for key in ['similar_publish_weight', 'similar_length_weight', 'similar_title_weight']:
             self.assertIsNotNone(server.save_settings(dict(original, **{key: -1})))
-            self.assertEqual(ranking.WEIGHTS, original)
+            self.assertEqual(ranking.TERMS, original)
             self.assertEqual(self.path.read_text(), saved)
             self.assertEqual(server.state_version, version)
 
@@ -101,8 +101,8 @@ class SimilaritySettingsTests(unittest.TestCase):
             thread.start()
             base = f'http://127.0.0.1:{httpd.server_port}'
 
-            def request(path, weights=None):
-                data = json.dumps({'weights': weights}).encode() if weights is not None else None
+            def request(path, terms=None):
+                data = json.dumps({'terms': terms}).encode() if terms is not None else None
                 req = urllib.request.Request(base + path, data=data,
                                              headers={'Content-Type': 'application/json'})
                 with urllib.request.urlopen(req, timeout=5) as response:
@@ -118,30 +118,30 @@ class SimilaritySettingsTests(unittest.TestCase):
                 self.assertEqual(defaults['similar_length_weight'], 0)
                 self.assertEqual(defaults['event_bonus'], 0)
                 self.assertEqual(defaults['task_bonus'], 0)
-                self.assertEqual(defaults['event_urgency_bonus'], 200)
+                self.assertEqual(defaults['event_lead_minutes'], 30)
                 self.assertEqual(defaults['task_deadline_bonus'], 200)
                 self.assertEqual(candidate()['similar']['percent'], 75)
                 equal = dict(defaults, similar_length_weight=1)
                 self.assertTrue(request('/api/settings', equal)['ok'])
                 self.assertEqual(candidate()['similar']['percent'], 69)
                 preview = dict(equal, similar_publish_weight=0)
-                query = '?weights=' + urllib.parse.quote(json.dumps(preview))
+                query = '?terms=' + urllib.parse.quote(json.dumps(preview))
                 self.assertEqual(candidate(query)['similar']['percent'], 62)
                 # Previewing changes neither the saved settings nor the next normal result.
-                self.assertEqual(request('/api/settings')['weights'], equal)
+                self.assertEqual(request('/api/settings')['terms'], equal)
                 self.assertEqual(candidate()['similar']['percent'], 69)
                 title_only = dict(equal, similar_publish_weight=0, similar_length_weight=0, similar_title_weight=1)
-                query = '?weights=' + urllib.parse.quote(json.dumps(title_only))
+                query = '?terms=' + urllib.parse.quote(json.dumps(title_only))
                 self.assertEqual(candidate(query)['similar']['percent'], 88)
                 all_three = dict(equal, similar_title_weight=1)
-                query = '?weights=' + urllib.parse.quote(json.dumps(all_three))
+                query = '?terms=' + urllib.parse.quote(json.dumps(all_three))
                 self.assertEqual(candidate(query)['similar']['percent'], 75)
-                self.assertEqual(request('/api/settings')['weights'], equal)
+                self.assertEqual(request('/api/settings')['terms'], equal)
                 invalid = dict(equal, similar_length_weight=-1)
                 with self.assertRaises(urllib.error.HTTPError) as error:
                     request('/api/settings', invalid)
                 self.assertEqual(error.exception.code, 400)
-                self.assertEqual(request('/api/settings')['weights'], equal)
+                self.assertEqual(request('/api/settings')['terms'], equal)
                 off = dict(equal, similar_base_percent=0, similar_publish_weight=0, similar_length_weight=0)
                 self.assertTrue(request('/api/settings', off)['ok'])
                 self.assertTrue(all(it['similar'] is None for it in request('/api/feed')['items']))
@@ -153,6 +153,8 @@ class SimilaritySettingsTests(unittest.TestCase):
                 self.assertIn('label: "Content length similarity"', html)
                 self.assertIn('label: "Title similarity"', html)
                 self.assertIn('key: "event_bonus", label: "Event"', html)
+                self.assertIn('key: "event_lead_minutes", label: "Event lead time"', html)
+                self.assertNotIn('event_urgency_bonus', html)
                 self.assertIn('key: "task_bonus", label: "Task"', html)
                 self.assertIn('term: "similarity"', html)
                 with urllib.request.urlopen(base + '/subscriptions', timeout=5) as response:
@@ -167,15 +169,15 @@ class SimilaritySettingsTests(unittest.TestCase):
 
     def test_old_repeat_amount_migrates_to_above_similarity_penalty(self):
         for amount in [0, 0.5, 75]:
-            weights = dict(ranking.DEFAULT_WEIGHTS, repeat_per_post=amount)
-            del weights['above_similarity_penalty']
-            self.path.write_text(json.dumps({'weights': weights}))
+            terms = dict(ranking.DEFAULT_TERMS, repeat_per_post=amount)
+            del terms['above_similarity_penalty']
+            self.path.write_text(json.dumps({'terms': terms}))
             server.load_settings()
-            self.assertEqual(ranking.WEIGHTS['above_similarity_penalty'], amount)
-            self.assertNotIn('repeat_per_post', server.settings()['weights'])
+            self.assertEqual(ranking.TERMS['above_similarity_penalty'], amount)
+            self.assertNotIn('repeat_per_post', server.settings()['terms'])
 
     def test_explicit_new_penalty_wins_over_legacy_amount(self):
-        weights = dict(ranking.DEFAULT_WEIGHTS, repeat_per_post=100, above_similarity_penalty=3)
-        self.path.write_text(json.dumps({'weights': weights}))
+        terms = dict(ranking.DEFAULT_TERMS, repeat_per_post=100, above_similarity_penalty=3)
+        self.path.write_text(json.dumps({'terms': terms}))
         server.load_settings()
-        self.assertEqual(ranking.WEIGHTS['above_similarity_penalty'], 3)
+        self.assertEqual(ranking.TERMS['above_similarity_penalty'], 3)

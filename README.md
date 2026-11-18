@@ -51,6 +51,7 @@ It holds:
 - `skipped.json`: when you last skipped each item (the white dot)
 - `colors.json`: the items you marked green or red
 - `settings.json`: your score settings from the feed's score panel, if you changed them
+- `stop.json`: the stop-watching timer, if you set one (see Stop watching)
 - `jellyfin.json`: logins for Jellyfin servers you subscribe to (see Jellyfin), if any
 - `caldav.json`: logins for private CalDAV calendars you subscribe to, if any
 - `cache.json` and `feeds.json`: fetched page details and subscription posts
@@ -94,11 +95,13 @@ A subscription can be an RSS or Atom feed, a CalDAV calendar collection or share
 (`youtube.com/@handle`, `/channel/…`) or playlist, a subreddit, a blog, a Mastodon profile and so on.
 It can also be a blog or news page without a feed (see Pages without a feed), a series on NRK TV
 (see NRK TV) or a Jellyfin server (see Jellyfin).
-Calendar events and incomplete tasks appear as cards. The score settings panel controls event urgency
-during the final hour before an event starts, task urgency during the final 30 days before a deadline,
-and the penalty for events after they end. Events and tasks also get the similar-posts-above penalty
-against items of the same kind in the same calendar. Fixed Event and Task terms add points to every
-item of that kind; both default to 0. Paste each calendar's own URL into the Subscriptions page to add
+Calendar events and incomplete tasks appear as cards. Events work through the stop-watching timer
+(see Stop watching): every event that hasn't ended acts as a stop time at its start minus the Event
+lead time setting, so the feed shows only posts you can finish before you need to leave for it. The
+score panel controls task urgency during the final 30 days before a deadline and the penalty for
+events after they end. Events and tasks also get the similar-posts-above penalty against items of
+the same kind in the same calendar. Fixed Event and Task terms add points to every item of that
+kind; both default to 0. Paste each calendar's own URL into the Subscriptions page to add
 it; repeat for each calendar you want. A parent collection URL isn't a substitute for an individual
 calendar URL. For private calendars,
 put the login in `caldav.json` in the data directory and keep credentials out of the URL. A login mapped
@@ -242,6 +245,22 @@ viewed it.
 Cards you open or color stay where they are until you reload the page, so nothing moves away
 while you're looking at it. Playing a video stops the one playing in another card.
 
+## Stop watching
+
+Set a stop time with the "Stop watching at" box at the top of the feed (a time earlier today counts
+as tomorrow). While it's ahead, the feed leaves out any post whose estimated length would run past
+it, so every post shown can be finished before the stop time. Posts without an estimated length
+stay, and events and tasks are never left out. The status line shows the stop time and how long is
+left. The timer is kept in `stop.json` in the data directory, so every device on the network shares
+it; it turns off by itself when the time passes, or with Clear.
+
+Events use the same system with a lead time: every event that hasn't ended acts as a stop time at
+its start minus the **Event lead time** setting in the score panel (30 minutes by default; 0 stops
+exactly at the event's start). The earliest stop in effect — your timer or an event's — is the one
+the feed filters by. So with dinner at 19:00 and the default lead, the feed shows only posts you
+can finish by 18:30, and the event card itself stays visible. Ended events don't stop watching
+anymore; the Past event setting penalizes them instead.
+
 ## Colors
 
 Each card has three dots in its bottom corner: green, white and red. They don't have proper names
@@ -358,7 +377,7 @@ or `in a series starting “Making a CPU, part 1”, nothing before it opened �
 Change the numbers in the score panel: click "Settings" at the top of the feed. It opens
 beside the feed on a wide screen, or along the bottom on a narrow one, and stays open across reloads
 until you close it. Each setting comes with a slider and a box for an exact number:
-Next up, Seen, New subscription, Series, Similar posts above, Video, Image, Article, Content length, Age (Seen, Video, Image, Article, Content length and Age may be
+Next up, Seen, New subscription, Series, Similar posts above, Video, Image, Article, Content length, Age, Event lead time (Seen, Video, Image, Article, Content length and Age may be
 negative), Green, Similar
 (which also has its number of hours), Publish time window (days), Publish time similarity and
 Content length similarity and Title similarity (relative weights), and Update incomplete posts (count). The
