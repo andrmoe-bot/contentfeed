@@ -268,7 +268,7 @@ let playingCard = null;
 // Fields that change when you open or color an item, or when its subscription gets a new post. They're
 // updated in place, not by rebuilding the card, so a video you just started keeps playing.
 const VIEW_FIELDS = ["color", "last_viewed", "skipped", "next_after", "series_first", "similar", "sub_last_viewed",
-  "score", "reasons", "score_terms", "recent_match", "above_matches"];
+  "score", "reasons", "score_terms", "recent_match", "recent_matches", "above_matches"];
 const contentKey = (item) => JSON.stringify(item, (k, v) => (VIEW_FIELDS.includes(k) ? undefined : v));
 
 async function post(path, body) {
@@ -614,7 +614,10 @@ function scoreDetail(item, reason) {
   if (item.similar && label.includes("% like")) {
     const like = item.similar;
     const remaining = 100 * (1 - like.hours / w.similar_hours);
-    return `${rate(w.similar_penalty)} × ${like.percent}% similarity × ${n(remaining)}% remaining · ${like.hours}/${rate(w.similar_hours)} h elapsed`;
+    const strongest = `${like.percent}% similarity × ${n(remaining)}% remaining · ${like.hours}/${rate(w.similar_hours)} h elapsed`;
+    return like.matches > 1
+      ? `${rate(w.similar_penalty)} × ${n(like.total)}% combined · ${like.matches} matches · strongest ${strongest}`
+      : `${rate(w.similar_penalty)} × ${strongest}`;
   }
   if (label.startsWith("estimated ")) return `|${n(item.estimated_minutes)} − ${rate(w.length_target_minutes)}| min × ${rate(w.length_per_minute)} pts/min`;
   if (label.startsWith("age ")) {
@@ -659,6 +662,16 @@ function similarityMatches(item, reason) {
     const matches = item.above_matches;
     return el("div", { class: "match-list" },
       el("div", { class: "reason-detail" }, `${matches.length} from same subscription · ${matches.reduce((sum, m) => sum + m.percent, 0)}% combined`),
+      ...matches.slice(0, 3).map(matchBreakdown),
+      matches.length > 3 ? lazyDetails({ class: "additional-matches" },
+        `${matches.length - 3} more match${matches.length === 4 ? "" : "es"}`,
+        () => matches.slice(3).map(matchBreakdown)) : null);
+  }
+  if (reason.label.includes("% like") && item.recent_matches?.length) {
+    const matches = item.recent_matches;
+    const n = (v) => Math.round(v * 100) / 100;
+    return el("div", { class: "match-list" },
+      el("div", { class: "reason-detail" }, `${matches.length} recently ${item.similar.skipped ? "skipped" : "opened"} · ${n(item.similar.total)}% combined strength`),
       ...matches.slice(0, 3).map(matchBreakdown),
       matches.length > 3 ? lazyDetails({ class: "additional-matches" },
         `${matches.length - 3} more match${matches.length === 4 ? "" : "es"}`,

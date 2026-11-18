@@ -72,7 +72,7 @@ class CalendarScoringTests(unittest.TestCase):
                 self.assertEqual(sorted(it["score"] for it in ranked), [-15, 0])
                 penalized = next(it for it in ranked if it["score"] == -15)
                 self.assertEqual(penalized["reasons"][-1]["label"], "similarity to 1 post above, 100% total")
-                explained = ranking.explain_similarities(ranked, ranked, terms)
+                explained = ranking.explain_similarities(ranked, ranked, terms, NOW)
                 explained_penalized = next(it for it in explained if it["score"] == -15)
                 self.assertEqual([match["title"] for match in explained_penalized["above_matches"]], ["first"])
 

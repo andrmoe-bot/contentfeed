@@ -926,7 +926,7 @@ def ranked_feed(ranker: str, limit: int, terms: dict | None = None, *, enrich: b
     visible, extra = ranked.read(limit, extra_count, match_key)
     with lock:
         n_pending = len(pending)
-    result = {"items": ranking.explain_similarities(visible, ranked.source, terms or ranking.TERMS),
+    result = {"items": ranking.explain_similarities(visible, ranked.source, terms or ranking.TERMS, now),
             "total": ranked.total, "pending": n_pending, "ranker": ranker,
             **stop_fields(ranked.source, now, terms or ranking.TERMS, stop_at)}
     if subscription_url is not None:
@@ -937,7 +937,7 @@ def ranked_feed(ranker: str, limit: int, terms: dict | None = None, *, enrich: b
         )
         if enrich:
             enrich_posts([*next_up_items, *extra], extra_count)
-        result["next_up"] = ranking.explain_similarities(next_up_items, ranked.source, terms or ranking.TERMS)
+        result["next_up"] = ranking.explain_similarities(next_up_items, ranked.source, terms or ranking.TERMS, now)
     elif enrich:
         enrich_posts(extra, extra_count)
     return result
@@ -961,7 +961,7 @@ def post_details(source: list[dict], url: str, ranker: str, limit: int, terms: d
         for p in posts:
             reasons = [{"label": label, "points": value} for label, value in ranking.RANKERS[ranker](p, now, terms)]
             scored.append({**p, "reasons": reasons, "score": ranking.points(sum(r["points"] for r in reasons))})
-        return ranking.explain_similarities(scored, source, terms)
+        return ranking.explain_similarities(scored, source, terms, now)
 
     series = []
     with lock:

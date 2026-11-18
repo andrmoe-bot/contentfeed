@@ -50,7 +50,7 @@ class SubscriptionSimilarityTests(unittest.TestCase):
         ranked = ranking.rank('score', [first, second], NOW)
         self.assertEqual([p['score'] for p in ranked], [0, -7.5])
         self.assertIn('50% total', ranked[1]['reasons'][-1]['label'])
-        explained = ranking.explain_similarities(ranked, ranked, ranking.DEFAULT_TERMS)
+        explained = ranking.explain_similarities(ranked, ranked, ranking.DEFAULT_TERMS, NOW)
         match = explained[1]['above_matches'][0]
         self.assertEqual(match['base_percent'], 50)
         self.assertEqual(match['percent'], 50)
