@@ -861,7 +861,7 @@ def ranked_feed(ranker: str, limit: int, terms: dict | None = None, *, enrich: b
                state_version)
         hit = ranked_cache.get(key)
         if hit and now - hit[0] < RANKED_TTL:
-            ranked = hit[1]
+            ranked, source = hit[1], hit[2]  # source keeps the events, for stop_fields
             items = None
             new = []
         else:
@@ -902,33 +902,37 @@ def ranked_feed(ranker: str, limit: int, terms: dict | None = None, *, enrich: b
     if items is not None:
         if post_url is None and search.strip():
             items = [p for p in items if matches_search(p, search)]
-        effective, stop_event = ranking.effective_stop(items, now, terms or ranking.TERMS, stop_at)
+        source = items  # stop computation sees events too; events aren't feed items themselves
+        effective, _ = ranking.effective_stop(source, now, terms or ranking.TERMS, stop_at)
+        # Events take place when scheduled, so they aren't feed items: only their stop times reach
+        # the feed, never the events as cards.
+        feed_items = [it for it in source if it.get("calendar_kind") != "event"]
         if effective is not None:
-            watching = being_viewed(items)
+            watching = being_viewed(feed_items)
             if now >= effective:
-                # The time ran out: stop showing content. The event that caused the stop stays, and so
-                # does the post you're viewing, so it doesn't disappear from under you.
-                items = [it for it in items if it is stop_event or it is watching
-                         or (post_url is not None and it["url"] == post_url)]
+                # The time ran out: stop showing content. The post you're viewing stays, so it
+                # doesn't disappear from under you.
+                feed_items = [it for it in feed_items if it is watching
+                              or (post_url is not None and it["url"] == post_url)]
             else:
                 # Leave out posts that would run past the stop time, so each one shown can be
                 # finished before it. The post whose page is open stays, and so does the one you're
                 # viewing, even when it no longer fits.
-                items = [it for it in items if it is watching
-                         or (post_url is not None and it["url"] == post_url)
-                         or ranking.fits_before_stop(it, now, effective)]
-        ranked = ranking.rank(ranker, items, now, terms, lazy=True)
+                feed_items = [it for it in feed_items if it is watching
+                              or (post_url is not None and it["url"] == post_url)
+                              or ranking.fits_before_stop(it, now, effective)]
+        ranked = ranking.rank(ranker, feed_items, now, terms, lazy=True)
         with lock:
-            for k in [k for k, (t, _) in ranked_cache.items() if now - t >= RANKED_TTL or k[3] != state_version]:
+            for k in [k for k, (t, *_rest) in ranked_cache.items() if now - t >= RANKED_TTL or k[3] != state_version]:
                 del ranked_cache[k]
             if len(ranked_cache) >= 20:
                 ranked_cache.pop(next(iter(ranked_cache)))
             if key[3] == state_version:
-                ranked_cache[key] = (now, ranked)
+                ranked_cache[key] = (now, ranked, source)
     if post_url is not None:
         result = post_details(ranked.source, post_url, ranker, limit, terms or ranking.TERMS, now,
                               enrich=enrich, search=search)
-        result.update(stop_fields(ranked.source, now, terms or ranking.TERMS, stop_at))
+        result.update(stop_fields(source, now, terms or ranking.TERMS, stop_at))
         return result
     extra_count = (terms or ranking.TERMS)["enrich_count"] if enrich else 0
     with lock:
@@ -939,7 +943,7 @@ def ranked_feed(ranker: str, limit: int, terms: dict | None = None, *, enrich: b
         n_pending = len(pending)
     result = {"items": ranking.explain_similarities(visible, ranked.source, terms or ranking.TERMS, now),
             "total": ranked.total, "pending": n_pending, "ranker": ranker,
-            **stop_fields(ranked.source, now, terms or ranking.TERMS, stop_at)}
+            **stop_fields(source, now, terms or ranking.TERMS, stop_at)}
     if subscription_url is not None:
         order = lambda it: (it["score"], it["last_viewed"] is None, it["date"], it["position"])
         next_up_items = sorted(

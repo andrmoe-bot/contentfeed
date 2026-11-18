@@ -35,7 +35,9 @@ exception is the stop-watching timer: while a stop time is in effect (see effect
 estimated length would run past it are left out of the feed, so each post shown can be finished first,
 and once the stop time has run out, content is left out entirely and the stop is shown instead. The
 post you're viewing (the one you opened most recently) is exempt, so it doesn't disappear as time
-passes; server.py applies that exemption, since viewing state lives there.
+passes; server.py applies that exemption, since viewing state lives there. Calendar events are not
+feed items at all — they take place when scheduled — so they reach the feed only as stop times;
+server.py filters them out of the ranked items but keeps them for effective_stop.
 
 A ranker registered with spread=True penalizes similarity to posts above it (see rank).
 
@@ -78,9 +80,7 @@ DEFAULT_TERMS = {
     "above_similarity_penalty": -15,  # added per 100% similarity to each post above it
     "event_lead_minutes": 30,  # an upcoming event stops watching this many minutes before it starts
     "task_deadline_bonus": 200,  # maximum points for a task due now
-    "event_bonus": 0,  # fixed points added to every event
     "task_bonus": 0,  # fixed points added to every task
-    "past_event_penalty": -100,  # added after an event ends
     "green_bonus_points": 0,
     "youtube_shorts_bonus": 0,
     "video_bonus": 0,  # for each media type (see media_type); below 0 is a penalty
@@ -97,7 +97,7 @@ SIGNED = {
     "next_up_bonus", "seen_bonus", "new_sub_bonus", "series_penalty", "similar_penalty",
     "above_similarity_penalty", "green_bonus_points", "video_bonus", "image_bonus",
     "article_bonus", "youtube_shorts_bonus", "length_per_minute", "age_per_year",
-    "task_deadline_bonus", "event_bonus", "task_bonus", "past_event_penalty",
+    "task_deadline_bonus", "task_bonus",
 }
 LIMIT = 10_000_000
 RED = 10_000_000  # red items sink below everything else
@@ -175,7 +175,7 @@ def effective_stop(items: list[dict], now: float, terms: dict, stop_at: float | 
 
 def fits_before_stop(item: dict, now: float, stop: float | None) -> bool:
     """Whether the item can be finished before the stop time: an item with a known estimated length
-    fits when now + its minutes is at or before the stop. Events and tasks aren't watched, and items
+    fits when now + its minutes is at or before the stop. Tasks aren't watched, and items
     without an estimated length can't be ruled out, so they always fit."""
     if stop is None or item.get("calendar_kind"):
         return True
@@ -588,18 +588,13 @@ def _similarity_reasons(item: dict, terms: dict) -> Reasons:
 
 
 def _calendar_score(item: dict, now: float, terms: dict) -> Reasons:
-    """Score calendar items under calendar-specific rules. Events don't ramp up as they approach:
-    they stop watching through the stop-time filter instead (see effective_stop)."""
+    """Score calendar tasks under calendar-specific rules. Events aren't feed items (server.py
+    leaves them out, since they take place when scheduled): they reach the feed only as stop
+    times, through the stop-time filter (see effective_stop)."""
     kind = item["calendar_kind"]
     due = item.get("deadline")
     reasons = []
-    if kind == "event":
-        ended = item.get("deadline")
-        if ended is None:
-            ended = item.get("calendar_start")
-        if ended is not None and ended < now and terms["past_event_penalty"]:
-            reasons.append(("event has ended", terms["past_event_penalty"]))
-    elif kind == "task" and due is not None:
+    if kind == "task" and due is not None:
         hours = max(0, int((due - now) // 3600))
         horizon = 30 * 24
         if hours <= horizon:
@@ -608,7 +603,7 @@ def _calendar_score(item: dict, now: float, terms: dict) -> Reasons:
                 reasons.append((f"task deadline in {hours_label(hours)}", urgency))
     if kind == "task":
         reasons.extend(_similarity_reasons(item, terms))
-    type_bonus = terms[f"{kind}_bonus"]
+    type_bonus = terms.get(f"{kind}_bonus", 0)
     if type_bonus:
         reasons.append((kind, type_bonus))
     if item["color"] == "red":

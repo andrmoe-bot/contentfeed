@@ -160,8 +160,8 @@ class FeedCacheTests(unittest.TestCase):
     def test_expired_cache_reranks(self):
         with patch.object(ranking, "rank", wraps=ranking.rank) as rank:
             server.feed("score")
-            for key, (_, items) in list(server.ranked_cache.items()):
-                server.ranked_cache[key] = (0, items)
+            for key, (_, items, source) in list(server.ranked_cache.items()):
+                server.ranked_cache[key] = (0, items, source)
             server.feed("score")
         self.assertEqual(rank.call_count, 2)
 

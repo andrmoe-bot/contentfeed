@@ -116,7 +116,7 @@ class SimilaritySettingsTests(unittest.TestCase):
                 defaults = request('/api/settings')['defaults']
                 self.assertEqual(defaults['similar_publish_weight'], 1)
                 self.assertEqual(defaults['similar_length_weight'], 0)
-                self.assertEqual(defaults['event_bonus'], 0)
+                self.assertNotIn('event_bonus', defaults)  # events aren't feed items, so no event terms
                 self.assertEqual(defaults['task_bonus'], 0)
                 self.assertEqual(defaults['event_lead_minutes'], 30)
                 self.assertEqual(defaults['task_deadline_bonus'], 200)
@@ -155,7 +155,8 @@ class SimilaritySettingsTests(unittest.TestCase):
                 self.assertIn('label: "Publish time similarity"', html)
                 self.assertIn('label: "Content length similarity"', html)
                 self.assertIn('label: "Title similarity"', html)
-                self.assertIn('key: "event_bonus", label: "Event"', html)
+                self.assertNotIn('key: "event_bonus"', html)
+                self.assertNotIn('past_event_penalty', html)
                 self.assertIn('key: "event_lead_minutes", label: "Event lead time"', html)
                 self.assertNotIn('event_urgency_bonus', html)
                 self.assertIn('key: "task_bonus", label: "Task"', html)

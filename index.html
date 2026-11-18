@@ -859,13 +859,9 @@ const SETTINGS = [
   { key: "above_similarity_penalty", label: "Similar posts above", before: "", after: "points per 100% similarity",
     hint: "Adds signed points for similarity to each post already above it, using the publish-time, content-length and title similarity weights below. Two 50% matches add up to the full configured points. Negative points penalize similarity. Different subscriptions do not match. No viewing-time fade." },
   { key: "event_lead_minutes", label: "Event lead time", before: "stop watching", after: "minutes before an event",
-    hint: "Every event that hasn't ended acts as a stop time this many minutes before it starts: while it's the earliest stop in effect, the feed shows only posts you can finish before then, so you can get to the event in time. 0 stops exactly when the event starts. The stop timer at the top can set an earlier time; the earliest stop wins. Events in the same calendar can also get the similar-posts-above penalty." },
+    hint: "Every event that hasn't ended acts as a stop time this many minutes before it starts: while it's the earliest stop in effect, the feed shows only posts you can finish before then, so you can get to the event in time. 0 stops exactly when the event starts. The stop timer at the top can set an earlier time; the earliest stop wins. Events aren't feed items, so they never appear as cards." },
   { key: "task_deadline_bonus", label: "Task urgency", before: "", after: "points at deadline",
     hint: "Maximum points for a task due now. The bonus ramps from 0 to this amount during the final 30 days before its deadline. Tasks in the same calendar can also get the similar-posts-above penalty." },
-  { key: "past_event_penalty", label: "Past event", before: "", after: "points after it ends",
-    hint: "Signed points added once an event has ended. If the calendar item has no end time, its start time is used." },
-  { key: "event_bonus", label: "Event", before: "", after: "points",
-    hint: "Fixed points added to every event, independent of when it starts or ends. Below 0: a penalty. Default: 0." },
   { key: "task_bonus", label: "Task", before: "", after: "points",
     hint: "Fixed points added to every task, independent of its deadline. Below 0: a penalty. Default: 0." },
   { key: "video_bonus", label: "Video", before: "", after: "points",
@@ -898,7 +894,7 @@ const SETTINGS = [
 ];
 // Every setting, including the second box some have, such as Similar's hours
 const KEYS = SETTINGS.flatMap(({ key, extra }) => (extra ? [key, extra.key] : [key]));
-const SIGNED = ["youtube_shorts_bonus", "seen_bonus", "video_bonus", "image_bonus", "article_bonus", "length_per_minute", "age_per_year", "next_up_bonus", "new_sub_bonus", "green_bonus_points", "series_penalty", "similar_penalty", "above_similarity_penalty", "task_deadline_bonus", "event_bonus", "task_bonus", "past_event_penalty"];  // may be negative: the sign says which way
+const SIGNED = ["youtube_shorts_bonus", "seen_bonus", "video_bonus", "image_bonus", "article_bonus", "length_per_minute", "age_per_year", "next_up_bonus", "new_sub_bonus", "green_bonus_points", "series_penalty", "similar_penalty", "above_similarity_penalty", "task_deadline_bonus", "task_bonus"];  // may be negative: the sign says which way
 const LIMIT = 10_000_000;
 let saved = {};  // as saved on the server
 let draft = {};  // as shown in the panel
@@ -1022,8 +1018,6 @@ function showFormula() {
     ["green_bonus_points", `${plus(w.green_bonus_points)} if green`],
     ["above_similarity_penalty", `${plus(w.above_similarity_penalty)} × summed similarity to posts above`],
     ["task_deadline_bonus", `${plus(w.task_deadline_bonus)} × task urgency (ramps over the final 30 days)`],
-    ["past_event_penalty", `${plus(w.past_event_penalty)} after an event ends`],
-    ["event_bonus", `${plus(w.event_bonus)} if event`],
     ["task_bonus", `${plus(w.task_bonus)} if task`],
   ].filter(([key]) => shownTerms.has(key)).map(([, text]) => text).join("");
   const next = shownTerms.has("next_up_bonus") ? `next up: ${fmt(w.next_up_bonus)} · ` : "";
