@@ -223,6 +223,12 @@ stopClear.addEventListener("click", async () => {
   load();
 });
 
+// While a stop time is in effect, poll faster (10s) so the stop firing — and the feed returning
+// once the event is over — are noticed promptly.
+function pollDelay(pending, stopAt) {
+  return pending ? 1500 : stopAt ? 10000 : 30000;
+}
+
 // The status line leads with the stop time while one is in effect: the timer, or the next event
 // minus its lead time, whichever comes first.
 function stopNote(stopAt, stopped) {
@@ -792,7 +798,7 @@ async function fetchFeed() {
     if (res.ok || res.status === 304) enrichOnLoad = false;
     if (res.status === 304) {
       render();  // same items, but cards kept in place may now take their place
-      pollTimer = setTimeout(load, lastPending ? 1500 : 30000);
+      pollTimer = setTimeout(load, pollDelay(lastPending, lastStop?.stop_at));
       return;
     }
     const data = await res.json();
@@ -820,7 +826,7 @@ async function fetchFeed() {
       const more = document.getElementById("more");
       more.hidden = !remaining;
       more.textContent = "Show more related posts";
-      pollTimer = setTimeout(load, data.pending ? 1500 : 30000);
+      pollTimer = setTimeout(load, pollDelay(data.pending, data.stop_at));
       return;
     }
     if (subscriptionPage) {
@@ -867,7 +873,7 @@ async function fetchFeed() {
         statusEl.textContent = `${stopNote(data.stop_at, data.stopped)}${count} items · ranked by ${data.ranker}` + (data.pending ? ` · fetching ${data.pending}…` : "");
       }
       rankerNote(data.ranker);
-      pollTimer = setTimeout(load, data.pending ? 1500 : 30000);
+      pollTimer = setTimeout(load, pollDelay(data.pending, data.stop_at));
       return;
     }
     items = data.items;
@@ -879,7 +885,7 @@ async function fetchFeed() {
     const more = document.getElementById("more");
     more.hidden = data.total <= items.length;
     more.textContent = `Show ${Math.min(PAGE, data.total - items.length)} more (${data.total - items.length} not shown)`;
-    pollTimer = setTimeout(load, data.pending ? 1500 : 30000);
+    pollTimer = setTimeout(load, pollDelay(data.pending, data.stop_at));
   } catch (error) {
     statusEl.textContent = error.message || "Server unreachable";
     if (postPage && !postData) feedEl.replaceChildren(el("p", { role: "status", id: "post-loading" }, error.message || "Couldn't load this post."));

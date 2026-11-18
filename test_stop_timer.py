@@ -41,6 +41,18 @@ class StopFilterTests(unittest.TestCase):
         """A stop time in the past is not ignored: it means the time has run out."""
         self.assertEqual(ranking.effective_stop([], NOW, ranking.DEFAULT_TERMS, NOW - 1), (NOW - 1, None))
 
+    def test_fired_timer_is_released_once_its_event_has_ended(self):
+        """A fired timer stops the feed until cleared — but once the event it was set for has
+        ended, the stop is over and the feed can return. An event that ended before the timer
+        fired doesn't release it."""
+        terms = dict(ranking.DEFAULT_TERMS, event_lead_minutes=0)  # an event stops at its start
+        event = dict(item("event", "cal"), calendar_kind="event", calendar_start=NOW + 30, deadline=NOW + 45)
+        timer = NOW - 10
+        self.assertEqual(ranking.effective_stop([event], NOW, terms, timer), (timer, None))
+        self.assertEqual(ranking.effective_stop([event], NOW + 100, terms, timer), (None, None))
+        old = dict(item("old", "cal"), calendar_kind="event", calendar_start=NOW - 100, deadline=NOW - 50)
+        self.assertEqual(ranking.effective_stop([old], NOW + 10, terms, timer), (timer, None))
+
     def test_events_act_as_stop_times_with_the_configured_lead(self):
         event = dict(item("event", "cal"), calendar_kind="event",
                      calendar_start=NOW + 2 * 3600, deadline=NOW + 3 * 3600)
@@ -205,6 +217,45 @@ class StopTimerServerTests(unittest.TestCase):
         result = server.ranked_feed("score", 300, post_url=self.long["url"])
         self.assertEqual(result["item"]["url"], self.long["url"])  # its page keeps the post
         self.assertTrue(result["stopped"])
+
+    def test_feed_returns_on_cache_hit_once_the_event_ends(self):
+        """The feed returns promptly when the event ends, even within the ranked cache's lifetime:
+        a stop-state flip rebuilds instead of serving the stopped, empty ranking."""
+        t = time.time()
+        event = {"url": self.url + "#item=dinner", "title": "Dinner", "first_seen": 1_000_000,
+                 "published": t + 30, "calendar_kind": "event", "calendar_start": t + 30,
+                 "deadline": t + 45}  # stop = t+30-30min, fired at t; ends at t+45
+        server.subscriptions[self.url]["items"].append(event)
+        with patch.object(server.time, "time", lambda: t):
+            fired = server.feed("score")
+            self.assertTrue(fired["stopped"])
+            self.assertEqual(self.urls(fired), set())
+        with patch.object(server.time, "time", lambda: t + 50):  # event over; cache age 50s < TTL
+            back = server.feed("score")
+            self.assertFalse(back["stopped"])
+            self.assertIsNone(back["stop_at"])
+            self.assertIn(self.short["url"], self.urls(back))
+            self.assertIn(self.long["url"], self.urls(back))
+
+    def test_fired_timer_is_released_after_its_event_ends(self):
+        """A manual timer that fired is released once the event it was set for has ended, so the
+        feed returns after the event instead of staying stopped until cleared."""
+        t = time.time()
+        server.save_settings(dict(ranking.DEFAULT_TERMS, event_lead_minutes=0))  # event stops at start
+        event = {"url": self.url + "#item=dinner", "title": "Dinner", "first_seen": 1_000_000,
+                 "published": t + 30, "calendar_kind": "event", "calendar_start": t + 30,
+                 "deadline": t + 45}
+        server.subscriptions[self.url]["items"].append(event)
+        server.set_stop(t - 10)  # fired, and earlier than the event's own stop (t+30)
+        with patch.object(server.time, "time", lambda: t):
+            fired = server.feed("score")
+            self.assertTrue(fired["stopped"])
+            self.assertIsNone(fired["stop_event"])  # the timer, not the event, causes it
+        with patch.object(server.time, "time", lambda: t + 50):  # the event has ended
+            back = server.feed("score")
+            self.assertFalse(back["stopped"])
+            self.assertIn(self.short["url"], self.urls(back))
+            self.assertIn(self.long["url"], self.urls(back))
 
     def test_fired_timer_stops_the_feed_with_a_generic_message(self):
         server.set_stop(time.time() - 10)  # the time ran out
