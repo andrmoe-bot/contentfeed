@@ -181,13 +181,16 @@ class StopTimerServerTests(unittest.TestCase):
         self.assertNotIn(self.long["url"], self.urls(result))
         self.assertEqual(result["total"], 1)
 
-    def test_timer_stop_also_overrides_the_viewed_post(self):
-        """A fired stop overrides the stay behavior whatever caused it: timer or event."""
+    def test_fired_stop_keeps_the_feed_and_marks_it_stopped(self):
+        """A fired stop (timer or event) no longer empties the feed server-side: the response keeps
+        the posts and sets stopped, and the page switches to stop mode in JS (feed hidden, playback
+        force-stopped, alert)."""
         server.set_stop(time.time() - 10)  # the timer ran out
         server.viewed[self.long["url"]] = time.time() - 60  # you're watching the long one
         result = server.feed("score")
-        self.assertEqual(self.urls(result), set())  # not even the viewed post stays
         self.assertTrue(result["stopped"])
+        self.assertEqual(self.urls(result), {self.short["url"], self.long["url"]})  # feed kept
+        self.assertEqual(result["total"], 2)
 
     def test_fired_stop_still_keeps_the_open_post_page(self):
         server.set_stop(time.time() - 10)  # the timer ran out
@@ -195,8 +198,9 @@ class StopTimerServerTests(unittest.TestCase):
         self.assertEqual(result["item"]["url"], self.long["url"])  # its page keeps the post
         self.assertTrue(result["stopped"])
 
-    def test_event_stop_overrides_the_viewed_post(self):
-        """Crossing an event's lead time overrides the stay behavior: even the viewed post is left out."""
+    def test_fired_event_stop_keeps_the_feed_and_names_the_event(self):
+        """Crossing an event's lead time marks the feed stopped and names the event, but keeps the
+        feed itself — the page switches to stop mode in JS and back seamlessly."""
         start = time.time() + 10 * 60  # within the 30-minute lead: the time has run out
         event = {"url": self.url + "#item=dinner", "title": "Dinner", "first_seen": 1_000_000,
                  "published": start, "calendar_kind": "event", "calendar_start": start,
@@ -205,8 +209,9 @@ class StopTimerServerTests(unittest.TestCase):
         server.viewed[self.long["url"]] = time.time() - 60  # you're watching the long one
         result = server.feed("score")
         self.assertTrue(result["stopped"])
-        self.assertEqual(self.urls(result), set())  # not even the viewed post stays
-        self.assertEqual(result["stop_event"]["title"], "Dinner")
+        self.assertEqual(self.urls(result), {self.short["url"], self.long["url"]})  # feed kept
+        self.assertNotIn(event["url"], self.urls(result))  # events still aren't feed items
+        self.assertEqual(result["stop_event"]["title"], "Dinner")  # the notice names it
 
     def test_event_stop_still_keeps_the_open_post_page(self):
         start = time.time() + 10 * 60  # within the 30-minute lead: the time has run out
@@ -218,9 +223,9 @@ class StopTimerServerTests(unittest.TestCase):
         self.assertEqual(result["item"]["url"], self.long["url"])  # its page keeps the post
         self.assertTrue(result["stopped"])
 
-    def test_feed_returns_on_cache_hit_once_the_event_ends(self):
-        """The feed returns promptly when the event ends, even within the ranked cache's lifetime:
-        a stop-state flip rebuilds instead of serving the stopped, empty ranking."""
+    def test_stop_state_flip_rebuilds_the_cache_within_its_lifetime(self):
+        """A stop-state flip (stop fired, or event ended) rebuilds the cached ranking even within
+        the cache's lifetime, so the response's items and stop fields are always consistent."""
         t = time.time()
         event = {"url": self.url + "#item=dinner", "title": "Dinner", "first_seen": 1_000_000,
                  "published": t + 30, "calendar_kind": "event", "calendar_start": t + 30,
@@ -229,7 +234,7 @@ class StopTimerServerTests(unittest.TestCase):
         with patch.object(server.time, "time", lambda: t):
             fired = server.feed("score")
             self.assertTrue(fired["stopped"])
-            self.assertEqual(self.urls(fired), set())
+            self.assertEqual(self.urls(fired), {self.short["url"], self.long["url"]})  # feed kept
         with patch.object(server.time, "time", lambda: t + 50):  # event over; cache age 50s < TTL
             back = server.feed("score")
             self.assertFalse(back["stopped"])
@@ -257,14 +262,15 @@ class StopTimerServerTests(unittest.TestCase):
             self.assertIn(self.short["url"], self.urls(back))
             self.assertIn(self.long["url"], self.urls(back))
 
-    def test_fired_timer_stops_the_feed_with_a_generic_message(self):
+    def test_fired_timer_marks_the_feed_stopped_with_a_generic_message(self):
         server.set_stop(time.time() - 10)  # the time ran out
         result = server.feed("score")
-        self.assertEqual(self.urls(result), set())  # no content shown anymore
-        self.assertEqual(result["total"], 0)
         self.assertTrue(result["stopped"])
         self.assertIsNone(result["stop_event"])
         self.assertEqual(result["stop_at"], server.stop["stop_at"])
+        # the feed is kept; the page shows stop mode with a generic message in JS
+        self.assertEqual(self.urls(result), {self.short["url"], self.long["url"]})
+        self.assertEqual(result["total"], 2)
 
     def test_clearing_the_timer_restores_the_feed(self):
         server.set_stop(time.time() + 30 * 60)
@@ -328,7 +334,7 @@ class StopTimerServerTests(unittest.TestCase):
         server.subscriptions[self.url]["items"].append(event)
         result = server.feed("score")
         self.assertTrue(result["stopped"])
-        self.assertEqual(self.urls(result), set())  # no content, and no event card either
+        self.assertEqual(self.urls(result), {self.short["url"], self.long["url"]})  # feed kept
         self.assertEqual(result["stop_event"]["url"], event["url"])  # the notice names it instead
         self.assertAlmostEqual(result["stop_at"], start - 30 * 60, places=3)
 

@@ -253,9 +253,11 @@ as tomorrow). While it's ahead, the feed leaves out any post whose estimated len
 it, so every post shown can be finished before the stop time. Posts without an estimated length
 stay, and tasks are never left out. The status line shows the stop time and how long is
 left. The timer is kept in `stop.json` in the data directory, so every device on the network shares
-it. When the time runs out, the feed stops showing content and shows a notice above the empty feed
-instead: the event that caused the stop (“Time to go: …”), or a generic “Stop time reached” message
-for the timer, with a Clear button. The stopped state lasts until you clear the timer or the event
+it. When the time runs out, the page switches to stop mode: the feed is hidden behind a notice —
+the event that caused the stop (“Time to go: …”), or a generic “Stop time reached” message for the
+timer, with a Clear button — any video playing is force-stopped and a short audio alert sounds once.
+The feed itself is still served, so when the stop is over the page switches straight back to the
+normal feed with nothing rebuilt. The stopped state lasts until you clear the timer or the event
 that caused it has ended — the feed returns on its own once the event is over. A fired timer is
 released when the event it was set for has ended too, so a timer set to get you to an event
 doesn't keep the feed stopped afterwards; a timer with no such event stays until you clear it. While
@@ -271,8 +273,8 @@ can finish by 18:30. Events themselves never appear as feed cards; the notice ab
 feed names the event. Ended events don't stop watching anymore.
 
 When the stop time runs out — the timer, or an event's lead time — the stay behavior is
-overridden: even the post you're viewing is left out, any video or other media playing on the
-page is force-stopped, and the page sounds a short audio alert once per stop, next to the notice.
+overridden on the page (opened cards no longer keep their place), any video or other media playing
+is force-stopped, and the page sounds a short audio alert once per stop, next to the notice.
 
 ## Colors
 

@@ -114,6 +114,8 @@
     align-items: center; background: var(--card); border: 1px solid var(--border); border-radius: 12px; color: var(--text);
     -webkit-line-clamp: none; }
   #stop-notice button { padding: 2px 8px; font-size: 13px; border-radius: 6px; }
+  /* Stop mode hides the feed but keeps it in the page, so switching back is seamless */
+  #feed.stopped { display: none; }
   nav button:hover { text-decoration: underline; }
   nav button[aria-expanded="true"] { font-weight: 600; }
   .play::after {
@@ -191,11 +193,11 @@ document.getElementById("search-form").addEventListener("submit", (e) => { e.pre
 
 // The stop-watching timer. While it's ahead, the server leaves out posts that would run past it,
 // so every post shown can be finished before the stop time; the post you're viewing stays even when
-// it no longer fits. When the timer runs out, the feed stops and shows the event that caused the
-// stop, or a generic timer message. Events also act as stop times, with the Event lead time term in
-// the panel — and whenever the stop time runs out (timer or event), the stay behavior is
-// overridden: playback is force-stopped and an audio alert sounds (see forceStop).
-// A time earlier today means tomorrow.
+// it no longer fits. When the stop time runs out (the timer, or an event's lead time), the page
+// switches to stop mode in JS: the feed is hidden behind a notice naming the event that caused the
+// stop (or a generic timer message), playback is force-stopped and an audio alert sounds (see
+// forceStop) — and since the feed itself is still served, switching back to the normal feed is
+// seamless once the stop is over. A time earlier today means tomorrow.
 const stopForm = document.getElementById("stop-form");
 const stopTime = document.getElementById("stop-time");
 const stopClear = document.getElementById("stop-clear");
@@ -241,12 +243,16 @@ function stopNote(stopAt, stopped) {
   return `Stopping at ${hhmm} (${when}) · only posts that finish before then · `;
 }
 
-// When the stop time has run out, the feed shows a notice above the (empty) feed instead of
-// content: the event that caused the stop, or a generic timer message, with a Clear button.
+// When the stop time has run out, the page switches to stop mode in JS: the feed is hidden behind
+// a notice (the event that caused the stop, or a generic timer message, with a Clear button), and
+// forceStop has stopped playback and sounded an alert. The feed itself is still in the page, so
+// when the stop is over the next poll switches straight back to the normal feed.
 let lastStop = null;  // the stop fields of the last feed response
 function renderStopNotice() {
   let notice = document.getElementById("stop-notice");
-  if (!lastStop || !lastStop.stopped) { notice?.remove(); return; }
+  const stopped = !!(lastStop && lastStop.stopped);
+  feedEl.classList.toggle("stopped", stopped);
+  if (!stopped) { notice?.remove(); return; }
   if (!notice) {
     notice = el("p", { id: "stop-notice", role: "status" });
     feedEl.before(notice);
@@ -260,9 +266,10 @@ function renderStopNotice() {
     : `Stop time reached at ${hhmm}.`, clear);
 }
 
-// When the stop time runs out — the timer, or an event's lead time — the stay behavior is
-// overridden: cards you opened no longer keep their place, any video or other media playing on
-// the page is force-stopped, and a short audio alert sounds once per stop.
+// Stop mode (the stop time has run out — the timer, or an event's lead time): the stay behavior is
+// overridden (cards you opened no longer keep their place), any video or other media playing on
+// the page is force-stopped, and a short audio alert sounds once per stop. The feed stays in the
+// page hidden (see renderStopNotice), so leaving stop mode is seamless.
 let alertedStop = null;
 function alertSound() {
   try {
