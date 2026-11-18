@@ -861,11 +861,12 @@ def ranked_feed(ranker: str, limit: int, terms: dict | None = None, *, enrich: b
                state_version)
         hit = ranked_cache.get(key)
         if hit and now - hit[0] < RANKED_TTL:
-            # Rebuild when the stop state has flipped since the cached build (a stop fired, or an
-            # event ended), so the feed returns promptly once the event is over instead of serving
-            # the stopped, empty ranking for the rest of the cache's lifetime.
+            # The cached ranking was filtered for the stop state at build time, and that state is
+            # time-dependent: reuse the cache only while the whole stop state (effective stop and
+            # whether it has fired) is unchanged, so a response never mixes items filtered at one
+            # moment with stop fields computed at another.
             eff, _ = ranking.effective_stop(hit[2], now, terms or ranking.TERMS, stop_at)
-            if (eff is not None and now >= eff) != hit[3]:
+            if (eff, eff is not None and now >= eff) != (hit[3], hit[4]):
                 hit = None
         if hit and now - hit[0] < RANKED_TTL:
             ranked, source = hit[1], hit[2]  # source keeps the events, for stop_fields
@@ -914,21 +915,16 @@ def ranked_feed(ranker: str, limit: int, terms: dict | None = None, *, enrich: b
         # Events take place when scheduled, so they aren't feed items: only their stop times reach
         # the feed, never the events as cards.
         feed_items = [it for it in source if it.get("calendar_kind") != "event"]
-        if effective is not None:
+        if effective is not None and now < effective:
+            # While the stop is ahead, leave out posts that would run past it, so each one shown can
+            # be finished before it. The post whose page is open stays, and so does the one you're
+            # viewing, even when it no longer fits. Once the stop has fired the feed itself is left
+            # alone: the response's stopped flag tells the page to switch to stop mode in JS
+            # (notice, playback force-stopped, alert), so switching back is seamless.
             watching = being_viewed(feed_items)
-            if now >= effective:
-                # The time ran out (the timer, or an event's lead time): stop showing content. The
-                # stay behavior is overridden — even the post you're viewing is left out. (The post
-                # whose page is open still stays there.)
-                feed_items = [it for it in feed_items
-                              if post_url is not None and it["url"] == post_url]
-            else:
-                # Leave out posts that would run past the stop time, so each one shown can be
-                # finished before it. The post whose page is open stays, and so does the one you're
-                # viewing, even when it no longer fits.
-                feed_items = [it for it in feed_items if it is watching
-                              or (post_url is not None and it["url"] == post_url)
-                              or ranking.fits_before_stop(it, now, effective)]
+            feed_items = [it for it in feed_items if it is watching
+                          or (post_url is not None and it["url"] == post_url)
+                          or ranking.fits_before_stop(it, now, effective)]
         ranked = ranking.rank(ranker, feed_items, now, terms, lazy=True)
         with lock:
             for k in [k for k, (t, *_rest) in ranked_cache.items() if now - t >= RANKED_TTL or k[3] != state_version]:
@@ -936,7 +932,7 @@ def ranked_feed(ranker: str, limit: int, terms: dict | None = None, *, enrich: b
             if len(ranked_cache) >= 20:
                 ranked_cache.pop(next(iter(ranked_cache)))
             if key[3] == state_version:
-                ranked_cache[key] = (now, ranked, source, effective is not None and now >= effective)
+                ranked_cache[key] = (now, ranked, source, effective, effective is not None and now >= effective)
     if post_url is not None:
         result = post_details(ranked.source, post_url, ranker, limit, terms or ranking.TERMS, now,
                               enrich=enrich, search=search)

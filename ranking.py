@@ -32,14 +32,13 @@ None. The similar_penalty is based on the sum, not on the strongest match alone.
 
 Nothing is hidden: items you've opened or marked red are scored differently, not removed. The one
 exception is the stop-watching timer: while a stop time is in effect (see effective_stop), items whose
-estimated length would run past it are left out of the feed, so each post shown can be finished first,
-and once the stop time has run out, content is left out entirely and the stop is shown instead. The
-post you're viewing (the one you opened most recently) is exempt, so it doesn't disappear as time
-passes; server.py applies that exemption, since viewing state lives there — unless the stop time
-has run out (the timer, or an event's lead time), which overrides it and leaves all content out.
-Calendar events are not
-feed items at all — they take place when scheduled — so they reach the feed only as stop times;
-server.py filters them out of the ranked items but keeps them for effective_stop.
+estimated length would run past it are left out of the feed, so each post shown can be finished first.
+The post you're viewing (the one you opened most recently) is exempt, so it doesn't disappear as time
+passes; server.py applies that exemption, since viewing state lives there. Once the stop time has run
+out, the feed itself is left unchanged and the response's stopped flag tells the page to switch to
+stop mode (notice, playback force-stopped, alert), so it can switch back seamlessly. Calendar events
+are not feed items at all — they take place when scheduled — so they reach the feed only as stop
+times; server.py filters them out of the ranked items but keeps them for effective_stop.
 
 A ranker registered with spread=True penalizes similarity to posts above it (see rank).
 

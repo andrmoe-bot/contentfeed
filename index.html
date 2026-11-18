@@ -110,10 +110,14 @@
   #stop-form { display: inline-flex; align-items: center; gap: 4px; }
   #stop-form input[type="time"] { flex: 0 0 auto; width: 6.4em; padding: 2px 6px; font-size: 13px; border-radius: 6px; }
   #stop-form button { padding: 2px 8px; font-size: 13px; border-radius: 6px; }
+  #stop-mode { padding: 2px 8px; font-size: 13px; border-radius: 6px; }
+  #stop-mode[aria-pressed="true"] { font-weight: 600; }
   #stop-notice { max-width: 720px; margin: 16px auto 0; padding: 10px 16px; display: flex; flex-wrap: wrap; gap: 4px 10px;
     align-items: center; background: var(--card); border: 1px solid var(--border); border-radius: 12px; color: var(--text);
     -webkit-line-clamp: none; }
   #stop-notice button { padding: 2px 8px; font-size: 13px; border-radius: 6px; }
+  /* Stop mode hides the feed but keeps it in the page, so switching back is seamless */
+  #feed.stopped { display: none; }
   nav button:hover { text-decoration: underline; }
   nav button[aria-expanded="true"] { font-weight: 600; }
   .play::after {
@@ -128,7 +132,8 @@
     <h1>Content Feed</h1>
     <nav><a href="/subscriptions" id="subs-link">Subscriptions</a> · <button type="button" id="panel-toggle" aria-expanded="false" aria-controls="panel">Settings</button> ·
       <form id="stop-form"><input id="stop-time" type="time" step="60" aria-label="Stop watching at this time"
-        title="Stop watching at this time: the feed shows only posts you can finish before it, then stops and shows the event or a timer message"><button type="submit" id="stop-set">Set</button><button type="button" id="stop-clear" hidden>Clear</button></form>
+        title="Stop watching at this time: the feed shows only posts you can finish before it, then stops and shows the event or a timer message"><button type="submit" id="stop-set">Set</button><button type="button" id="stop-clear" hidden>Clear</button></form> ·
+      <button type="button" id="stop-mode" aria-pressed="false">Stop mode</button>
     </nav>
     <span id="status"></span>
   </div>
@@ -191,11 +196,12 @@ document.getElementById("search-form").addEventListener("submit", (e) => { e.pre
 
 // The stop-watching timer. While it's ahead, the server leaves out posts that would run past it,
 // so every post shown can be finished before the stop time; the post you're viewing stays even when
-// it no longer fits. When the timer runs out, the feed stops and shows the event that caused the
-// stop, or a generic timer message. Events also act as stop times, with the Event lead time term in
-// the panel — and whenever the stop time runs out (timer or event), the stay behavior is
-// overridden: playback is force-stopped and an audio alert sounds (see forceStop).
-// A time earlier today means tomorrow.
+// it no longer fits. When the stop time runs out (the timer, or an event's lead time), the page
+// switches to stop mode in JS: the feed is hidden behind a notice naming the event that caused the
+// stop (or a generic timer message), playback is force-stopped and an audio alert sounds (see
+// forceStop) — and since the feed itself is still served, switching back to the normal feed is
+// seamless once the stop is over. The "Stop mode" button next to the timer switches between stop
+// mode and the normal feed manually at any time. A time earlier today means tomorrow.
 const stopForm = document.getElementById("stop-form");
 const stopTime = document.getElementById("stop-time");
 const stopClear = document.getElementById("stop-clear");
@@ -241,28 +247,63 @@ function stopNote(stopAt, stopped) {
   return `Stopping at ${hhmm} (${when}) · only posts that finish before then · `;
 }
 
-// When the stop time has run out, the feed shows a notice above the (empty) feed instead of
-// content: the event that caused the stop, or a generic timer message, with a Clear button.
+// When the stop time has run out, the page switches to stop mode in JS: the feed is hidden behind
+// a notice (the event that caused the stop, or a generic timer message, with a Clear button), and
+// forceStop has stopped playback and sounded an alert. The feed itself is still in the page, so
+// when the stop is over the next poll switches straight back to the normal feed.
 let lastStop = null;  // the stop fields of the last feed response
+// Manual stop/normal switch: modeOverride is null to follow the server's stopped flag, or true/false
+// to force stop mode / the normal feed at any time. The feed always stays in the page (hidden in
+// stop mode), so switching either way is instant.
+let modeOverride = null;
+const stopModeBtn = document.getElementById("stop-mode");
+function stopModeActive() {
+  return modeOverride !== null ? modeOverride : !!(lastStop && lastStop.stopped);
+}
+function updateStopModeBtn() {
+  const active = stopModeActive();
+  stopModeBtn.textContent = active ? "Back to normal" : "Stop mode";
+  stopModeBtn.setAttribute("aria-pressed", String(active));
+  stopModeBtn.title = active
+    ? "Switch back to the normal feed now"
+    : "Switch to stop mode now: hide the feed and stop playback";
+}
+stopModeBtn.addEventListener("click", () => {
+  modeOverride = !stopModeActive();
+  forceStop(null, true);  // manual switch: stop playback too, but no audio alert
+  render();
+});
+
 function renderStopNotice() {
   let notice = document.getElementById("stop-notice");
-  if (!lastStop || !lastStop.stopped) { notice?.remove(); return; }
+  const stopped = stopModeActive();
+  feedEl.classList.toggle("stopped", stopped);
+  updateStopModeBtn();
+  if (!stopped) { notice?.remove(); return; }
   if (!notice) {
     notice = el("p", { id: "stop-notice", role: "status" });
     feedEl.before(notice);
   }
-  const d = new Date(lastStop.stop_at * 1000);
-  const hhmm = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-  const clear = el("button", { type: "button" }, "Clear timer");
-  clear.addEventListener("click", () => stopClear.click());
-  notice.replaceChildren(lastStop.stop_event
-    ? `Time to go: “${lastStop.stop_event.title}” starts at ${hhmm}.`
-    : `Stop time reached at ${hhmm}.`, clear);
+  if (lastStop && lastStop.stopped) {
+    const d = new Date(lastStop.stop_at * 1000);
+    const hhmm = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+    const clear = el("button", { type: "button" }, "Clear timer");
+    clear.addEventListener("click", () => stopClear.click());
+    notice.replaceChildren(lastStop.stop_event
+      ? `Time to go: “${lastStop.stop_event.title}” starts at ${hhmm}.`
+      : `Stop time reached at ${hhmm}.`, clear);
+  } else {
+    const back = el("button", { type: "button" }, "Back to feed");
+    back.addEventListener("click", () => { modeOverride = false; render(); });
+    notice.replaceChildren("Stop mode is on — the feed is hidden and playback is stopped. ", back);
+  }
 }
 
-// When the stop time runs out — the timer, or an event's lead time — the stay behavior is
-// overridden: cards you opened no longer keep their place, any video or other media playing on
-// the page is force-stopped, and a short audio alert sounds once per stop.
+// Stop mode (the stop time has run out — the timer, or an event's lead time — or the manual
+// Stop mode button): the stay behavior is overridden (cards you opened no longer keep their
+// place), any video or other media playing on the page is force-stopped, and a short audio alert
+// sounds once per server-caused stop. The feed stays in the page hidden (see renderStopNotice),
+// so leaving stop mode is seamless.
 let alertedStop = null;
 function alertSound() {
   try {
@@ -284,9 +325,9 @@ function alertSound() {
   } catch {}
 }
 
-function forceStop(data) {
-  if (!data.stopped) { alertedStop = null; return; }
-  stay.clear();  // the stay behavior no longer applies while the stop is in effect
+function forceStop(data, manual = false) {
+  if (!stopModeActive()) { alertedStop = null; return; }
+  stay.clear();  // the stay behavior no longer applies while stop mode is on
   if (playingCard) {
     // Rebuilding the playing card replaces its player with the play button, which stops playback.
     for (const c of cards.values()) if (c.el === playingCard) {
@@ -297,10 +338,12 @@ function forceStop(data) {
     }
     playingCard = null;
   }
-  const key = `${data.stop_event ? data.stop_event.url : "timer"}@${data.stop_at}`;
-  if (alertedStop !== key) {
-    alertedStop = key;
-    alertSound();
+  if (!manual && data && data.stopped) {  // alert only when the server's stop fires, not on manual switches
+    const key = `${data.stop_event ? data.stop_event.url : "timer"}@${data.stop_at}`;
+    if (alertedStop !== key) {
+      alertedStop = key;
+      alertSound();
+    }
   }
 }
 const sections = new Map();
