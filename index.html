@@ -193,8 +193,9 @@ document.getElementById("search-form").addEventListener("submit", (e) => { e.pre
 // so every post shown can be finished before the stop time; the post you're viewing stays even when
 // it no longer fits. When the timer runs out, the feed stops and shows the event that caused the
 // stop, or a generic timer message. Events also act as stop times, with the Event lead time term in
-// the panel — and crossing an event's lead time overrides the stay behavior: playback is force-
-// stopped and an audio alert sounds (see forceStop). A time earlier today means tomorrow.
+// the panel — and whenever the stop time runs out (timer or event), the stay behavior is
+// overridden: playback is force-stopped and an audio alert sounds (see forceStop).
+// A time earlier today means tomorrow.
 const stopForm = document.getElementById("stop-form");
 const stopTime = document.getElementById("stop-time");
 const stopClear = document.getElementById("stop-clear");
@@ -253,8 +254,8 @@ function renderStopNotice() {
     : `Stop time reached at ${hhmm}.`, clear);
 }
 
-// Crossing an event's lead time (the stop fires because of an event, not the timer) overrides the
-// stay behavior: cards you opened no longer keep their place, any video or other media playing on
+// When the stop time runs out — the timer, or an event's lead time — the stay behavior is
+// overridden: cards you opened no longer keep their place, any video or other media playing on
 // the page is force-stopped, and a short audio alert sounds once per stop.
 let alertedStop = null;
 function alertSound() {
@@ -278,8 +279,8 @@ function alertSound() {
 }
 
 function forceStop(data) {
-  if (!(data.stopped && data.stop_event)) { alertedStop = null; return; }
-  stay.clear();  // the stay behavior no longer applies while an event's stop is in effect
+  if (!data.stopped) { alertedStop = null; return; }
+  stay.clear();  // the stay behavior no longer applies while the stop is in effect
   if (playingCard) {
     // Rebuilding the playing card replaces its player with the play button, which stops playback.
     for (const c of cards.values()) if (c.el === playingCard) {
@@ -290,7 +291,7 @@ function forceStop(data) {
     }
     playingCard = null;
   }
-  const key = `${data.stop_event.url}@${data.stop_at}`;
+  const key = `${data.stop_event ? data.stop_event.url : "timer"}@${data.stop_at}`;
   if (alertedStop !== key) {
     alertedStop = key;
     alertSound();

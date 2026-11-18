@@ -169,11 +169,18 @@ class StopTimerServerTests(unittest.TestCase):
         self.assertNotIn(self.long["url"], self.urls(result))
         self.assertEqual(result["total"], 1)
 
-    def test_viewed_post_stays_when_the_stop_has_fired(self):
+    def test_timer_stop_also_overrides_the_viewed_post(self):
+        """A fired stop overrides the stay behavior whatever caused it: timer or event."""
         server.set_stop(time.time() - 10)  # the timer ran out
-        server.viewed[self.long["url"]] = time.time() - 60
+        server.viewed[self.long["url"]] = time.time() - 60  # you're watching the long one
         result = server.feed("score")
-        self.assertEqual(self.urls(result), {self.long["url"]})  # what you're viewing stays
+        self.assertEqual(self.urls(result), set())  # not even the viewed post stays
+        self.assertTrue(result["stopped"])
+
+    def test_fired_stop_still_keeps_the_open_post_page(self):
+        server.set_stop(time.time() - 10)  # the timer ran out
+        result = server.ranked_feed("score", 300, post_url=self.long["url"])
+        self.assertEqual(result["item"]["url"], self.long["url"])  # its page keeps the post
         self.assertTrue(result["stopped"])
 
     def test_event_stop_overrides_the_viewed_post(self):

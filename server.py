@@ -903,24 +903,18 @@ def ranked_feed(ranker: str, limit: int, terms: dict | None = None, *, enrich: b
         if post_url is None and search.strip():
             items = [p for p in items if matches_search(p, search)]
         source = items  # stop computation sees events too; events aren't feed items themselves
-        effective, stop_event = ranking.effective_stop(source, now, terms or ranking.TERMS, stop_at)
+        effective, _ = ranking.effective_stop(source, now, terms or ranking.TERMS, stop_at)
         # Events take place when scheduled, so they aren't feed items: only their stop times reach
         # the feed, never the events as cards.
         feed_items = [it for it in source if it.get("calendar_kind") != "event"]
         if effective is not None:
             watching = being_viewed(feed_items)
             if now >= effective:
-                if stop_event is not None:
-                    # An event's lead time has been crossed: that overrides the stay behavior, so
-                    # even the post you're viewing is left out and watching stops. (The post whose
-                    # page is open still stays there.)
-                    feed_items = [it for it in feed_items
-                                  if post_url is not None and it["url"] == post_url]
-                else:
-                    # The timer ran out: stop showing content. The post you're viewing stays, so it
-                    # doesn't disappear from under you.
-                    feed_items = [it for it in feed_items if it is watching
-                                  or (post_url is not None and it["url"] == post_url)]
+                # The time ran out (the timer, or an event's lead time): stop showing content. The
+                # stay behavior is overridden — even the post you're viewing is left out. (The post
+                # whose page is open still stays there.)
+                feed_items = [it for it in feed_items
+                              if post_url is not None and it["url"] == post_url]
             else:
                 # Leave out posts that would run past the stop time, so each one shown can be
                 # finished before it. The post whose page is open stays, and so does the one you're
