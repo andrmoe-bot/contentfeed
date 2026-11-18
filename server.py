@@ -549,6 +549,13 @@ def view_state(url: str) -> dict:
             "skipped": last is not None and opened_at(url) is None}
 
 
+def being_viewed(items: list[dict]) -> dict | None:
+    """The item you opened most recently and didn't skip after: the one you're viewing now, if any.
+    Items carry last_viewed and skipped from view_state."""
+    opened = [it for it in items if it.get("last_viewed") and not it.get("skipped")]
+    return max(opened, key=lambda it: it["last_viewed"], default=None)
+
+
 def known_urls() -> set[str]:
     urls = set(read_entries())
     subs = read_entries(FEEDS_FILE)
@@ -897,14 +904,18 @@ def ranked_feed(ranker: str, limit: int, terms: dict | None = None, *, enrich: b
             items = [p for p in items if matches_search(p, search)]
         effective, stop_event = ranking.effective_stop(items, now, terms or ranking.TERMS, stop_at)
         if effective is not None:
+            watching = being_viewed(items)
             if now >= effective:
-                # The time ran out: stop showing content. The event that caused the stop stays.
-                items = [it for it in items if it is stop_event
+                # The time ran out: stop showing content. The event that caused the stop stays, and so
+                # does the post you're viewing, so it doesn't disappear from under you.
+                items = [it for it in items if it is stop_event or it is watching
                          or (post_url is not None and it["url"] == post_url)]
             else:
                 # Leave out posts that would run past the stop time, so each one shown can be
-                # finished before it. The post whose page is open stays even if it no longer fits.
-                items = [it for it in items if (post_url is not None and it["url"] == post_url)
+                # finished before it. The post whose page is open stays, and so does the one you're
+                # viewing, even when it no longer fits.
+                items = [it for it in items if it is watching
+                         or (post_url is not None and it["url"] == post_url)
                          or ranking.fits_before_stop(it, now, effective)]
         ranked = ranking.rank(ranker, items, now, terms, lazy=True)
         with lock:

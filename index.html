@@ -190,9 +190,10 @@ searchEl.addEventListener("input", () => { clearTimeout(searchTimer); searchTime
 document.getElementById("search-form").addEventListener("submit", (e) => { e.preventDefault(); searchChanged(); });
 
 // The stop-watching timer. While it's ahead, the server leaves out posts that would run past it,
-// so every post shown can be finished before the stop time; when it runs out, the feed stops and
-// shows the event that caused the stop, or a generic timer message. Events also act as stop times,
-// with the Event lead time term in the panel. A time earlier today means tomorrow.
+// so every post shown can be finished before the stop time; the post you're viewing stays even when
+// it no longer fits. When the timer runs out, the feed stops and shows the event that caused the
+// stop, or a generic timer message. Events also act as stop times, with the Event lead time term in
+// the panel. A time earlier today means tomorrow.
 const stopForm = document.getElementById("stop-form");
 const stopTime = document.getElementById("stop-time");
 const stopClear = document.getElementById("stop-clear");
