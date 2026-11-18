@@ -252,7 +252,10 @@ as tomorrow). While it's ahead, the feed leaves out any post whose estimated len
 it, so every post shown can be finished before the stop time. Posts without an estimated length
 stay, and events and tasks are never left out. The status line shows the stop time and how long is
 left. The timer is kept in `stop.json` in the data directory, so every device on the network shares
-it; it turns off by itself when the time passes, or with Clear.
+it. When the time runs out, the feed stops showing content and shows a notice above the empty feed
+instead: the event that caused the stop (“Time to go: …”), or a generic “Stop time reached” message
+for the timer, with a Clear button. The stopped state lasts until you clear the timer; a timer left
+over from a previous day (more than 24 hours past) is dropped at startup.
 
 Events use the same system with a lead time: every event that hasn't ended acts as a stop time at
 its start minus the **Event lead time** setting in the score panel (30 minutes by default; 0 stops
