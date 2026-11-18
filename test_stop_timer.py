@@ -203,9 +203,31 @@ class StopTimerServerTests(unittest.TestCase):
         self.assertAlmostEqual(result["stop_at"], start - 30 * 60, places=3)
         self.assertFalse(result["stopped"])
         self.assertEqual(result["stop_event"]["title"], "Dinner")
-        self.assertIn(event["url"], self.urls(result))  # events themselves are never filtered
+        self.assertNotIn(event["url"], self.urls(result))  # events aren't feed items
         self.assertIn(self.short["url"], self.urls(result))
-        self.assertNotIn(self.long["url"], self.urls(result))
+        self.assertNotIn(self.long["url"], self.urls(result))  # 120 minutes don't fit before the stop
+
+    def test_events_are_not_feed_items_but_still_act_as_stop_times(self):
+        start = time.time() + 5 * 3600  # far enough that both posts fit before the stop
+        event = {"url": self.url + "#item=dinner", "title": "Dinner", "first_seen": 1_000_000,
+                 "published": start, "calendar_kind": "event", "calendar_start": start,
+                 "deadline": start + 3600}
+        server.subscriptions[self.url]["items"].append(event)
+        result = server.feed("score")
+        self.assertNotIn(event["url"], self.urls(result))  # no event card
+        self.assertIn(self.short["url"], self.urls(result))
+        self.assertIn(self.long["url"], self.urls(result))
+        self.assertAlmostEqual(result["stop_at"], start - 30 * 60, places=3)  # but it still stops watching
+        self.assertEqual(result["stop_event"]["title"], "Dinner")
+
+    def test_event_post_page_is_not_found(self):
+        start = time.time() + 5 * 3600
+        event = {"url": self.url + "#item=dinner", "title": "Dinner", "first_seen": 1_000_000,
+                 "published": start, "calendar_kind": "event", "calendar_start": start,
+                 "deadline": start + 3600}
+        server.subscriptions[self.url]["items"].append(event)
+        result = server.ranked_feed("score", 300, post_url=event["url"])
+        self.assertEqual(result.get("error"), "Post not found")
 
     def test_lead_time_is_configurable_as_a_term(self):
         start = time.time() + 2 * 3600
@@ -217,7 +239,7 @@ class StopTimerServerTests(unittest.TestCase):
         result = server.feed("score")
         self.assertAlmostEqual(result["stop_at"], start - 90 * 60, places=3)
 
-    def test_fired_event_stop_shows_only_that_event(self):
+    def test_fired_event_stop_shows_no_content_but_names_the_event(self):
         start = time.time() + 10 * 60  # within the 30-minute lead: the time has run out
         event = {"url": self.url + "#item=dinner", "title": "Dinner", "first_seen": 1_000_000,
                  "published": start, "calendar_kind": "event", "calendar_start": start,
@@ -225,8 +247,8 @@ class StopTimerServerTests(unittest.TestCase):
         server.subscriptions[self.url]["items"].append(event)
         result = server.feed("score")
         self.assertTrue(result["stopped"])
-        self.assertEqual(self.urls(result), {event["url"]})  # just the event, no content
-        self.assertEqual(result["stop_event"]["url"], event["url"])
+        self.assertEqual(self.urls(result), set())  # no content, and no event card either
+        self.assertEqual(result["stop_event"]["url"], event["url"])  # the notice names it instead
         self.assertAlmostEqual(result["stop_at"], start - 30 * 60, places=3)
 
     def test_post_page_keeps_its_post_even_when_it_no_longer_fits(self):
