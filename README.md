@@ -293,7 +293,7 @@ All scoring terms add their configured signed points; negative values subtract p
 - −30 for anything you've opened or skipped, including next up
 - 0 if nothing from its subscription has been opened yet, such as one you just subscribed to
 - −30 for a later part of a series when you haven't opened anything before it (see below)
-- −40 × similarity × the fraction of the 24-hour window remaining since opening, using the strongest remaining penalty (see below)
+- −40 × the **sum** over everything you opened recently of similarity × the fraction of the 24-hour window remaining since opening; each match contributes on its own, not just the strongest (see below)
 - 0 for its media type: video (YouTube, Jellyfin, NRK TV, pages with a video file), image (a link straight to a picture) or
   article (anything else). Each has its own setting, which may be negative, to favor or hold back that type.
 - 0 per **minute away from the target content length** by default. Content length adds `weight × |estimated minutes − target minutes|`. Set a negative weight to favor content near the target, or a positive weight to favor content farther away. The target defaults to 0 minutes, preserving existing scores; both the weight and target are configurable in Settings. Runtime metadata is used where available; text is estimated at 200 words per minute (at least one minute). Feed text may be only an excerpt, and page estimates can include surrounding text. Unknown lengths have no adjustment. When the site loads, the five highest-ranked posts with incomplete data are updated in the background, regardless of score weights. YouTube updates fetch runtime and exact publication time together. Change this count with “Update incomplete posts” in Settings (0–100; 0 disables it). Routine polling does not start additional batches; unavailable data stays unknown and recent attempts are skipped for six hours.
@@ -356,7 +356,10 @@ How alike two items are, from 0 to 100%:
 - Every item is 100% like itself, even without a known length or title. Set the subscription base and all three weights to 0 to disable the
   similarity penalties entirely, including for opened items.
 
-The similarity penalty fades linearly to zero over 24 hours, updated in whole hours. After you
+The similarity penalty fades linearly to zero over 24 hours, updated in whole hours. Every
+recently opened match adds its own similarity × remaining fraction, so the penalty is the sum
+over all of them: two 50% matches opened 12 hours ago together cost the same as one 100% match
+done. After you
 watch a video, its channel's next one (published a week later) starts at next up 30 − 35.2;
 after 12 hours, that penalty is only 17.6. These examples use the default 50% subscription base
 and publish-time-only measured similarity.

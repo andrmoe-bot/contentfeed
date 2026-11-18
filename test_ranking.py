@@ -18,20 +18,28 @@ def item(url, sub=None, age=None, date=NOW):
 
 
 def brute_force(items, terms):
-    """The original all-pairs algorithm, with tag similarity removed."""
+    """The original all-pairs algorithm, with tag similarity removed: the strongest match wins,
+    and total/matches sum the strength over every match for the penalty."""
     recent = [it for it in items if it["last_viewed"] is not None
               and ranking.hours_since(NOW, it["last_viewed"]) < terms["similar_hours"]]
     for it in items:
         best = None
+        total = 0
+        matches = 0
         if terms["similar_penalty"] and (terms["similar_base_percent"] or terms["similar_publish_weight"] or terms["similar_length_weight"] or terms["similar_title_weight"]):
             for other in recent:
                 percent, why = ranking.similarity(it, other, terms)
                 hours = ranking.hours_since(NOW, other["last_viewed"])
                 strength = percent * (1 - hours / terms["similar_hours"])
-                if strength and (not best or strength > best["strength"]
-                                 or (strength == best["strength"] and why == "itself")):
-                    best = {"title": other["title"], "url": other["url"], "hours": hours, "percent": percent,
-                            "strength": strength, "why": why, "skipped": other.get("skipped", False)}
+                if strength:
+                    total += strength
+                    matches += 1
+                    if not best or strength > best["strength"] or (strength == best["strength"] and why == "itself"):
+                        best = {"title": other["title"], "url": other["url"], "hours": hours, "percent": percent,
+                                "strength": strength, "why": why, "skipped": other.get("skipped", False)}
+        if best:
+            best["total"] = total
+            best["matches"] = matches
         it["similar"] = best
 
 
@@ -294,6 +302,20 @@ class NormalizedSimilarityTests(unittest.TestCase):
         self.assertEqual(candidate['similar']['title'], 'far')
         self.assertEqual(candidate['similar']['percent'], 75)
         self.assertEqual(candidate['similar']['strength'], 56.25)
+
+    def test_penalty_sums_all_matches_not_just_the_strongest(self):
+        terms = dict(ranking.DEFAULT_TERMS, similar_base_percent=0, seen_bonus=0, above_similarity_penalty=0)
+        candidate = item('candidate', 'a')
+        fresh = item('fresh', 'a', age=0, date=NOW - 15 * 86400)
+        older = item('older', 'a', age=6, date=NOW - 15 * 86400)
+        ranked = ranking.rank('score', [candidate, fresh, older], NOW, terms)
+        cand = next(it for it in ranked if it['url'] == 'candidate')
+        # Both matches are 50% similar (15 of 30 days); fresh counts fully, older at 75% remaining.
+        self.assertEqual(cand['similar']['matches'], 2)
+        self.assertEqual(cand['similar']['total'], 87.5)
+        self.assertEqual(cand['similar']['strength'], 50)  # still the strongest single match
+        self.assertEqual(cand['score'], -35)  # -40 x 87.5% combined, not -40 x 50%
+        self.assertIn('2 matches, 87.5% combined', cand['reasons'][0]['label'])
 
     def test_length_similarity_changes_feed_order(self):
         anchor = dict(item('anchor', 'feed', age=0), estimated_minutes=10)

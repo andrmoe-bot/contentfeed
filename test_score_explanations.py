@@ -29,10 +29,11 @@ class ScoreExplanationTests(unittest.TestCase):
         posts.append(item('unrelated', 'other'))
         ranked = ranking.rank('score', posts, NOW, terms, lazy=True)
         visible, _ = ranked.read(6)
-        explained = ranking.explain_similarities(visible, ranked.source, terms)
+        explained = ranking.explain_similarities(visible, ranked.source, terms, NOW)
         for card in explained:
             if card.get('similar'):
                 self.assertEqual(card['recent_match']['url'], '0')
+                self.assertEqual([m['url'] for m in card['recent_matches']], ['0'])
             for reason in card['reasons']:
                 if reason['label'].startswith('similarity to '):
                     total = sum(m['percent'] for m in card['above_matches'])
@@ -75,9 +76,9 @@ class ScoreExplanationTests(unittest.TestCase):
         posts = [item(str(i), 'feed', date=NOW - i * 86400) for i in range(12)]
         ranked = ranking.rank('score', posts, NOW, terms, lazy=True)
         first, _ = ranked.read(4)
-        explained_first = ranking.explain_similarities(first, ranked.source, terms)
+        explained_first = ranking.explain_similarities(first, ranked.source, terms, NOW)
         full, _ = ranked.read(12)
-        explained_full = ranking.explain_similarities(full, ranked.source, terms)
+        explained_full = ranking.explain_similarities(full, ranked.source, terms, NOW)
         self.assertEqual(explained_first, explained_full[:4])
         for card in explained_full:
             for match in card.get('above_matches', []):

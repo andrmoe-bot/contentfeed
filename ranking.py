@@ -26,8 +26,9 @@ Each item has its page metadata (url, title, description, domain, ...) plus thes
     sub_last_viewed  for a post: unix time you last opened or skipped any post in its subscription,
                  or None if you've done neither
 
-rank() adds one more, "similar": the item you opened recently that this one is most like (see
-similarity), or None.
+rank() adds one more, "similar": the item you opened recently that this one is most like, plus
+"total" and "matches", the summed strength and count of every recent match (see similarity), or
+None. The similar_penalty is based on the sum, not on the strongest match alone.
 
 Nothing is hidden: items you've opened or marked red are scored differently, not removed. The one
 exception is the stop-watching timer: while a stop time is in effect (see effective_stop), items whose
@@ -64,7 +65,7 @@ DEFAULT_TERMS = {
     "next_up_bonus": 30,  # the post after the one you opened most recently in a subscription
     "seen_bonus": -30,  # items you've opened or skipped; below 0 puts them under unopened ones
     "new_sub_bonus": 0,  # for posts from a subscription you've never opened anything from
-    "similar_penalty": -40,  # added at 100% like something you opened recently (see similarity):
+    "similar_penalty": -40,  # added per 100% combined similarity to what you opened recently (see similarity):
     "similar_hours": 24,  # penalty fades linearly to zero this many hours after opening
     "similar_base_percent": 50,  # same-subscription baseline; other similarity fills the remainder
     "similar_publish_weight": 1,  # relative weight of publication-time similarity
@@ -356,9 +357,12 @@ def similarity_breakdown(item: dict, other: dict, terms: dict) -> dict:
             "self": item["url"] == other["url"], "components": components}
 
 
-def explain_similarities(visible: list[dict], source: list[dict], terms: dict) -> list[dict]:
+def explain_similarities(visible: list[dict], source: list[dict], terms: dict, now: float) -> list[dict]:
     """Enrich only displayed cards, keeping pair details out of the ranking cache."""
     by_url = {item["url"]: item for item in source}
+    window = terms["similar_hours"]
+    title_words = {it["url"]: title_tokens(it.get("title")) for it in source} if terms["similar_title_weight"] else {}
+    recent_by_sub, recent_by_url = recent_view_index(source, now, window, title_words) if window else ({}, {})
     groups = {}
     explained = []
     for item in visible:
@@ -368,6 +372,13 @@ def explain_similarities(visible: list[dict], source: list[dict], terms: dict) -
             other = by_url.get(recent.get("url"))
             if other:
                 out["recent_match"] = similarity_breakdown(item, other, terms)
+            matches = []
+            for other, hours, remaining, _minutes, _title in recent_candidates(item, recent_by_sub, recent_by_url):
+                match = similarity_breakdown(item, other, terms)
+                if match["percent"]:
+                    matches.append((match["percent"] * remaining, match))
+            if matches:
+                out["recent_matches"] = [match for _, match in sorted(matches, key=lambda pair: pair[0], reverse=True)]
         if any(r["label"].startswith("similarity to ") for r in item["reasons"]):
             matches = []
             group = (("calendar", item["calendar_kind"], item.get("sub") or item["url"])
@@ -413,22 +424,10 @@ def similarity_reason(item: dict, other: dict, metric: SimilarityMetric, first, 
     return ", ".join(details)
 
 
-def similar_to_recent(items: list[dict], now: float, terms: dict, title_words: dict | None = None):
-    """Set each item's "similar" to the strongest match after linear recency decay, as
-    {title, hours (since opened), percent, strength, why}, or None if all strengths are zero.
-    Strength is similarity percent times the fraction of similar_hours remaining."""
-    for it in items:
-        it["similar"] = None
-    window = terms["similar_hours"]
-    if (not terms["similar_penalty"] or not window
-            or not (terms["similar_base_percent"] or terms["similar_publish_weight"] or terms["similar_length_weight"] or terms["similar_title_weight"])):
-        return
-    metric = similarity_metric(terms["similar_days"], terms["similar_publish_weight"],
-                               terms["similar_length_weight"], terms["similar_title_weight"], terms["similar_base_percent"])
-    # Only posts from the same subscription can match. Links can only match themselves.
-    # Compute recency once per viewed item, rather than once per comparison.
-    title_words = title_words if title_words is not None else (
-        {it["url"]: title_tokens(it.get("title")) for it in items} if metric.title_weight else {})
+def recent_view_index(items: list[dict], now: float, window: float, title_words: dict | None = None) -> tuple[dict, dict]:
+    """Recently viewed items inside the window, indexed by subscription and by url, each as
+    (other, hours since opened, fraction of the window remaining, minutes, title tokens).
+    Recency is computed once per viewed item, rather than once per comparison."""
     recent_by_sub: dict[str, list[tuple]] = {}
     recent_by_url = {}
     for other in items:
@@ -438,37 +437,71 @@ def similar_to_recent(items: list[dict], now: float, terms: dict, title_words: d
         if hours >= window:
             continue
         minutes = other.get("estimated_minutes")
-        entry = (other, hours, 1 - hours / window, minutes if valid_minutes(minutes) else None, title_words.get(other["url"]))
+        entry = (other, hours, 1 - hours / window, minutes if valid_minutes(minutes) else None,
+                 (title_words or {}).get(other["url"]))
         recent_by_url[other["url"]] = entry
         if other.get("sub"):
             recent_by_sub.setdefault(other["sub"], []).append(entry)
+    return recent_by_sub, recent_by_url
+
+
+def recent_candidates(it: dict, recent_by_sub: dict, recent_by_url: dict) -> list[tuple]:
+    """The indexed items an item can match: same subscription (tasks only with tasks, events
+    with nothing), or itself for links."""
+    candidates = recent_by_sub.get(it.get("sub"), [])
+    own = recent_by_url.get(it["url"])
+    if it.get("calendar_kind") == "task":
+        candidates = [entry for entry in candidates if entry[0].get("calendar_kind") == "task"]
+    elif it.get("calendar_kind"):
+        candidates = []
+    else:
+        candidates = [entry for entry in candidates if not entry[0].get("calendar_kind")]
+    if not it.get("sub"):
+        candidates = [own] if own else []
+    return candidates
+
+
+def similar_to_recent(items: list[dict], now: float, terms: dict, title_words: dict | None = None):
+    """Set each item's "similar" to the strongest match after linear recency decay, as
+    {title, hours (since opened), percent, strength, why, total, matches}, or None if all
+    strengths are zero. Strength is similarity percent times the fraction of similar_hours
+    remaining; total and matches sum that strength over every match, and the similar_penalty
+    is based on the sum, not on the strongest match alone."""
+    for it in items:
+        it["similar"] = None
+    window = terms["similar_hours"]
+    if (not terms["similar_penalty"] or not window
+            or not (terms["similar_base_percent"] or terms["similar_publish_weight"] or terms["similar_length_weight"] or terms["similar_title_weight"])):
+        return
+    metric = similarity_metric(terms["similar_days"], terms["similar_publish_weight"],
+                               terms["similar_length_weight"], terms["similar_title_weight"], terms["similar_base_percent"])
+    title_words = title_words if title_words is not None else (
+        {it["url"]: title_tokens(it.get("title")) for it in items} if metric.title_weight else {})
+    recent_by_sub, recent_by_url = recent_view_index(items, now, window, title_words)
     for it in items:
         best = None
+        total = 0
+        matches = 0
         minutes = it.get("estimated_minutes")
         first = minutes if valid_minutes(minutes) else None
-        candidates = recent_by_sub.get(it.get("sub"), [])
-        own = recent_by_url.get(it["url"])
-        if it.get("calendar_kind") == "task":
-            candidates = [entry for entry in candidates if entry[0].get("calendar_kind") == "task"]
-        elif it.get("calendar_kind"):
-            candidates = []
-        else:
-            candidates = [entry for entry in candidates if not entry[0].get("calendar_kind")]
-        if not it.get("sub"):
-            candidates = [own] if own else []
         first_title = title_words.get(it["url"])
-        for other, hours, remaining, second, second_title in candidates:
+        for other, hours, remaining, second, second_title in recent_candidates(it, recent_by_sub, recent_by_url):
             itself = it["url"] == other["url"]
             percent = 100 if itself else metric.percent(it["date"], first, other["date"], second, first_title, second_title)
             strength = percent * remaining
-            if strength and (not best or strength > best["strength"] or (strength == best["strength"] and itself)):
-                # Delay explanation strings until the strongest match is known.
-                best = {"title": other["title"], "hours": hours, "percent": percent, "strength": strength,
-                        "skipped": other.get("skipped", False), "other": other, "minutes": second}
+            if strength:
+                total += strength
+                matches += 1
+                if not best or strength > best["strength"] or (strength == best["strength"] and itself):
+                    # Delay explanation strings until the strongest match is known.
+                    best = {"title": other["title"], "hours": hours, "percent": percent, "strength": strength,
+                            "skipped": other.get("skipped", False), "other": other, "minutes": second}
         if best:
             other, second = best.pop("other"), best.pop("minutes")
             best["url"] = other["url"]
             best["why"] = "itself" if it["url"] == other["url"] else similarity_reason(it, other, metric, first, second)
+            best["total"] = total
+            best["matches"] = matches
         it["similar"] = best
 
 
@@ -534,7 +567,9 @@ def chronological(item: dict, now: float, terms: dict) -> Reasons:
 
 
 def _similarity_reasons(item: dict, terms: dict) -> Reasons:
-    """Explain the recent-view similarity adjustment shared by posts and tasks."""
+    """Explain the recent-view similarity adjustment shared by posts and tasks: one reason whose
+    points are similar_penalty times the summed strength ("total") of all matches, not just the
+    strongest one."""
     like = item.get("similar")
     if not like or not terms["similar_penalty"]:
         return []
@@ -544,8 +579,10 @@ def _similarity_reasons(item: dict, terms: dict) -> Reasons:
         label = f"100% like itself, {when}"
     else:
         label = f"{like['percent']}% like “{short(like['title'])}”, {when} ({like['why']})"
+    if like["matches"] > 1:
+        label += f", {like['matches']} matches, {points(like['total'])}% combined"
     label += f", {points(100 * (1 - like['hours'] / terms['similar_hours']))}% penalty remaining"
-    return [(label, points(terms["similar_penalty"] * like["strength"] / 100))]
+    return [(label, points(terms["similar_penalty"] * like["total"] / 100))]
 
 
 def _calendar_score(item: dict, now: float, terms: dict) -> Reasons:
