@@ -106,6 +106,14 @@
   #panel-status { margin: 0; font-size: 13px; color: var(--muted); }
   #panel-status.error { color: var(--error); }
   nav button { padding: 0; border: 0; background: none; color: var(--accent); font-size: 14px; }
+  /* The stop-watching timer stays compact in the nav row, not a whole header row of its own */
+  #stop-form { display: inline-flex; align-items: center; gap: 4px; }
+  #stop-form input[type="time"] { flex: 0 0 auto; width: 6.4em; padding: 2px 6px; font-size: 13px; border-radius: 6px; }
+  #stop-form button { padding: 2px 8px; font-size: 13px; border-radius: 6px; }
+  #stop-notice { max-width: 720px; margin: 16px auto 0; padding: 10px 16px; display: flex; flex-wrap: wrap; gap: 4px 10px;
+    align-items: center; background: var(--card); border: 1px solid var(--border); border-radius: 12px; color: var(--text);
+    -webkit-line-clamp: none; }
+  #stop-notice button { padding: 2px 8px; font-size: 13px; border-radius: 6px; }
   nav button:hover { text-decoration: underline; }
   nav button[aria-expanded="true"] { font-weight: 600; }
   .play::after {
@@ -118,7 +126,10 @@
 <header>
   <div class="bar">
     <h1>Content Feed</h1>
-    <nav><a href="/subscriptions" id="subs-link">Subscriptions</a> · <button type="button" id="panel-toggle" aria-expanded="false" aria-controls="panel">Settings</button></nav>
+    <nav><a href="/subscriptions" id="subs-link">Subscriptions</a> · <button type="button" id="panel-toggle" aria-expanded="false" aria-controls="panel">Settings</button> ·
+      <form id="stop-form"><input id="stop-time" type="time" step="60" aria-label="Stop watching at this time"
+        title="Stop watching at this time: the feed shows only posts you can finish before it, then stops and shows the event or a timer message"><button type="submit" id="stop-set">Set</button><button type="button" id="stop-clear" hidden>Clear</button></form>
+    </nav>
     <span id="status"></span>
   </div>
   <form class="bar" id="add">
@@ -130,12 +141,6 @@
   </form>
   <form class="bar" id="search-form" role="search">
     <input id="search" type="search" placeholder="Search posts by title, description, source or tag" aria-label="Search posts">
-  </form>
-  <form class="bar" id="stop-form">
-    <label for="stop-time">Stop watching at</label>
-    <input id="stop-time" type="time" step="60" aria-label="Stop watching at this time">
-    <button type="submit" id="stop-set" title="While the timer is ahead, the feed shows only posts you can finish before it">Set timer</button>
-    <button type="button" id="stop-clear" hidden>Clear</button>
   </form>
 </header>
 <main id="feed"></main>
@@ -185,8 +190,9 @@ searchEl.addEventListener("input", () => { clearTimeout(searchTimer); searchTime
 document.getElementById("search-form").addEventListener("submit", (e) => { e.preventDefault(); searchChanged(); });
 
 // The stop-watching timer. While it's ahead, the server leaves out posts that would run past it,
-// so every post shown can be finished before the stop time. Events also act as stop times, with
-// the Event lead time term in the panel. A time earlier today means tomorrow.
+// so every post shown can be finished before the stop time; when it runs out, the feed stops and
+// shows the event that caused the stop, or a generic timer message. Events also act as stop times,
+// with the Event lead time term in the panel. A time earlier today means tomorrow.
 const stopForm = document.getElementById("stop-form");
 const stopTime = document.getElementById("stop-time");
 const stopClear = document.getElementById("stop-clear");
@@ -216,13 +222,33 @@ stopClear.addEventListener("click", async () => {
 
 // The status line leads with the stop time while one is in effect: the timer, or the next event
 // minus its lead time, whichever comes first.
-function stopNote(stopAt) {
+function stopNote(stopAt, stopped) {
   if (!stopAt) return "";
   const d = new Date(stopAt * 1000);
   const hhmm = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  if (stopped) return `Stopped at ${hhmm} · `;
   const remaining = Math.round((stopAt - Date.now() / 1000) / 60);
   const when = remaining > 0 ? `in ${remaining} min` : "now";
   return `Stopping at ${hhmm} (${when}) · only posts that finish before then · `;
+}
+
+// When the stop time has run out, the feed shows a notice above the (empty) feed instead of
+// content: the event that caused the stop, or a generic timer message, with a Clear button.
+let lastStop = null;  // the stop fields of the last feed response
+function renderStopNotice() {
+  let notice = document.getElementById("stop-notice");
+  if (!lastStop || !lastStop.stopped) { notice?.remove(); return; }
+  if (!notice) {
+    notice = el("p", { id: "stop-notice", role: "status" });
+    feedEl.before(notice);
+  }
+  const d = new Date(lastStop.stop_at * 1000);
+  const hhmm = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  const clear = el("button", { type: "button" }, "Clear timer");
+  clear.addEventListener("click", () => stopClear.click());
+  notice.replaceChildren(lastStop.stop_event
+    ? `Time to go: “${lastStop.stop_event.title}” starts at ${hhmm}.`
+    : `Stop time reached at ${hhmm}.`, clear);
 }
 const sections = new Map();
 const feedEl = document.getElementById("feed");
@@ -460,6 +486,7 @@ function render() {
   const list = arrange(items);
   shown = list;
   renderList(feedEl, list, "feed");
+  renderStopNotice();
 }
 
 function renderSubscription() {
@@ -500,6 +527,7 @@ function renderSubscription() {
       renderList(section.children[2], group.items, group.id);
     }
   }
+  renderStopNotice();
 }
 
 function renderList(container, list, prefix) {
@@ -568,6 +596,7 @@ function renderPost() {
     if (!group.items.length) container.replaceChildren(...(group.id === "similar" ? [el("p", { class: "section-note" }, "No similar posts found with the current similarity settings.")] : []));
   }
   for (const [id, c] of cards) if (!ids.has(c.prefix)) cards.delete(id);
+  renderStopNotice();
 }
 
 const fmtPoints = (n) => (n > 0 ? "+" : n < 0 ? "−" : "±") + Math.round(Math.abs(n) * 100) / 100;
@@ -719,11 +748,12 @@ async function fetchFeed() {
     }
     feedTag = res.headers.get("ETag");
     lastPending = data.pending;
+    lastStop = data;
     if (postPage) {
       postData = data;
       document.title = `${data.item.title || "Post"} · Content Feed`;
       render();
-      statusEl.textContent = `${stopNote(data.stop_at)}${data.pending ? `Fetching ${data.pending}…` : ""}`;
+      statusEl.textContent = `${stopNote(data.stop_at, data.stopped)}${data.pending ? `Fetching ${data.pending}…` : ""}`;
       const remaining = Math.max(0, data.similar.total - data.similar.items.length,
         ...data.series.map((g) => g.total - g.items.length));
       const more = document.getElementById("more");
@@ -768,12 +798,12 @@ async function fetchFeed() {
       if (currentSubView === "next-up") {
         more.hidden = true;
         const nextUpCount = (data.next_up || []).length;
-        statusEl.textContent = `${stopNote(data.stop_at)}${nextUpCount} next up item${nextUpCount === 1 ? "" : "s"}` + (data.pending ? ` · fetching ${data.pending}…` : "");
+        statusEl.textContent = `${stopNote(data.stop_at, data.stopped)}${nextUpCount} next up item${nextUpCount === 1 ? "" : "s"}` + (data.pending ? ` · fetching ${data.pending}…` : "");
       } else {
         more.hidden = data.total <= items.length;
         more.textContent = `Show ${Math.min(PAGE, data.total - items.length)} more (${data.total - items.length} not shown)`;
         const count = data.total > items.length ? `top ${items.length} of ${data.total}` : `${data.total}`;
-        statusEl.textContent = `${stopNote(data.stop_at)}${count} items · ranked by ${data.ranker}` + (data.pending ? ` · fetching ${data.pending}…` : "");
+        statusEl.textContent = `${stopNote(data.stop_at, data.stopped)}${count} items · ranked by ${data.ranker}` + (data.pending ? ` · fetching ${data.pending}…` : "");
       }
       rankerNote(data.ranker);
       pollTimer = setTimeout(load, data.pending ? 1500 : 30000);
@@ -781,9 +811,9 @@ async function fetchFeed() {
     }
     items = data.items;
     render();
-    if (!items.length) feedEl.replaceChildren(el("p", {}, searchEl.value.trim() ? "No posts match your search." : data.stop_at ? "Everything left would run past the stop time." : subscriptionPage ? "No posts in this subscription yet." : "No posts in your feed yet."));
+    if (!items.length) feedEl.replaceChildren(el("p", {}, searchEl.value.trim() ? "No posts match your search." : data.stopped ? "Stopped: the stop time has passed." : data.stop_at ? "Everything left would run past the stop time." : subscriptionPage ? "No posts in this subscription yet." : "No posts in your feed yet."));
     const count = data.total > items.length ? `top ${items.length} of ${data.total}` : `${data.total}`;
-    statusEl.textContent = `${stopNote(data.stop_at)}${count} items · ranked by ${data.ranker}` + (data.pending ? ` · fetching ${data.pending}…` : "");
+    statusEl.textContent = `${stopNote(data.stop_at, data.stopped)}${count} items · ranked by ${data.ranker}` + (data.pending ? ` · fetching ${data.pending}…` : "");
     rankerNote(data.ranker);
     const more = document.getElementById("more");
     more.hidden = data.total <= items.length;
@@ -1129,12 +1159,12 @@ function setSubView(view) {
     if (currentSubView === "next-up") {
       more.hidden = true;
       const nextUpCount = (subData.next_up || []).length;
-      statusEl.textContent = `${stopNote(subData.stop_at)}${nextUpCount} next up item${nextUpCount === 1 ? "" : "s"}` + (subData.pending ? ` · fetching ${subData.pending}…` : "");
+      statusEl.textContent = `${stopNote(subData.stop_at, subData.stopped)}${nextUpCount} next up item${nextUpCount === 1 ? "" : "s"}` + (subData.pending ? ` · fetching ${subData.pending}…` : "");
     } else {
       more.hidden = subData.total <= items.length;
       more.textContent = `Show ${Math.min(PAGE, subData.total - items.length)} more (${subData.total - items.length} not shown)`;
       const count = subData.total > items.length ? `top ${items.length} of ${subData.total}` : `${subData.total}`;
-      statusEl.textContent = `${stopNote(subData.stop_at)}${count} items · ranked by ${subData.ranker}` + (subData.pending ? ` · fetching ${subData.pending}…` : "");
+      statusEl.textContent = `${stopNote(subData.stop_at, subData.stopped)}${count} items · ranked by ${subData.ranker}` + (subData.pending ? ` · fetching ${subData.pending}…` : "");
     }
   }
   render();

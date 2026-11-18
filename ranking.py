@@ -31,7 +31,8 @@ similarity), or None.
 
 Nothing is hidden: items you've opened or marked red are scored differently, not removed. The one
 exception is the stop-watching timer: while a stop time is in effect (see effective_stop), items whose
-estimated length would run past it are left out of the feed, so each post shown can be finished first.
+estimated length would run past it are left out of the feed, so each post shown can be finished first;
+and once the stop time has run out, content is left out entirely and the stop is shown instead.
 
 A ranker registered with spread=True penalizes similarity to posts above it (see rank).
 
@@ -148,13 +149,15 @@ def valid_minutes(value) -> bool:
             and math.isfinite(value) and value > 0)
 
 
-def effective_stop(items: list[dict], now: float, terms: dict, stop_at: float | None = None) -> float | None:
-    """The earliest time watching should stop, or None. The stop timer (stop_at) if it is still ahead,
-    and every event that hasn't ended, at its start minus the event lead time setting: you need the
-    lead time to get to the event, so watching should stop by then. The earliest of these wins."""
+def effective_stop(items: list[dict], now: float, terms: dict, stop_at: float | None = None):
+    """The stop-watching state: (stop, event), or (None, None) when nothing stops watching. The stop
+    timer (stop_at) if set, and every event that hasn't ended, at its start minus the event lead
+    time setting: you need the lead time to get to the event, so watching should stop by then. The
+    earliest wins; event is the event that causes it, or None when it's the timer. A stop in the
+    past means the time has run out: watching should stop now."""
     candidates = []
-    if stop_at is not None and stop_at > now:
-        candidates.append(stop_at)
+    if stop_at is not None:
+        candidates.append((stop_at, None))
     lead = terms["event_lead_minutes"] * 60
     for it in items:
         if it.get("calendar_kind") != "event":
@@ -163,8 +166,8 @@ def effective_stop(items: list[dict], now: float, terms: dict, stop_at: float | 
         end = it.get("deadline") or start
         if start is None or (end is not None and end <= now):
             continue  # ended events don't stop watching anymore
-        candidates.append(start - lead)
-    return min(candidates) if candidates else None
+        candidates.append((start - lead, it))
+    return min(candidates, key=lambda c: c[0]) if candidates else (None, None)
 
 
 def fits_before_stop(item: dict, now: float, stop: float | None) -> bool:

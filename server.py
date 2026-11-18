@@ -81,7 +81,8 @@ added: dict[str, float] = {}  # url -> unix time the server first saw the link
 viewed: dict[str, float] = {}  # url -> unix time you last opened it
 skipped: dict[str, float] = {}  # url -> unix time you last skipped it (the white dot)
 colors: dict[str, str] = {}  # url -> color you gave it; items without one are white
-stop: dict = {}  # {"stop_at": unix time}: the stop-watching timer; empty when unset or already passed
+stop: dict = {}  # {"stop_at": unix time}: the stop-watching timer; empty when unset. Once passed,
+# it has fired: the feed stops showing content until the timer is cleared
 subscriptions: dict[str, dict] = {}  # feeds.txt url -> resolved feed, its posts and fetch status
 pending: set[str] = set()
 feed_interval = 30 * 60  # seconds between checks of each subscription; set by --feed-interval
@@ -655,7 +656,8 @@ def set_stop(value) -> str | None:
 
 def load_stop():
     value = load_json(STOP_FILE).get("stop_at")
-    if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
+    # A timer more than a day in the past was never cleared; treat it as stale, not as a fired stop.
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and time.time() - 24 * 3600 < value:
         stop["stop_at"] = float(value)
 
 
@@ -814,6 +816,16 @@ def feed(ranker: str, limit: int = MAX_ITEMS_SHOWN, terms: dict | None = None, e
     return ranked_feed(ranker, limit, terms, enrich=enrich, search=search)
 
 
+def stop_fields(source: list[dict], now: float, terms: dict, stop_at: float | None) -> dict:
+    """The stop-watching state for a feed response: the effective stop time, whether it has run out
+    (stopped; then content is gone and stop_event is the event that caused it, if any)."""
+    effective, event = ranking.effective_stop(source, now, terms, stop_at)
+    return {"stop_at": effective,
+            "stopped": effective is not None and now >= effective,
+            "stop_event": ({k: event.get(k) for k in ("url", "title", "calendar_kind", "calendar_start", "deadline")}
+                           if event is not None else None)}
+
+
 def ranked_feed(ranker: str, limit: int, terms: dict | None = None, *, enrich: bool = False, post_url: str | None = None, subscription_url: str | None = None, search: str = "") -> dict:
     entries = read_entries()
     subs = read_entries(FEEDS_FILE)
@@ -827,9 +839,7 @@ def ranked_feed(ranker: str, limit: int, terms: dict | None = None, *, enrich: b
     for url in subs:
         schedule_subscription(url)
     now = time.time()
-    stop_at = stop.get("stop_at")
-    if stop_at is not None and stop_at <= now:
-        stop_at = None  # the timer has fired; it no longer filters the feed
+    stop_at = stop.get("stop_at")  # a passed timer has fired: it stops the feed until cleared
     with lock:
         key = (ranker, json.dumps(terms or ranking.TERMS, sort_keys=True), json.dumps([entries, subs, search, post_url is not None]),
                state_version)
@@ -876,12 +886,17 @@ def ranked_feed(ranker: str, limit: int, terms: dict | None = None, *, enrich: b
     if items is not None:
         if post_url is None and search.strip():
             items = [p for p in items if matches_search(p, search)]
-        effective = ranking.effective_stop(items, now, terms or ranking.TERMS, stop_at)
+        effective, stop_event = ranking.effective_stop(items, now, terms or ranking.TERMS, stop_at)
         if effective is not None:
-            # Leave out posts that would run past the stop time, so each one shown can be finished
-            # before it. The post whose page is open stays even if it no longer fits.
-            items = [it for it in items if (post_url is not None and it["url"] == post_url)
-                     or ranking.fits_before_stop(it, now, effective)]
+            if now >= effective:
+                # The time ran out: stop showing content. The event that caused the stop stays.
+                items = [it for it in items if it is stop_event
+                         or (post_url is not None and it["url"] == post_url)]
+            else:
+                # Leave out posts that would run past the stop time, so each one shown can be
+                # finished before it. The post whose page is open stays even if it no longer fits.
+                items = [it for it in items if (post_url is not None and it["url"] == post_url)
+                         or ranking.fits_before_stop(it, now, effective)]
         ranked = ranking.rank(ranker, items, now, terms, lazy=True)
         with lock:
             for k in [k for k, (t, _) in ranked_cache.items() if now - t >= RANKED_TTL or k[3] != state_version]:
@@ -893,7 +908,7 @@ def ranked_feed(ranker: str, limit: int, terms: dict | None = None, *, enrich: b
     if post_url is not None:
         result = post_details(ranked.source, post_url, ranker, limit, terms or ranking.TERMS, now,
                               enrich=enrich, search=search)
-        result["stop_at"] = ranking.effective_stop(ranked.source, now, terms or ranking.TERMS, stop_at)
+        result.update(stop_fields(ranked.source, now, terms or ranking.TERMS, stop_at))
         return result
     extra_count = (terms or ranking.TERMS)["enrich_count"] if enrich else 0
     with lock:
@@ -904,7 +919,7 @@ def ranked_feed(ranker: str, limit: int, terms: dict | None = None, *, enrich: b
         n_pending = len(pending)
     result = {"items": ranking.explain_similarities(visible, ranked.source, terms or ranking.TERMS),
             "total": ranked.total, "pending": n_pending, "ranker": ranker,
-            "stop_at": ranking.effective_stop(ranked.source, now, terms or ranking.TERMS, stop_at)}
+            **stop_fields(ranked.source, now, terms or ranking.TERMS, stop_at)}
     if subscription_url is not None:
         order = lambda it: (it["score"], it["last_viewed"] is None, it["date"], it["position"])
         next_up_items = sorted(
