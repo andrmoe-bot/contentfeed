@@ -40,7 +40,7 @@ ROOT = Path(__file__).resolve().parent  # code and pages; the server never write
 VERSION = (ROOT / "VERSION").read_text(encoding="ascii").strip()
 DEFAULT_DATA_DIR = ROOT / "data"
 # Data files; set_data_dir() points these into the data directory at startup.
-LINKS_FILE = FEEDS_FILE = CACHE_FILE = ADDED_FILE = FEED_CACHE_FILE = VIEWED_FILE = SKIPPED_FILE = COLORS_FILE = SETTINGS_FILE = JELLYFIN_FILE = CALDAV_FILE = Path()
+LINKS_FILE = FEEDS_FILE = CACHE_FILE = ADDED_FILE = FEED_CACHE_FILE = VIEWED_FILE = SKIPPED_FILE = COLORS_FILE = SETTINGS_FILE = JELLYFIN_FILE = CALDAV_FILE = STOP_FILE = Path()
 TEMPLATES = {
     "links.txt": """\
 # One link per line, optionally followed by tags: https://example.com music longread
@@ -81,6 +81,7 @@ added: dict[str, float] = {}  # url -> unix time the server first saw the link
 viewed: dict[str, float] = {}  # url -> unix time you last opened it
 skipped: dict[str, float] = {}  # url -> unix time you last skipped it (the white dot)
 colors: dict[str, str] = {}  # url -> color you gave it; items without one are white
+stop: dict = {}  # {"stop_at": unix time}: the stop-watching timer; empty when unset or already passed
 subscriptions: dict[str, dict] = {}  # feeds.txt url -> resolved feed, its posts and fetch status
 pending: set[str] = set()
 feed_interval = 30 * 60  # seconds between checks of each subscription; set by --feed-interval
@@ -89,12 +90,13 @@ executor = ThreadPoolExecutor(max_workers=8)
 
 def set_data_dir(path: Path):
     """Use path for all data files, creating it and the starter lists if they don't exist yet."""
-    global LINKS_FILE, FEEDS_FILE, CACHE_FILE, ADDED_FILE, FEED_CACHE_FILE, VIEWED_FILE, SKIPPED_FILE, COLORS_FILE, SETTINGS_FILE, JELLYFIN_FILE, CALDAV_FILE
+    global LINKS_FILE, FEEDS_FILE, CACHE_FILE, ADDED_FILE, FEED_CACHE_FILE, VIEWED_FILE, SKIPPED_FILE, COLORS_FILE, SETTINGS_FILE, JELLYFIN_FILE, CALDAV_FILE, STOP_FILE
     path.mkdir(parents=True, exist_ok=True)
     LINKS_FILE, FEEDS_FILE = path / "links.txt", path / "feeds.txt"
     CACHE_FILE, ADDED_FILE, FEED_CACHE_FILE = path / "cache.json", path / "added.json", path / "feeds.json"
     VIEWED_FILE, SKIPPED_FILE, COLORS_FILE = path / "viewed.json", path / "skipped.json", path / "colors.json"
     SETTINGS_FILE, JELLYFIN_FILE, CALDAV_FILE = path / "settings.json", path / "jellyfin.json", path / "caldav.json"
+    STOP_FILE = path / "stop.json"
     for name, text in TEMPLATES.items():
         if not (path / name).exists():
             (path / name).write_text(text, encoding="utf-8")
@@ -634,38 +636,60 @@ def mark_older_red(url: str, age: float) -> int | None:
 
 
 def settings() -> dict:
-    return {"weights": ranking.WEIGHTS, "defaults": ranking.DEFAULT_WEIGHTS}
+    return {"terms": ranking.TERMS, "defaults": ranking.DEFAULT_TERMS, "stop_at": stop.get("stop_at")}
 
 
-def save_settings(weights) -> str | None:
-    """Set the score ranker's weights from the feed's score panel. Returns an error message, or None."""
+def set_stop(value) -> str | None:
+    """Set the stop-watching timer to a unix time, or clear it with None. Returns an error, or None."""
+    if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float))
+                              or not 0 < value <= 10_000_000_000):
+        return "stop_at must be a unix time or null"
+    with lock:
+        if value is None:
+            stop.clear()
+        else:
+            stop["stop_at"] = float(value)
+    save_json(STOP_FILE, stop)  # bumps state_version, so the feed is rebuilt with the new filter
+    return None
+
+
+def load_stop():
+    value = load_json(STOP_FILE).get("stop_at")
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
+        stop["stop_at"] = float(value)
+
+
+def save_settings(terms) -> str | None:
+    """Set the score ranker's terms from the feed's score panel. Returns an error message, or None."""
     try:
-        checked = ranking.check_weights(weights if isinstance(weights, dict) else {})
+        checked = ranking.check_terms(terms if isinstance(terms, dict) else {})
     except ValueError as e:
         return str(e)
     with lock:
-        ranking.WEIGHTS.update(checked)
-    save_json(SETTINGS_FILE, {"weights": checked})
+        ranking.TERMS.update(checked)
+    save_json(SETTINGS_FILE, {"terms": checked})
     return None
 
 
 def load_settings():
-    weights = load_json(SETTINGS_FILE).get("weights")
-    if not isinstance(weights, dict):
+    data = load_json(SETTINGS_FILE)
+    terms = data.get("terms")
+    if terms is None:
+        terms = data.get("weights")  # settings saved before the terms were called terms
+    if not isinstance(terms, dict):
         return
-    # Settings saved by another version may lack newer weights, which keep their defaults, or have
+    # Settings saved by another version may lack newer terms, which keep their defaults, or have
     # ones that no longer exist, which are dropped.
     # Preserve the old repeat setting as the new per-100%-similarity amount.
-    if "above_similarity_penalty" not in weights and "repeat_per_post" in weights:
-        weights["above_similarity_penalty"] = weights["repeat_per_post"]
-    # The previous calendar fields controlled urgency ramps; event_bonus/task_bonus now mean
-    # fixed per-item points, so move saved urgency settings to their explicit names.
-    for old, new in (("event_bonus", "event_urgency_bonus"), ("task_bonus", "task_deadline_bonus")):
-        if old in weights and new not in weights:
-            weights[new] = weights.pop(old)
-    weights = {k: v for k, v in weights.items() if k in ranking.DEFAULT_WEIGHTS}
+    if "above_similarity_penalty" not in terms and "repeat_per_post" in terms:
+        terms["above_similarity_penalty"] = terms["repeat_per_post"]
+    # The oldest calendar field, task_bonus, controlled the deadline ramp; task_bonus now means
+    # fixed per-item points, so move a saved ramp setting to its explicit name.
+    if "task_bonus" in terms and "task_deadline_bonus" not in terms:
+        terms["task_deadline_bonus"] = terms.pop("task_bonus")
+    terms = {k: v for k, v in terms.items() if k in ranking.DEFAULT_TERMS}
     try:
-        ranking.WEIGHTS.update(ranking.check_weights({**ranking.DEFAULT_WEIGHTS, **weights}))
+        ranking.TERMS.update(ranking.check_terms({**ranking.DEFAULT_TERMS, **terms}))
     except ValueError as e:
         print(f"Ignoring {SETTINGS_FILE}: {e}")
 
@@ -786,11 +810,11 @@ def enrich_posts(ranked: list[dict], count: int):
             schedule(post["url"], force=True)
 
 
-def feed(ranker: str, limit: int = MAX_ITEMS_SHOWN, weights: dict | None = None, enrich: bool = False, search: str = "") -> dict:
-    return ranked_feed(ranker, limit, weights, enrich=enrich, search=search)
+def feed(ranker: str, limit: int = MAX_ITEMS_SHOWN, terms: dict | None = None, enrich: bool = False, search: str = "") -> dict:
+    return ranked_feed(ranker, limit, terms, enrich=enrich, search=search)
 
 
-def ranked_feed(ranker: str, limit: int, weights: dict | None = None, *, enrich: bool = False, post_url: str | None = None, subscription_url: str | None = None, search: str = "") -> dict:
+def ranked_feed(ranker: str, limit: int, terms: dict | None = None, *, enrich: bool = False, post_url: str | None = None, subscription_url: str | None = None, search: str = "") -> dict:
     entries = read_entries()
     subs = read_entries(FEEDS_FILE)
     if subscription_url is not None:
@@ -803,8 +827,11 @@ def ranked_feed(ranker: str, limit: int, weights: dict | None = None, *, enrich:
     for url in subs:
         schedule_subscription(url)
     now = time.time()
+    stop_at = stop.get("stop_at")
+    if stop_at is not None and stop_at <= now:
+        stop_at = None  # the timer has fired; it no longer filters the feed
     with lock:
-        key = (ranker, json.dumps(weights or ranking.WEIGHTS, sort_keys=True), json.dumps([entries, subs, search, post_url is not None]),
+        key = (ranker, json.dumps(terms or ranking.TERMS, sort_keys=True), json.dumps([entries, subs, search, post_url is not None]),
                state_version)
         hit = ranked_cache.get(key)
         if hit and now - hit[0] < RANKED_TTL:
@@ -849,7 +876,13 @@ def ranked_feed(ranker: str, limit: int, weights: dict | None = None, *, enrich:
     if items is not None:
         if post_url is None and search.strip():
             items = [p for p in items if matches_search(p, search)]
-        ranked = ranking.rank(ranker, items, now, weights, lazy=True)
+        effective = ranking.effective_stop(items, now, terms or ranking.TERMS, stop_at)
+        if effective is not None:
+            # Leave out posts that would run past the stop time, so each one shown can be finished
+            # before it. The post whose page is open stays even if it no longer fits.
+            items = [it for it in items if (post_url is not None and it["url"] == post_url)
+                     or ranking.fits_before_stop(it, now, effective)]
+        ranked = ranking.rank(ranker, items, now, terms, lazy=True)
         with lock:
             for k in [k for k, (t, _) in ranked_cache.items() if now - t >= RANKED_TTL or k[3] != state_version]:
                 del ranked_cache[k]
@@ -858,17 +891,20 @@ def ranked_feed(ranker: str, limit: int, weights: dict | None = None, *, enrich:
             if key[3] == state_version:
                 ranked_cache[key] = (now, ranked)
     if post_url is not None:
-        return post_details(ranked.source, post_url, ranker, limit, weights or ranking.WEIGHTS, now,
-                            enrich=enrich, search=search)
-    extra_count = (weights or ranking.WEIGHTS)["enrich_count"] if enrich else 0
+        result = post_details(ranked.source, post_url, ranker, limit, terms or ranking.TERMS, now,
+                              enrich=enrich, search=search)
+        result["stop_at"] = ranking.effective_stop(ranked.source, now, terms or ranking.TERMS, stop_at)
+        return result
+    extra_count = (terms or ranking.TERMS)["enrich_count"] if enrich else 0
     with lock:
         cached, pending_keys = dict(cache), set(pending)
     match_key = lambda post: enrichment_key(post, cached, pending_keys, now)
     visible, extra = ranked.read(limit, extra_count, match_key)
     with lock:
         n_pending = len(pending)
-    result = {"items": ranking.explain_similarities(visible, ranked.source, weights or ranking.WEIGHTS),
-            "total": ranked.total, "pending": n_pending, "ranker": ranker}
+    result = {"items": ranking.explain_similarities(visible, ranked.source, terms or ranking.TERMS),
+            "total": ranked.total, "pending": n_pending, "ranker": ranker,
+            "stop_at": ranking.effective_stop(ranked.source, now, terms or ranking.TERMS, stop_at)}
     if subscription_url is not None:
         order = lambda it: (it["score"], it["last_viewed"] is None, it["date"], it["position"])
         next_up_items = sorted(
@@ -877,7 +913,7 @@ def ranked_feed(ranker: str, limit: int, weights: dict | None = None, *, enrich:
         )
         if enrich:
             enrich_posts([*next_up_items, *extra], extra_count)
-        result["next_up"] = ranking.explain_similarities(next_up_items, ranked.source, weights or ranking.WEIGHTS)
+        result["next_up"] = ranking.explain_similarities(next_up_items, ranked.source, terms or ranking.TERMS)
     elif enrich:
         enrich_posts(extra, extra_count)
     return result
@@ -888,7 +924,7 @@ def matches_search(post: dict, search: str) -> bool:
     return all(word in text for word in search.casefold().split())
 
 
-def post_details(source: list[dict], url: str, ranker: str, limit: int, weights: dict,
+def post_details(source: list[dict], url: str, ranker: str, limit: int, terms: dict,
                  now: float, *, enrich: bool = False, search: str = "") -> dict:
     """Related feeds use base scores: their order is series order or similarity, not feed spreading."""
     by_url = {p["url"]: p for p in source}
@@ -899,9 +935,9 @@ def post_details(source: list[dict], url: str, ranker: str, limit: int, weights:
     def cards(posts):
         scored = []
         for p in posts:
-            reasons = [{"label": label, "points": value} for label, value in ranking.RANKERS[ranker](p, now, weights)]
+            reasons = [{"label": label, "points": value} for label, value in ranking.RANKERS[ranker](p, now, terms)]
             scored.append({**p, "reasons": reasons, "score": ranking.points(sum(r["points"] for r in reasons))})
-        return ranking.explain_similarities(scored, source, weights)
+        return ranking.explain_similarities(scored, source, terms)
 
     series = []
     with lock:
@@ -944,7 +980,7 @@ def post_details(source: list[dict], url: str, ranker: str, limit: int, weights:
     matches = []
     for p in source:
         if matches_search(p, search) and p["url"] != url and target.get("sub") and p.get("sub") == target["sub"]:
-            percent, _ = ranking.similarity(target, p, weights)
+            percent, _ = ranking.similarity(target, p, terms)
             if percent:
                 matches.append((percent, p))
     matches.sort(key=lambda pair: (pair[0], pair[1]["date"], pair[1]["url"]), reverse=True)
@@ -953,7 +989,7 @@ def post_details(source: list[dict], url: str, ranker: str, limit: int, weights:
         p["related_percent"] = percent
     item = cards([target])[0]
     if enrich:
-        enrich_posts([item, *(p for group in series for p in group["items"]), *similar], weights["enrich_count"])
+        enrich_posts([item, *(p for group in series for p in group["items"]), *similar], terms["enrich_count"])
     with lock:
         n_pending = len(pending)
     return {"item": item, "series": series, "similar": {"items": similar, "total": len(matches)},
@@ -1118,18 +1154,18 @@ class Handler(BaseHTTPRequestHandler):
             if name not in ranking.RANKERS:
                 return self._json({"error": f"unknown ranker; available: {sorted(ranking.RANKERS)}"}, 400)
             limit = query.get("limit", [""])[0]
-            weights = None
-            if "weights" in query:  # unsaved weights, to preview them while you move a slider
+            terms = None
+            if "terms" in query:  # unsaved terms, to preview them while you move a slider
                 try:
-                    weights = ranking.check_weights(json.loads(query["weights"][0]))
+                    terms = ranking.check_terms(json.loads(query["terms"][0]))
                 except (ValueError, TypeError) as e:
-                    return self._json({"error": f"weights: {e}"}, 400)
+                    return self._json({"error": f"terms: {e}"}, 400)
             if path in ("/api/subscription", "/api/subscription/next-up"):
                 url = query.get("url", [""])[0]
                 if not url:
                     return self._json({"error": "url is required"}, 400)
                 result = ranked_feed(name, max(int(limit), 1) if limit.isdigit() else MAX_ITEMS_SHOWN,
-                                     weights, enrich=query.get("enrich") == ["1"], subscription_url=url, search=query.get("q", [""])[0])
+                                     terms, enrich=query.get("enrich") == ["1"], subscription_url=url, search=query.get("q", [""])[0])
                 if "error" in result:
                     return self._json(result, 404)
                 result["subscription"] = next((s for s in subscription_status() if s["url"] == url), None)
@@ -1142,11 +1178,11 @@ class Handler(BaseHTTPRequestHandler):
                 if not url:
                     return self._json({"error": "url is required"}, 400)
                 result = ranked_feed(name, max(int(limit), 1) if limit.isdigit() else MAX_ITEMS_SHOWN,
-                                     weights, enrich=query.get("enrich") == ["1"], post_url=url, search=query.get("q", [""])[0])
+                                     terms, enrich=query.get("enrich") == ["1"], post_url=url, search=query.get("q", [""])[0])
                 if "error" in result:
                     return self._json(result, 404)
                 return self._feed_json(result)
-            self._feed_json(feed(name, max(int(limit), 1) if limit.isdigit() else MAX_ITEMS_SHOWN, weights,
+            self._feed_json(feed(name, max(int(limit), 1) if limit.isdigit() else MAX_ITEMS_SHOWN, terms,
                                  enrich=query.get("enrich") == ["1"], search=query.get("q", [""])[0]))
         elif path == "/api/subscriptions":
             self._json({"subscriptions": subscription_status(), "interval_minutes": feed_interval / 60})
@@ -1258,8 +1294,12 @@ class Handler(BaseHTTPRequestHandler):
             ok = set_color(str(body.get("url", "")), str(body.get("color", "")))
             self._json({"ok": ok}, 200 if ok else 404)
         elif path == "/api/settings":
-            error = save_settings(body.get("weights"))
+            error = save_settings(body.get("terms"))
             self._json({"ok": not error, "error": error, **settings()}, 400 if error else 200)
+        elif path == "/api/stop":
+            error = set_stop(body.get("stop_at"))
+            self._json({"ok": not error, "error": error, "stop_at": stop.get("stop_at")},
+                       400 if error else 200)
         elif path == "/api/refresh":
             for u in read_links():
                 schedule(u, force=True)
@@ -1318,6 +1358,7 @@ def main():
     skipped.update(load_json(SKIPPED_FILE))
     colors.update(load_json(COLORS_FILE))
     load_settings()
+    load_stop()
     try:
         server = ThreadingHTTPServer((args.host, args.port), Handler)
     except PermissionError:

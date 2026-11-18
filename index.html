@@ -131,6 +131,12 @@
   <form class="bar" id="search-form" role="search">
     <input id="search" type="search" placeholder="Search posts by title, description, source or tag" aria-label="Search posts">
   </form>
+  <form class="bar" id="stop-form">
+    <label for="stop-time">Stop watching at</label>
+    <input id="stop-time" type="time" step="60" aria-label="Stop watching at this time">
+    <button type="submit" id="stop-set" title="While the timer is ahead, the feed shows only posts you can finish before it">Set timer</button>
+    <button type="button" id="stop-clear" hidden>Clear</button>
+  </form>
 </header>
 <main id="feed"></main>
 <button type="button" id="more" hidden></button>
@@ -177,6 +183,47 @@ function searchChanged() {
 }
 searchEl.addEventListener("input", () => { clearTimeout(searchTimer); searchTimer = setTimeout(searchChanged, 250); });
 document.getElementById("search-form").addEventListener("submit", (e) => { e.preventDefault(); searchChanged(); });
+
+// The stop-watching timer. While it's ahead, the server leaves out posts that would run past it,
+// so every post shown can be finished before the stop time. Events also act as stop times, with
+// the Event lead time term in the panel. A time earlier today means tomorrow.
+const stopForm = document.getElementById("stop-form");
+const stopTime = document.getElementById("stop-time");
+const stopClear = document.getElementById("stop-clear");
+stopForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  if (!stopTime.value) return;
+  const [h, m] = stopTime.value.split(":").map(Number);
+  const when = new Date();
+  when.setHours(h, m, 0, 0);
+  if (when.getTime() <= Date.now()) when.setDate(when.getDate() + 1);
+  const res = await fetch("/api/stop", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ stop_at: when.getTime() / 1000 }) }).catch(() => null);
+  const data = res ? await res.json().catch(() => ({})) : { error: "the server didn't answer" };
+  if (!res?.ok) return say(data.error || "Couldn't set the timer.", true);
+  stopClear.hidden = false;
+  say(`Stopping at ${stopTime.value}: the feed now shows only posts you can finish before then.`);
+  load();
+});
+stopClear.addEventListener("click", async () => {
+  await fetch("/api/stop", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ stop_at: null }) }).catch(() => {});
+  stopTime.value = "";
+  stopClear.hidden = true;
+  say("Stop timer cleared.");
+  load();
+});
+
+// The status line leads with the stop time while one is in effect: the timer, or the next event
+// minus its lead time, whichever comes first.
+function stopNote(stopAt) {
+  if (!stopAt) return "";
+  const d = new Date(stopAt * 1000);
+  const hhmm = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  const remaining = Math.round((stopAt - Date.now() / 1000) / 60);
+  const when = remaining > 0 ? `in ${remaining} min` : "now";
+  return `Stopping at ${hhmm} (${when}) · only posts that finish before then · `;
+}
 const sections = new Map();
 const feedEl = document.getElementById("feed");
 const statusEl = document.getElementById("status");
@@ -195,7 +242,7 @@ let playingCard = null;
 // Fields that change when you open or color an item, or when its subscription gets a new post. They're
 // updated in place, not by rebuilding the card, so a video you just started keeps playing.
 const VIEW_FIELDS = ["color", "last_viewed", "skipped", "next_after", "series_first", "similar", "sub_last_viewed",
-  "score", "reasons", "score_weights", "recent_match", "above_matches"];
+  "score", "reasons", "score_terms", "recent_match", "above_matches"];
 const contentKey = (item) => JSON.stringify(item, (k, v) => (VIEW_FIELDS.includes(k) ? undefined : v));
 
 async function post(path, body) {
@@ -527,7 +574,7 @@ const fmtPoints = (n) => (n > 0 ? "+" : n < 0 ? "−" : "±") + Math.round(Math.
 
 // Shows why the card is where it is: the ranker's reasons and the points each one added.
 function scoreDetail(item, reason) {
-  const w = item.score_weights;
+  const w = item.score_terms;
   if (!w) return "";
   const label = reason.label, n = (v) => String(Math.round(v * 100) / 100).replace("-", "−");
   const rate = (v) => String(v).replace("-", "−");
@@ -648,9 +695,9 @@ let lastPending = 0;
 async function fetchFeed() {
   clearTimeout(pollTimer);
   try {
-    // Settings you haven't saved yet, such as while you drag a slider, are sent along to preview them.
-    const preview = Object.keys(saved).length && !sameWeights(draft, saved)
-      ? `&weights=${encodeURIComponent(JSON.stringify(draft))}` : "";
+    // Terms you haven't saved yet, such as while you drag a slider, are sent along to preview them.
+    const preview = Object.keys(saved).length && !sameTerms(draft, saved)
+      ? `&terms=${encodeURIComponent(JSON.stringify(draft))}` : "";
     const res = await fetch(`/api/${postPage ? "post" : subscriptionPage ? "subscription" : "feed"}?limit=${limit}&q=${encodeURIComponent(searchEl.value.trim())}${postPage || subscriptionPage ? `&url=${encodeURIComponent(postUrl)}` : ""}${preview}${enrichOnLoad ? "&enrich=1" : ""}`,
       { cache: "no-store", headers: feedTag ? { "If-None-Match": feedTag } : {} });
     if (res.ok || res.status === 304) enrichOnLoad = false;
@@ -676,7 +723,7 @@ async function fetchFeed() {
       postData = data;
       document.title = `${data.item.title || "Post"} · Content Feed`;
       render();
-      statusEl.textContent = data.pending ? `Fetching ${data.pending}…` : "";
+      statusEl.textContent = `${stopNote(data.stop_at)}${data.pending ? `Fetching ${data.pending}…` : ""}`;
       const remaining = Math.max(0, data.similar.total - data.similar.items.length,
         ...data.series.map((g) => g.total - g.items.length));
       const more = document.getElementById("more");
@@ -721,12 +768,12 @@ async function fetchFeed() {
       if (currentSubView === "next-up") {
         more.hidden = true;
         const nextUpCount = (data.next_up || []).length;
-        statusEl.textContent = `${nextUpCount} next up item${nextUpCount === 1 ? "" : "s"}` + (data.pending ? ` · fetching ${data.pending}…` : "");
+        statusEl.textContent = `${stopNote(data.stop_at)}${nextUpCount} next up item${nextUpCount === 1 ? "" : "s"}` + (data.pending ? ` · fetching ${data.pending}…` : "");
       } else {
         more.hidden = data.total <= items.length;
         more.textContent = `Show ${Math.min(PAGE, data.total - items.length)} more (${data.total - items.length} not shown)`;
         const count = data.total > items.length ? `top ${items.length} of ${data.total}` : `${data.total}`;
-        statusEl.textContent = `${count} items · ranked by ${data.ranker}` + (data.pending ? ` · fetching ${data.pending}…` : "");
+        statusEl.textContent = `${stopNote(data.stop_at)}${count} items · ranked by ${data.ranker}` + (data.pending ? ` · fetching ${data.pending}…` : "");
       }
       rankerNote(data.ranker);
       pollTimer = setTimeout(load, data.pending ? 1500 : 30000);
@@ -734,9 +781,9 @@ async function fetchFeed() {
     }
     items = data.items;
     render();
-    if (!items.length) feedEl.replaceChildren(el("p", {}, searchEl.value.trim() ? "No posts match your search." : subscriptionPage ? "No posts in this subscription yet." : "No posts in your feed yet."));
+    if (!items.length) feedEl.replaceChildren(el("p", {}, searchEl.value.trim() ? "No posts match your search." : data.stop_at ? "Everything left would run past the stop time." : subscriptionPage ? "No posts in this subscription yet." : "No posts in your feed yet."));
     const count = data.total > items.length ? `top ${items.length} of ${data.total}` : `${data.total}`;
-    statusEl.textContent = `${count} items · ranked by ${data.ranker}` + (data.pending ? ` · fetching ${data.pending}…` : "");
+    statusEl.textContent = `${stopNote(data.stop_at)}${count} items · ranked by ${data.ranker}` + (data.pending ? ` · fetching ${data.pending}…` : "");
     rankerNote(data.ranker);
     const more = document.getElementById("more");
     more.hidden = data.total <= items.length;
@@ -767,8 +814,8 @@ const SETTINGS = [
     hint: "Added to a later part of a series when you haven't opened anything before it. YouTube series use imported channel playlists in playlist order. Other posts follow another from their subscription when their titles have the same numbers but one, 1 higher, such as “part 2” after “part 1”; Jellyfin and NRK TV episodes go in episode order. Not for subscriptions tagged “latest”." },
   { key: "above_similarity_penalty", label: "Similar posts above", before: "", after: "points per 100% similarity",
     hint: "Adds signed points for similarity to each post already above it, using the publish-time, content-length and title similarity weights below. Two 50% matches add up to the full configured points. Negative points penalize similarity. Different subscriptions do not match. No viewing-time fade." },
-  { key: "event_urgency_bonus", label: "Event urgency", before: "", after: "points at start",
-    hint: "Maximum points for an event starting now. The bonus ramps from 0 to this amount during the final hour before it starts. Events in the same calendar can also get the similar-posts-above penalty." },
+  { key: "event_lead_minutes", label: "Event lead time", before: "stop watching", after: "minutes before an event",
+    hint: "Every event that hasn't ended acts as a stop time this many minutes before it starts: while it's the earliest stop in effect, the feed shows only posts you can finish before then, so you can get to the event in time. 0 stops exactly when the event starts. The stop timer at the top can set an earlier time; the earliest stop wins. Events in the same calendar can also get the similar-posts-above penalty." },
   { key: "task_deadline_bonus", label: "Task urgency", before: "", after: "points at deadline",
     hint: "Maximum points for a task due now. The bonus ramps from 0 to this amount during the final 30 days before its deadline. Tasks in the same calendar can also get the similar-posts-above penalty." },
   { key: "past_event_penalty", label: "Past event", before: "", after: "points after it ends",
@@ -807,7 +854,7 @@ const SETTINGS = [
 ];
 // Every setting, including the second box some have, such as Similar's hours
 const KEYS = SETTINGS.flatMap(({ key, extra }) => (extra ? [key, extra.key] : [key]));
-const SIGNED = ["youtube_shorts_bonus", "seen_bonus", "video_bonus", "image_bonus", "article_bonus", "length_per_minute", "age_per_year", "next_up_bonus", "new_sub_bonus", "green_bonus_points", "series_penalty", "similar_penalty", "above_similarity_penalty", "event_urgency_bonus", "task_deadline_bonus", "event_bonus", "task_bonus", "past_event_penalty"];  // may be negative: the sign says which way
+const SIGNED = ["youtube_shorts_bonus", "seen_bonus", "video_bonus", "image_bonus", "article_bonus", "length_per_minute", "age_per_year", "next_up_bonus", "new_sub_bonus", "green_bonus_points", "series_penalty", "similar_penalty", "above_similarity_penalty", "task_deadline_bonus", "event_bonus", "task_bonus", "past_event_penalty"];  // may be negative: the sign says which way
 const LIMIT = 10_000_000;
 let saved = {};  // as saved on the server
 let draft = {};  // as shown in the panel
@@ -815,7 +862,7 @@ let defaults = {};
 const shownTerms = new Set();  // terms in the panel and the formula; ones that are 0 start hidden
 
 // Slider positions: 0, then 1, 1.5, 2, 3, 5, 7 times each power of ten from 10^lo up to 10^hi,
-// mirrored below 0 for weights that may be negative.
+// mirrored below 0 for terms that may be negative.
 function steps(lo, hi, signed) {
   const up = [];
   for (let e = lo; e < hi; e++) for (const n of [1, 1.5, 2, 3, 5, 7]) up.push(Number((n * 10 ** e).toPrecision(2)));
@@ -835,7 +882,7 @@ function nearestStep(list, value) {
 
 const fmt = (n) => Number(n).toLocaleString("en-US", { maximumFractionDigits: 3 }).replaceAll(",", "\u202f").replace("-", "−");
 const plus = (n) => (n < 0 ? ` − ${fmt(-n)}` : ` + ${fmt(n)}`);  // " + 5" or " − 5", for adding a term to a sum
-const sameWeights = (a, b) => KEYS.every((key) => a[key] === b[key]);
+const sameTerms = (a, b) => KEYS.every((key) => a[key] === b[key]);
 const inRange = (key, v) => (key !== "enrich_count" || (Number.isInteger(v) && v <= 100)) && (key !== "similar_base_percent" || v <= 100) && Number.isFinite(v) && v >= (SIGNED.includes(key) ? -LIMIT : 0) && v <= LIMIT;
 const controls = {};
 
@@ -930,7 +977,6 @@ function showFormula() {
     ["age_per_year", `${plus(w.age_per_year)} × age in years`],
     ["green_bonus_points", `${plus(w.green_bonus_points)} if green`],
     ["above_similarity_penalty", `${plus(w.above_similarity_penalty)} × summed similarity to posts above`],
-    ["event_urgency_bonus", `${plus(w.event_urgency_bonus)} × event urgency (ramps over the final hour)`],
     ["task_deadline_bonus", `${plus(w.task_deadline_bonus)} × task urgency (ramps over the final 30 days)`],
     ["past_event_penalty", `${plus(w.past_event_penalty)} after an event ends`],
     ["event_bonus", `${plus(w.event_bonus)} if event`],
@@ -968,13 +1014,13 @@ function save() {
 async function saveNow() {
   const valid = KEYS.every((key) => inRange(key, draft[key]));
   if (!valid) return panelSay("Each setting must be from 0 to 10 000 000; Seen, media bonuses and Content length may also go down to −10 000 000.", true);
-  if (sameWeights(draft, saved)) return;
+  if (sameTerms(draft, saved)) return;
   const res = await fetch("/api/settings", {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ weights: draft }),
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ terms: draft }),
   }).catch(() => null);
   const data = res ? await res.json().catch(() => ({})) : { error: "the server didn't answer" };
   if (!res?.ok) return panelSay(`Couldn't save: ${data.error || "unknown error"}`, true);
-  saved = data.weights;
+  saved = data.terms;
   panelSay("Saved.");
 }
 
@@ -987,9 +1033,14 @@ function rankerNote(ranker) {
 
 async function loadSettings() {
   const data = await (await fetch("/api/settings")).json();
-  saved = data.weights;
+  saved = data.terms;
   draft = { ...saved };
   defaults = data.defaults;
+  if (data.stop_at) {
+    const d = new Date(data.stop_at * 1000);
+    stopTime.value = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+    stopClear.hidden = false;
+  }
   for (const { key, extra } of SETTINGS) {
     const second = extra ? ` and ${fmt(defaults[extra.key])} ${extra.after}` : "";
     controls[key].def.textContent = `Default: ${fmt(defaults[key])}${second}.`;
@@ -999,7 +1050,7 @@ async function loadSettings() {
 }
 
 document.getElementById("reset").addEventListener("click", async () => {
-  if (sameWeights(draft, defaults)) return panelSay("These are the defaults.");
+  if (sameTerms(draft, defaults)) return panelSay("These are the defaults.");
   draft = { ...defaults };
   showSettings(draft);
   stay.clear();
@@ -1078,12 +1129,12 @@ function setSubView(view) {
     if (currentSubView === "next-up") {
       more.hidden = true;
       const nextUpCount = (subData.next_up || []).length;
-      statusEl.textContent = `${nextUpCount} next up item${nextUpCount === 1 ? "" : "s"}` + (subData.pending ? ` · fetching ${subData.pending}…` : "");
+      statusEl.textContent = `${stopNote(subData.stop_at)}${nextUpCount} next up item${nextUpCount === 1 ? "" : "s"}` + (subData.pending ? ` · fetching ${subData.pending}…` : "");
     } else {
       more.hidden = subData.total <= items.length;
       more.textContent = `Show ${Math.min(PAGE, subData.total - items.length)} more (${subData.total - items.length} not shown)`;
       const count = subData.total > items.length ? `top ${items.length} of ${subData.total}` : `${subData.total}`;
-      statusEl.textContent = `${count} items · ranked by ${subData.ranker}` + (subData.pending ? ` · fetching ${subData.pending}…` : "");
+      statusEl.textContent = `${stopNote(subData.stop_at)}${count} items · ranked by ${subData.ranker}` + (subData.pending ? ` · fetching ${subData.pending}…` : "");
     }
   }
   render();

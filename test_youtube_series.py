@@ -207,8 +207,8 @@ import test_server as server_tests
 class PlaylistIntegrationTests(server_tests.FeedCacheTests):
     def setUp(self):
         super().setUp()
-        server.ranking.WEIGHTS['above_similarity_penalty'] = 0
-        server.ranking.WEIGHTS['similar_penalty'] = 0
+        server.ranking.TERMS['above_similarity_penalty'] = 0
+        server.ranking.TERMS['similar_penalty'] = 0
 
     def test_saved_playlist_changes_scores_and_survives_feed_refresh(self):
         import ranking
@@ -229,7 +229,7 @@ class PlaylistIntegrationTests(server_tests.FeedCacheTests):
         self.assertEqual(ranked['a']['youtube_playlists'], ['PL'])
         self.assertEqual(ranked['b']['youtube_playlists'], ['PL'])
         self.assertEqual(ranked['b']['series_first'], 'First')
-        self.assertEqual(ranked['b']['score'], ranked['a']['score'] + ranking.WEIGHTS['series_penalty'])
+        self.assertEqual(ranked['b']['score'], ranked['a']['score'] + ranking.TERMS['series_penalty'])
         self.refresh({'items': [dict(second)], 'title': 'Example'})
         self.assertEqual(entry['youtube_playlists'], server.subscriptions[self.url]['youtube_playlists'])
         server.viewed[first['url']] = 100

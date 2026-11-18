@@ -21,7 +21,7 @@ class FeedCacheTests(unittest.TestCase):
             self.stack.enter_context(patch.object(server, name, {}))
         self.stack.enter_context(patch.object(server, "pending", set()))
         self.stack.enter_context(patch.object(server, "state_version", 0))
-        self.stack.enter_context(patch.object(ranking, "WEIGHTS", dict(ranking.DEFAULT_WEIGHTS)))
+        self.stack.enter_context(patch.object(ranking, "TERMS", dict(ranking.DEFAULT_TERMS)))
         self.stack.enter_context(patch.object(server, "schedule", return_value=None))
         self.stack.enter_context(patch.object(server, "schedule_subscription", return_value=None))
         self.stack.enter_context(patch.object(server.jellyfin, "read_logins", return_value=({}, None)))
@@ -153,7 +153,7 @@ class FeedCacheTests(unittest.TestCase):
             server.feed("score")
             self.assertTrue(server.set_viewed(self.post["url"]))
             self.assertIsNotNone(server.feed("score")["items"][0]["last_viewed"])
-            self.assertIsNone(server.save_settings(dict(ranking.WEIGHTS, similar_penalty=0)))
+            self.assertIsNone(server.save_settings(dict(ranking.TERMS, similar_penalty=0)))
             self.assertIsNone(server.feed("score")["items"][0]["similar"])
         self.assertEqual(rank.call_count, 3)
 
@@ -166,20 +166,24 @@ class FeedCacheTests(unittest.TestCase):
         self.assertEqual(rank.call_count, 2)
 
     def test_saved_settings_ignore_removed_tag_similarity(self):
-        server.save_json(server.SETTINGS_FILE, {"weights": dict(ranking.DEFAULT_WEIGHTS, tag_similarity=99)})
+        server.save_json(server.SETTINGS_FILE, {"terms": dict(ranking.DEFAULT_TERMS, tag_similarity=99)})
         server.load_settings()
-        self.assertEqual(ranking.WEIGHTS, ranking.DEFAULT_WEIGHTS)
+        self.assertEqual(ranking.TERMS, ranking.DEFAULT_TERMS)
+
+    def test_settings_saved_under_the_old_weights_key_still_load(self):
+        server.save_json(server.SETTINGS_FILE, {"weights": dict(ranking.DEFAULT_TERMS, seen_bonus=-50)})
+        server.load_settings()
+        self.assertEqual(ranking.TERMS["seen_bonus"], -50)
 
     def test_old_calendar_urgency_values_migrate_to_renamed_settings(self):
-        old = {key: value for key, value in ranking.DEFAULT_WEIGHTS.items()
-               if key not in ("event_urgency_bonus", "task_deadline_bonus")}
-        old.update(event_bonus=80, task_bonus=60)
-        server.save_json(server.SETTINGS_FILE, {"weights": old})
+        old = {key: value for key, value in ranking.DEFAULT_TERMS.items() if key != "task_deadline_bonus"}
+        old.update(task_bonus=60, event_urgency_bonus=80)  # the removed event ramp is dropped
+        server.save_json(server.SETTINGS_FILE, {"terms": old})
         server.load_settings()
-        self.assertEqual(ranking.WEIGHTS["event_urgency_bonus"], 80)
-        self.assertEqual(ranking.WEIGHTS["task_deadline_bonus"], 60)
-        self.assertEqual(ranking.WEIGHTS["event_bonus"], 0)
-        self.assertEqual(ranking.WEIGHTS["task_bonus"], 0)
+        self.assertEqual(ranking.TERMS["task_deadline_bonus"], 60)
+        self.assertEqual(ranking.TERMS["task_bonus"], 0)
+        self.assertNotIn("event_urgency_bonus", ranking.TERMS)
+        self.assertEqual(ranking.TERMS["event_lead_minutes"], 30)
 
     def test_state_changed_during_ranking_is_not_cached(self):
         original_rank = ranking.rank
@@ -236,7 +240,7 @@ if __name__ == "__main__":
 
 class LengthEnrichmentTests(FeedCacheTests):
     def test_missing_subscription_length_is_scheduled_and_used(self):
-        ranking.WEIGHTS["length_per_minute"] = -2
+        ranking.TERMS["length_per_minute"] = -2
         result = server.feed("score", enrich=True)
         server.schedule.assert_called_with(self.post["url"], force=True)
         self.assertEqual(result["items"][0]["score"], 0)
@@ -294,7 +298,7 @@ class LengthEnrichmentTests(FeedCacheTests):
 
     def test_background_video_uses_existing_updater(self):
         self.post.update(youtube='abc', date_approx=True)
-        ranking.WEIGHTS['length_per_minute'] = -1
+        ranking.TERMS['length_per_minute'] = -1
         with patch.object(server, 'schedule_video_metadata') as schedule:
             server.feed('score', enrich=True)
         schedule.assert_called_once_with('abc')
@@ -330,14 +334,14 @@ class LengthEnrichmentTests(FeedCacheTests):
 
     def test_custom_count_and_zero_apply_on_cached_feed(self):
         server.feed('score')
-        ranking.WEIGHTS['enrich_count'] = 0
+        ranking.TERMS['enrich_count'] = 0
         server.feed('score', enrich=True)
         server.schedule.assert_not_called()
-        ranking.WEIGHTS['enrich_count'] = 1
+        ranking.TERMS['enrich_count'] = 1
         server.feed('score', enrich=True)
         server.schedule.assert_called_once_with(self.post['url'], force=True)
 
     def test_update_count_requires_integer_in_range(self):
         for invalid in [-1, 1.5, 101]:
             with self.assertRaises(ValueError):
-                ranking.check_weights(dict(ranking.DEFAULT_WEIGHTS, enrich_count=invalid))
+                ranking.check_terms(dict(ranking.DEFAULT_TERMS, enrich_count=invalid))

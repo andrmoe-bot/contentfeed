@@ -21,9 +21,9 @@ class YoutubeAgeTests(unittest.TestCase):
                 published = feeds.parse_ago(videos[0]['ago'], now)
                 self.assertEqual(published, now - days * 86400)
                 post = dict(item('video', 'feed', date=published), date_approx=True)
-                weights = dict(ranking.DEFAULT_WEIGHTS, age_per_year=-1, new_sub_bonus=0)
+                terms = dict(ranking.DEFAULT_TERMS, age_per_year=-1, new_sub_bonus=0)
                 self.assertIn((f'age {ranking.hours_label(days * 24)}', ranking.points(-days / 365)),
-                              ranking.score(post, now, weights))
+                              ranking.score(post, now, terms))
 
     def test_accessibility_age_takes_precedence(self):
         data = {'lockupViewModel': {

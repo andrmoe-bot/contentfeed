@@ -27,7 +27,7 @@ class PostPageTests(unittest.TestCase):
         stack.enter_context(patch.object(server, 'state_version', 0))
         stack.enter_context(patch.object(server, 'schedule'))
         stack.enter_context(patch.object(server, 'schedule_subscription'))
-        stack.enter_context(patch.object(ranking, 'WEIGHTS', dict(ranking.DEFAULT_WEIGHTS)))
+        stack.enter_context(patch.object(ranking, 'TERMS', dict(ranking.DEFAULT_TERMS)))
         self.sub = 'https://example.com/feed'
         server.FEEDS_FILE.write_text(self.sub)
         self.posts = [dict(url=f'https://example.com/{i}', title=f'Part {i}', first_seen=100,
@@ -145,7 +145,7 @@ class PostPageTests(unittest.TestCase):
         self.assertNotIn(self.url, self.urls(page['similar']['items']))
         self.assertEqual(page['similar']['total'], 2)
         for p in page['similar']['items']:
-            self.assertEqual(p['related_percent'], ranking.similarity(page['item'], p, ranking.WEIGHTS)[0])
+            self.assertEqual(p['related_percent'], ranking.similarity(page['item'], p, ranking.TERMS)[0])
         self.assertEqual(server.viewed, {})  # Browsing the page does not open its source.
 
     def test_overlapping_playlists_keep_imported_order(self):
@@ -180,12 +180,12 @@ class PostPageTests(unittest.TestCase):
         server.FEEDS_FILE.write_text(self.sub + '\n' + other_sub)
         server.subscriptions[other_sub] = {'title': 'Other', 'items': [dict(self.posts[0], url='https://other.example/post')]}
         self.posts[0]['estimated_minutes'] = 20
-        weights = dict(ranking.WEIGHTS, similar_base_percent=0, similar_publish_weight=0, similar_length_weight=1)
-        page = self.page(weights=weights)
+        terms = dict(ranking.TERMS, similar_base_percent=0, similar_publish_weight=0, similar_length_weight=1)
+        page = self.page(terms=terms)
         self.assertEqual(self.urls(page['similar']['items']), [self.posts[2]['url'], self.posts[0]['url']])
         self.assertEqual([p['related_percent'] for p in page['similar']['items']], [100, 50])
-        weights['similar_length_weight'] = 0
-        self.assertEqual(self.page(weights=weights)['similar'], {'items': [], 'total': 0})
+        terms['similar_length_weight'] = 0
+        self.assertEqual(self.page(terms=terms)['similar'], {'items': [], 'total': 0})
 
     def test_limits_do_not_hide_target_or_memberships(self):
         page = self.page(url=self.posts[2]['url'], limit=1)
@@ -199,7 +199,7 @@ class PostPageTests(unittest.TestCase):
     def test_scores_and_view_state_do_not_change_cached_main_feed(self):
         before = copy.deepcopy(server.feed('score'))
         page = self.page()
-        self.assertEqual(page['item']['score'], ranking.WEIGHTS['series_penalty'])
+        self.assertEqual(page['item']['score'], ranking.TERMS['series_penalty'])
         self.assertEqual(server.feed('score'), before)
         server.set_viewed(self.url)
         page = self.page()
@@ -224,7 +224,7 @@ class PostPageTests(unittest.TestCase):
             enrich.assert_not_called()
             self.page(enrich=True)
             self.assertEqual(enrich.call_args.args[0][0]['url'], self.url)
-            self.assertEqual(enrich.call_args.args[1], ranking.WEIGHTS['enrich_count'])
+            self.assertEqual(enrich.call_args.args[1], ranking.TERMS['enrich_count'])
 
     def test_http_routes_validation_and_etag(self):
         httpd = server.ThreadingHTTPServer(('127.0.0.1', 0), server.Handler)
@@ -245,7 +245,7 @@ class PostPageTests(unittest.TestCase):
             urllib.request.urlopen(request)
         self.assertEqual(error.exception.code, 304)
         for path, code in [('/api/post', 400), ('/api/post?url=missing', 404),
-                           ('/api/post?url=x&ranker=missing', 400), ('/api/post?url=x&weights={}', 400)]:
+                           ('/api/post?url=x&ranker=missing', 400), ('/api/post?url=x&terms={}', 400)]:
             with self.subTest(path=path), self.assertRaises(urllib.error.HTTPError) as error:
                 urllib.request.urlopen(base + path)
             self.assertEqual(error.exception.code, code)

@@ -32,8 +32,8 @@ def fixture(count=10_000, subscriptions=50, span_days=365, recent=True):
     return items
 
 
-def weights(module, mode):
-    values = dict(module.DEFAULT_WEIGHTS, green_bonus_points=20, length_per_minute=-0.1)
+def terms(module, mode):
+    values = dict(module.DEFAULT_TERMS, green_bonus_points=20, length_per_minute=-0.1)
     values['similar_length_weight'] = 1 if mode in ('mixed', 'length', 'all') else 0
     values['similar_publish_weight'] = 0 if mode in ('length', 'title') else 1
     if 'similar_title_weight' in values:
@@ -44,7 +44,7 @@ def weights(module, mode):
 
 
 def measure(module, items, mode, runs, first_page=False):
-    settings = weights(module, mode)
+    settings = terms(module, mode)
     module.rank('score', items, NOW, settings)  # warm caches/imports
     samples = []
     for _ in range(runs):
@@ -86,7 +86,7 @@ def main():
         items = fixture(args.items, args.subs, span, recent)
         seconds = measure(ranking, items, mode, args.runs)
         page = measure(ranking, items, mode, args.runs, first_page=True)
-        if baseline and (mode not in ('title', 'all') or 'similar_title_weight' in baseline.DEFAULT_WEIGHTS):
+        if baseline and (mode not in ('title', 'all') or 'similar_title_weight' in baseline.DEFAULT_TERMS):
             old = measure(baseline, items, mode, args.runs)
             old_page = measure(baseline, items, mode, args.runs, first_page=True) if hasattr(baseline, 'RankedItems') else old
             print(f'{mode:22s} {old:8.4f}  {old_page:8.4f}  {seconds:8.4f}  {page:8.4f}  {page / old_page:8.2f}x')
