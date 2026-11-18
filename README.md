@@ -255,8 +255,9 @@ stay, and tasks are never left out. The status line shows the stop time and how 
 left. The timer is kept in `stop.json` in the data directory, so every device on the network shares
 it. When the time runs out, the feed stops showing content and shows a notice above the empty feed
 instead: the event that caused the stop (“Time to go: …”), or a generic “Stop time reached” message
-for the timer, with a Clear button. The stopped state lasts until you clear the timer; a timer left
-over from a previous day (more than 24 hours past) is dropped at startup.
+for the timer, with a Clear button. The stopped state lasts until you clear the timer or the event
+that caused it has ended; a timer left over from a previous day (more than 24 hours past) is
+dropped at startup.
 
 Events use the same system with a lead time: every event that hasn't ended acts as a stop time at
 its start minus the **Event lead time** setting in the score panel (30 minutes by default; 0 stops
@@ -265,10 +266,9 @@ the feed filters by. So with dinner at 19:00 and the default lead, the feed show
 can finish by 18:30. Events themselves never appear as feed cards; the notice above the stopped
 feed names the event. Ended events don't stop watching anymore.
 
-Crossing an event's lead time overrides the stay behavior: even the post you're viewing is left
-out, any video or other media playing on the page is force-stopped, and the page sounds a short
-audio alert once per stop, next to the "Time to go" notice. (A stop caused by the timer alone keeps
-the post you're viewing.)
+When the stop time runs out — the timer, or an event's lead time — the stay behavior is
+overridden: even the post you're viewing is left out, any video or other media playing on the
+page is force-stopped, and the page sounds a short audio alert once per stop, next to the notice.
 
 ## Colors
 
