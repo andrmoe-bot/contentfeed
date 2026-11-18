@@ -140,6 +140,42 @@ class StopTimerServerTests(unittest.TestCase):
         self.assertEqual(result["stop_at"], server.stop["stop_at"])
         self.assertEqual(result["total"], 1)
 
+    def test_viewed_post_stays_when_it_would_run_past_the_stop(self):
+        """The post you're viewing doesn't move away as time passes: it stays even when it no longer fits."""
+        server.set_stop(time.time() + 30 * 60)
+        server.viewed[self.long["url"]] = time.time()  # you're watching the long one now
+        result = server.feed("score")
+        self.assertIn(self.short["url"], self.urls(result))  # 10 minutes fit
+        self.assertIn(self.long["url"], self.urls(result))  # viewed, so kept although it doesn't fit
+        self.assertEqual(result["total"], 2)
+
+    def test_only_the_latest_viewed_post_is_kept(self):
+        server.set_stop(time.time() + 30 * 60)
+        other_long = {"url": "https://example.com/other-long", "title": "Other long", "first_seen": 1_000_000,
+                      "published": 1_000_000, "estimated_minutes": 90}
+        server.subscriptions[self.url]["items"].append(other_long)
+        now = time.time()
+        server.viewed[other_long["url"]] = now - 600  # opened earlier
+        server.viewed[self.long["url"]] = now - 60  # opened last: this is the one you're viewing
+        result = server.feed("score")
+        self.assertIn(self.long["url"], self.urls(result))
+        self.assertNotIn(other_long["url"], self.urls(result))  # only the latest viewed is exempt
+
+    def test_skipped_post_is_not_kept(self):
+        """A skip is not viewing: a skipped post that no longer fits is still left out."""
+        server.set_stop(time.time() + 30 * 60)
+        server.skipped[self.long["url"]] = time.time()
+        result = server.feed("score")
+        self.assertNotIn(self.long["url"], self.urls(result))
+        self.assertEqual(result["total"], 1)
+
+    def test_viewed_post_stays_when_the_stop_has_fired(self):
+        server.set_stop(time.time() - 10)  # the time ran out
+        server.viewed[self.long["url"]] = time.time() - 60
+        result = server.feed("score")
+        self.assertEqual(self.urls(result), {self.long["url"]})  # what you're viewing stays
+        self.assertTrue(result["stopped"])
+
     def test_fired_timer_stops_the_feed_with_a_generic_message(self):
         server.set_stop(time.time() - 10)  # the time ran out
         result = server.feed("score")

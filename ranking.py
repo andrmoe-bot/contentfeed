@@ -32,8 +32,10 @@ None. The similar_penalty is based on the sum, not on the strongest match alone.
 
 Nothing is hidden: items you've opened or marked red are scored differently, not removed. The one
 exception is the stop-watching timer: while a stop time is in effect (see effective_stop), items whose
-estimated length would run past it are left out of the feed, so each post shown can be finished first;
-and once the stop time has run out, content is left out entirely and the stop is shown instead.
+estimated length would run past it are left out of the feed, so each post shown can be finished first,
+and once the stop time has run out, content is left out entirely and the stop is shown instead. The
+post you're viewing (the one you opened most recently) is exempt, so it doesn't disappear as time
+passes; server.py applies that exemption, since viewing state lives there.
 
 A ranker registered with spread=True penalizes similarity to posts above it (see rank).
 
