@@ -547,9 +547,12 @@ async function fetchFeed() {
   }
 }
 
-// The status line: the stop time, if any, then text, then how many fetches are under way.
+// The status line: calendars that didn't answer, the stop time, if any, then text, then how many
+// fetches are under way.
 function showStatus(data, text) {
-  statusEl.textContent = [stopNote(data.stop_at, data.stopped), text, data.pending ? `fetching ${data.pending}…` : ""]
+  const unreachable = (data.calendars_unreachable || []).map((c) =>
+    `Calendar “${c.title}” isn't answering; using its events from ${c.fetched ? clock(c.fetched) : "before"}`);
+  statusEl.textContent = [...unreachable, stopNote(data.stop_at, data.stopped), text, data.pending ? `fetching ${data.pending}…` : ""]
     .filter(Boolean).join(" · ");
 }
 
