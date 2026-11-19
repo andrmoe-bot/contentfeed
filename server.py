@@ -43,10 +43,14 @@ ROOT = Path(__file__).resolve().parent  # code and pages; the server never write
 
 
 def git(*args: str) -> str:
-    """A git command's output for the checkout the code runs from, or "" without git or a checkout."""
+    """A git command's output for the checkout the code runs from, or "" without git or a checkout.
+
+    The service user doesn't own the checkout (see deploy/), and git refuses to read a repository
+    owned by someone else unless it is listed in safe.directory, so it is trusted here explicitly.
+    """
     try:
-        return subprocess.run(["git", "-C", str(ROOT), *args], capture_output=True, text=True,
-                              timeout=5, check=True).stdout.strip()
+        return subprocess.run(["git", "-c", f"safe.directory={ROOT}", "-C", str(ROOT), *args],
+                              capture_output=True, text=True, timeout=5, check=True).stdout.strip()
     except (OSError, subprocess.SubprocessError):
         return ""
 
