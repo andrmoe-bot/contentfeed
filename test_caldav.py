@@ -23,6 +23,17 @@ def event(summary="Event", properties="DTSTART:20261117T120000Z\r\n"):
             + f"SUMMARY:{summary}\r\nEND:VEVENT")
 
 
+def starts(properties, now=None):
+    """The calendar_start of each instance of one event with these properties (DTSTART, RRULE…)."""
+    data = calendar_data("BEGIN:VEVENT\r\nUID:e\r\n" + properties + "SUMMARY:E\r\nEND:VEVENT")
+    with patch.object(icalendar_parser.clock_time, "time", return_value=NOW if now is None else now):
+        return [it["calendar_start"] for it in icalendar_parser.parse_calendar_resource(data.decode(), "https://calendar.test/cal/")]
+
+
+def utc(*args):
+    return datetime(*args, tzinfo=timezone.utc).timestamp()
+
+
 def todo(uid, summary, properties=""):
     return (f"BEGIN:VTODO\r\nUID:{uid}\r\nSUMMARY:{summary}\r\n" + properties
             + "END:VTODO")
@@ -35,12 +46,74 @@ class CalendarParserTests(unittest.TestCase):
         item = icalendar_parser.parse_calendar_resource(body.decode(), "https://calendar.test/cal/")[0]
         self.assertEqual(item["title"], "Folded title continued, with\nnewline")
 
-    def test_parses_utc_all_day_and_named_timezone_dates(self):
-        self.assertEqual(icalendar_parser._date("20261117T120000Z"), NOW + 86400)
-        self.assertEqual(icalendar_parser._date("20261117"), datetime(2026, 11, 17, tzinfo=timezone.utc).timestamp())
-        new_york = icalendar_parser._date("20261117T120000", ";TZID=America/New_York")
-        self.assertEqual(new_york, datetime(2026, 11, 17, 17, tzinfo=timezone.utc).timestamp())
-        self.assertIsNone(icalendar_parser._date("not-a-date"))
+    def test_utc_all_day_named_and_floating_times(self):
+        """Dates and floating times have no time zone, so they're in the server's local time."""
+        self.assertEqual(starts("DTSTART:20261117T120000Z\r\n"), [NOW + 86400])
+        self.assertEqual(starts("DTSTART;VALUE=DATE:20261117\r\n"), [datetime(2026, 11, 17).timestamp()])
+        self.assertEqual(starts("DTSTART:20261117T120000\r\n"), [datetime(2026, 11, 17, 12).timestamp()])
+        self.assertEqual(starts("DTSTART;TZID=America/New_York:20261117T120000\r\n"), [utc(2026, 11, 17, 17)])
+        self.assertEqual(starts("DTSTART:not-a-date\r\n"), [None])
+
+    def test_outlook_windows_time_zone_names(self):
+        self.assertEqual(starts("DTSTART;TZID=W. Europe Standard Time:20261117T120000\r\n"), [utc(2026, 11, 17, 11)])
+
+    def test_time_zone_defined_in_the_calendar(self):
+        data = calendar_data(
+            "BEGIN:VTIMEZONE\r\nTZID:Custom Plus Two\r\nBEGIN:STANDARD\r\nDTSTART:19700101T000000\r\n"
+            "TZOFFSETFROM:+0200\r\nTZOFFSETTO:+0200\r\nEND:STANDARD\r\nEND:VTIMEZONE",
+            event("Custom", "DTSTART;TZID=Custom Plus Two:20261117T120000\r\n"))
+        item = icalendar_parser.parse_calendar_resource(data.decode(), "https://calendar.test/cal/")[0]
+        self.assertEqual(item["calendar_start"], utc(2026, 11, 17, 10))
+
+    def test_duration_gives_the_end(self):
+        data = calendar_data(event("Lunch", "DTSTART:20261117T110000Z\r\nDURATION:PT1H30M\r\n"),
+                             todo("t", "Task", "DTSTART:20261117T080000Z\r\nDURATION:PT2H\r\n"))
+        lunch, task = icalendar_parser.parse_calendar_resource(data.decode(), "https://calendar.test/cal/")
+        self.assertEqual(lunch["deadline"], utc(2026, 11, 17, 12, 30))
+        self.assertEqual(task["deadline"], utc(2026, 11, 17, 10))
+
+    def test_quoted_parameter_values_can_hold_colons(self):
+        """Thunderbird puts an HTML copy of the description in a quoted data: URL parameter."""
+        body = calendar_data("BEGIN:VEVENT\r\nUID:x\r\nDTSTART:20261117T120000Z\r\nSUMMARY:Middag\r\n"
+                             'DESCRIPTION;ALTREP="data:text/html,Lag%20mat%3Cbr%3EPuss%20tenner":Lag mat\\nPuss tenner\r\n'
+                             "END:VEVENT")
+        item = icalendar_parser.parse_calendar_resource(body.decode(), "https://calendar.test/cal/")[0]
+        self.assertEqual(item["description"], "Lag mat\nPuss tenner")
+
+    def test_item_urls_are_unchanged_for_floating_times(self):
+        """Urls key what's been viewed and skipped, so an instance's id still reads floating times and
+        dates as UTC, as before the library."""
+        data = calendar_data(todo("t", "Task", "DUE;VALUE=DATE:20261120\r\n"),
+                             event("Float", "DTSTART:20261117T120000\r\n"))
+        task, event_item = icalendar_parser.parse_calendar_resource(data.decode(), "https://calendar.test/cal/")
+        self.assertTrue(task["url"].endswith(f"#item=t-{int(utc(2026, 11, 20))}"))
+        self.assertTrue(event_item["url"].endswith(f"#item=event-id-{int(utc(2026, 11, 17, 12))}"))
+
+    def test_unreadable_resource_gives_no_items_but_a_bad_file_is_an_error(self):
+        self.assertEqual(icalendar_parser.parse_calendar_resource("BEGIN:VCALENDAR\r\nnonsense", "https://c.test/"), [])
+        with self.assertRaises(icalendar_parser.ICalendarError):
+            icalendar_parser.parse_calendar_data(b"BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nEND:VCALENDAR\r\n", "https://c.test/a.ics")
+
+    def test_weekly_byday_keeps_dtstart_even_when_it_is_not_selected(self):
+        # (With COUNT, recurring_ical_events counts such a start on top of COUNT rather than as its first.)
+        self.assertEqual(starts("DTSTART:20261111T120000Z\r\nRRULE:FREQ=WEEKLY;BYDAY=MO,FR;UNTIL=20261117T000000Z\r\n",
+                                now=utc(2026, 11, 10, 12)),  # a Wednesday
+                         [utc(2026, 11, 11, 12), utc(2026, 11, 13, 12), utc(2026, 11, 16, 12)])
+
+    def test_daily_byday_filters_nonworking_days_and_counts_instances(self):
+        self.assertEqual(starts("DTSTART:20261116T120000Z\r\nRRULE:FREQ=DAILY;BYDAY=MO,TU,WE,TH,FR;COUNT=7\r\n"),
+                         [utc(2026, 11, d, 12) for d in (16, 17, 18, 19, 20, 23, 24)])
+
+    def test_weekly_byday_count_and_daily_recurrence(self):
+        self.assertEqual(starts("DTSTART:20261111T120000Z\r\nRRULE:FREQ=WEEKLY;BYDAY=MO,WE,FR;COUNT=5\r\n"),
+                         [utc(2026, 11, 16, 12), utc(2026, 11, 18, 12), utc(2026, 11, 20, 12)])
+        self.assertEqual(starts("DTSTART:20261114T120000Z\r\nRRULE:FREQ=DAILY;COUNT=5\r\n"),
+                         [NOW - 86400, NOW, NOW + 86400, NOW + 2 * 86400])
+
+    def test_weekly_timezone_recurrence_keeps_local_time_across_dst(self):
+        occurrences = starts("DTSTART;TZID=Europe/Oslo:20260322T090000\r\nRRULE:FREQ=WEEKLY;COUNT=4\r\n",
+                             now=utc(2026, 3, 20, 12))
+        self.assertEqual([datetime.fromtimestamp(t, timezone.utc).hour for t in occurrences], [8, 7, 7, 7])
 
     def test_events_tasks_statuses_and_deadlines(self):
         body = calendar_data(
@@ -118,33 +191,6 @@ class CalendarParserTests(unittest.TestCase):
         with patch.object(icalendar_parser.clock_time, "time", return_value=now):
             items = icalendar_parser.parse_calendar_resource(data.decode(), "https://calendar.test/cal/")
         self.assertEqual(items, [])
-
-    def test_weekly_byday_keeps_dtstart_even_when_it_is_not_selected(self):
-        component = {"RRULE": [("", "FREQ=WEEKLY;BYDAY=MO,FR;COUNT=3")]}
-        start = datetime(2026, 11, 11, 12, tzinfo=timezone.utc).timestamp()  # Wednesday
-        now = datetime(2026, 11, 10, 12, tzinfo=timezone.utc).timestamp()
-        with patch.object(icalendar_parser.clock_time, "time", return_value=now):
-            occurrences = icalendar_parser._occurrences(component, start)
-        self.assertEqual(occurrences, [
-            start,
-            datetime(2026, 11, 13, 12, tzinfo=timezone.utc).timestamp(),
-            datetime(2026, 11, 16, 12, tzinfo=timezone.utc).timestamp(),
-        ])
-
-    def test_daily_byday_filters_nonworking_days_and_counts_instances(self):
-        component = {"RRULE": [("", "FREQ=DAILY;BYDAY=MO,TU,WE,TH,FR;COUNT=7")]}
-        start = datetime(2026, 11, 16, 12, tzinfo=timezone.utc).timestamp()  # Monday
-        with patch.object(icalendar_parser.clock_time, "time", return_value=NOW):
-            occurrences = icalendar_parser._occurrences(component, start)
-        self.assertEqual(occurrences, [
-            datetime(2026, 11, 16, 12, tzinfo=timezone.utc).timestamp(),
-            datetime(2026, 11, 17, 12, tzinfo=timezone.utc).timestamp(),
-            datetime(2026, 11, 18, 12, tzinfo=timezone.utc).timestamp(),
-            datetime(2026, 11, 19, 12, tzinfo=timezone.utc).timestamp(),
-            datetime(2026, 11, 20, 12, tzinfo=timezone.utc).timestamp(),
-            datetime(2026, 11, 23, 12, tzinfo=timezone.utc).timestamp(),
-            datetime(2026, 11, 24, 12, tzinfo=timezone.utc).timestamp(),
-        ])
 
     def test_rdate_and_multivalue_exdate_expand_and_exclude_instances(self):
         data = calendar_data("BEGIN:VEVENT\r\nUID:rdate\r\nDTSTART:20261115T120000Z\r\n"
@@ -224,35 +270,6 @@ class CalendarParserTests(unittest.TestCase):
             datetime(2026, 11, 17, 16, tzinfo=timezone.utc).timestamp(),
             datetime(2026, 11, 18, 16, tzinfo=timezone.utc).timestamp(),
         ])
-
-    def test_weekly_byday_count_and_daily_recurrence(self):
-        weekly = {"RRULE": [("", "FREQ=WEEKLY;BYDAY=MO,WE,FR;COUNT=5")]}
-        start = datetime(2026, 11, 11, 12, tzinfo=timezone.utc).timestamp()  # Wednesday
-        with patch.object(icalendar_parser.clock_time, "time", return_value=NOW):
-            occurrences = icalendar_parser._occurrences(weekly, start)
-        self.assertEqual(occurrences, [
-            datetime(2026, 11, 16, 12, tzinfo=timezone.utc).timestamp(),
-            datetime(2026, 11, 18, 12, tzinfo=timezone.utc).timestamp(),
-            datetime(2026, 11, 20, 12, tzinfo=timezone.utc).timestamp(),
-        ])
-        daily = {"RRULE": [("", "FREQ=DAILY;COUNT=5")]}
-        with patch.object(icalendar_parser.clock_time, "time", return_value=NOW):
-            occurrences = icalendar_parser._occurrences(daily, NOW - 2 * 86400)
-        self.assertEqual(occurrences, [NOW - 86400, NOW, NOW + 86400, NOW + 2 * 86400])
-
-    def test_weekly_timezone_recurrence_keeps_local_time_across_dst(self):
-        zone = icalendar_parser.ZoneInfo("Europe/Oslo")
-        start = datetime(2026, 3, 22, 9, tzinfo=zone)
-        start_value = "20260322T090000"
-        component = {"RRULE": [("", "FREQ=WEEKLY;COUNT=4")]}
-        now = datetime(2026, 3, 20, 12, tzinfo=timezone.utc).timestamp()
-        with patch.object(icalendar_parser.clock_time, "time", return_value=now):
-            occurrences = icalendar_parser._occurrences(component, start.timestamp(), start_value, ";TZID=Europe/Oslo")
-        self.assertEqual(len(occurrences), 4)
-        self.assertEqual([datetime.fromtimestamp(t, zone).hour for t in occurrences], [9, 9, 9, 9])
-        self.assertEqual(datetime.fromtimestamp(occurrences[0], timezone.utc).hour, 8)
-        self.assertEqual(datetime.fromtimestamp(occurrences[1], timezone.utc).hour, 7)
-
 
 class CalendarFetchTests(unittest.TestCase):
     def test_shared_ics_is_fetched_directly(self):

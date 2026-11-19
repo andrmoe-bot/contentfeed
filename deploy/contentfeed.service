@@ -1,6 +1,7 @@
 # systemd unit for the content feed. See README.md ("Run as a service") for installation.
 #
-# Code: /opt/contentfeed (a git checkout, owned by root; the service only reads it).
+# Code: /opt/contentfeed (a git checkout, owned by root; the service only reads it), with its
+#       requirements installed in /opt/contentfeed/.venv.
 # Data: /var/lib/contentfeed (links.txt, feeds.txt and caches), created by systemd and
 #       readable only by the "contentfeed" user.
 
@@ -17,7 +18,7 @@ StateDirectory=contentfeed
 StateDirectoryMode=0700
 UMask=0077
 WorkingDirectory=/var/lib/contentfeed
-ExecStart=/usr/bin/python3 /opt/contentfeed/server.py --host 0.0.0.0 --port 80 --data-dir /var/lib/contentfeed
+ExecStart=/opt/contentfeed/.venv/bin/python /opt/contentfeed/server.py --host 0.0.0.0 --port 80 --data-dir /var/lib/contentfeed
 # Port 80 is privileged: grant only the permission to use it, and nothing else
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE
