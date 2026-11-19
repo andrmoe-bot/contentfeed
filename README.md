@@ -267,6 +267,9 @@ left. The timer is kept in `stop.json` in the data directory, so every device on
 it. When the time runs out, the page switches to stop mode: the feed is hidden behind a notice —
 the event that caused the stop (“Time to go: …”), or a generic “Stop time reached” message for the
 timer, with a Clear button — any video playing is force-stopped and a short audio alert sounds once.
+If an event is taking place right now, stop mode also shows it in full — its calendar, title, start
+and end, description and link — with a countdown to when it's over (of several, the one that ends
+first); when the countdown reaches zero the page checks again at once instead of waiting for the next poll.
 The feed itself is still served, so when the stop is over the page switches straight back to the
 normal feed with nothing rebuilt. The stopped state lasts until you clear the timer or the event
 that caused it has ended — the feed returns on its own once the event is over. A fired timer is

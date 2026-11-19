@@ -88,6 +88,16 @@ class LiveCalendarTests(unittest.TestCase):
         self.age_checks(server.CALENDAR_CHECK_GAP)
         self.assertIsNone(server.feed("score")["stop_at"])
 
+    def test_ongoing_event_is_reported_with_its_calendar_and_details(self):
+        self.assertIsNone(server.feed("score")["ongoing_event"])  # dinner starts in ten minutes
+        dinner = dict(self.dinner(-10), description="At Kari's")
+        server.subscriptions[CAL]["events"] = [dinner]
+        result = server.feed("score")
+        self.assertTrue(result["stopped"])
+        self.assertEqual(result["ongoing_event"], {
+            "url": CAL + "#dinner", "title": "Dinner", "description": "At Kari's",
+            "calendar_start": dinner["calendar_start"], "deadline": dinner["deadline"], "calendar": "Home"})
+
     def test_requests_within_the_gap_reuse_the_check(self):
         with patch.object(server.caldav, "version", return_value="v1") as version:
             server.feed("score")

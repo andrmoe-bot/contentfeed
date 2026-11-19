@@ -191,6 +191,16 @@ def effective_stop(events: list[dict], now: float, terms: dict, stop_at: float |
     return min(candidates, key=lambda c: c[0]) if candidates else (None, None)
 
 
+def ongoing_event(events: list[dict], now: float) -> dict | None:
+    """The event taking place now (started, not yet ended), or None. Of several, the one that ends
+    first, so the next one shows once it's over. Events without an end take no time, so they're
+    never ongoing."""
+    ongoing = [it for it in events if it.get("calendar_kind") == "event"
+               and it.get("calendar_start") is not None and it.get("deadline") is not None
+               and it["calendar_start"] <= now < it["deadline"]]
+    return min(ongoing, key=lambda it: it["deadline"]) if ongoing else None
+
+
 def fits_before_stop(item: dict, now: float, stop: float | None) -> bool:
     """Whether the item can be finished before the stop time: an item with a known estimated length
     fits when now + its minutes is at or before the stop. Tasks aren't watched, and items
