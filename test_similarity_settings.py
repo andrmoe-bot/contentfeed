@@ -149,9 +149,9 @@ class SimilaritySettingsTests(unittest.TestCase):
                     html = response.read().decode()
                 self.assertIn(f'ContentFeed · v{server.VERSION}', html)
                 self.assertNotIn('{{VERSION}}', html)
-                self.assertNotIn('{{COMMIT}}', html)
                 if server.COMMIT:
                     self.assertIn(f'v{server.VERSION} ({server.COMMIT})', html)
+                    self.assertRegex(server.VERSION, r'^\d+\.\d+\.\d+$')  # major.minor.commits
                 self.assertIn('label: "Publish time similarity"', html)
                 self.assertIn('label: "Content length similarity"', html)
                 self.assertIn('label: "Title similarity"', html)

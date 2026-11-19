@@ -40,15 +40,22 @@ import ranking
 import series
 
 ROOT = Path(__file__).resolve().parent  # code and pages; the server never writes here
-VERSION = (ROOT / "VERSION").read_text(encoding="ascii").strip()
-# Short hash of the latest commit, shown next to the version in the page footer.
-# The code runs from a git checkout (see deploy/), but stay quiet without one.
-COMMIT = ""
-try:
-    COMMIT = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "--short", "HEAD"],
-                            capture_output=True, text=True, timeout=5, check=True).stdout.strip()
-except (OSError, subprocess.SubprocessError):
-    pass
+
+
+def git(*args: str) -> str:
+    """A git command's output for the checkout the code runs from, or "" without git or a checkout."""
+    try:
+        return subprocess.run(["git", "-C", str(ROOT), *args], capture_output=True, text=True,
+                              timeout=5, check=True).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+# The version is VERSION's major.minor plus the number of commits, so each merged change counts up
+# without anyone editing a file that every pull request would then conflict on. The code runs from
+# a git checkout (see deploy/); without one, the version is VERSION alone.
+COMMIT = git("rev-parse", "--short", "HEAD")  # shown next to the version in the page footer
+VERSION = ".".join(filter(None, [(ROOT / "VERSION").read_text(encoding="ascii").strip(), git("rev-list", "--count", "HEAD")]))
 
 
 def version_label() -> str:

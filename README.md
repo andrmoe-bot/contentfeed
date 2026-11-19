@@ -74,8 +74,9 @@ read. The data lives in `/var/lib/contentfeed`, which systemd creates and which 
 
 The container needs an address on your LAN (e.g. a bridged network) for other devices to reach
 port 80. Logs: `journalctl -u contentfeed -f`; they include the addresses the server fetches.
-The displayed app version comes from `VERSION`, with the latest commit's short hash next to it
-when the code is a git checkout; increment the final number for each release.
+The displayed app version is `VERSION`'s major.minor followed by the number of commits, with the
+latest commit's short hash next to it, when the code is a git checkout (a full clone, as above);
+otherwise it's `VERSION` alone.
 
 To update: `git -C /opt/contentfeed pull && systemctl restart contentfeed`. If the service
 file changed, copy it to `/etc/systemd/system/` again and run `systemctl daemon-reload` first.
