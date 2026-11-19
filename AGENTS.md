@@ -9,7 +9,9 @@ andrmoe-bot/feat/…" in the history.
 ## Standard workflow
 
 1. Branch off `main`: `git switch -c feat/<name>` (or `fix/<name>`).
-2. Run the tests before pushing: `python3 -m unittest` and `python3 -m py_compile *.py`.
+2. Run the tests before pushing: `.venv/bin/python -m unittest` and `.venv/bin/python -m py_compile *.py`.
+   If `.venv` is missing or `requirements.txt` changed, first run `python3 -m venv .venv` and
+   `.venv/bin/pip install -r requirements.txt`.
    Don't edit `VERSION` for a change: the version in the page footer is its major.minor plus the
    commit count, so it counts up by itself. Bump the minor number only for a notable release.
 3. Commit, then push the branch to the fork (this VM's credentials are used automatically;

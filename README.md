@@ -1,12 +1,21 @@
 # Content Feed
 
 Turns a plain list of links and feeds (RSS, Atom, YouTube channels, subreddits, blogs…) into a browsable card feed (title, description, preview image,
-inline YouTube embeds), served to your local network. Python 3 standard library only.
+inline YouTube embeds), served to your local network. Python 3, with the packages in
+`requirements.txt` (`icalendar` and `recurring-ical-events`, for calendars) installed with pip.
 
 ## Run
 
-    python3 server.py --port 8090         # development; keeps data in ./data
-    python3 server.py --port 8090 --data-dir /some/other/dir
+Install the requirements into a virtual environment in the checkout once (on Debian/Ubuntu,
+`apt install python3-venv` first), and again whenever `requirements.txt` changes:
+
+    python3 -m venv .venv
+    .venv/bin/pip install -r requirements.txt
+
+Then:
+
+    .venv/bin/python server.py --port 8090         # development; keeps data in ./data
+    .venv/bin/python server.py --port 8090 --data-dir /some/other/dir
 
 The default port is 80, so the service is reachable at plain `http://<lan-ip>`. Ports below
 1024 need root or `CAP_NET_BIND_SERVICE`; the systemd service grants just that permission, so it
@@ -27,10 +36,10 @@ Cards here show scores before the main feed's adjustments for similarity to post
 
 ## Tests
 
-Run the standard-library regression tests and Python syntax checks:
+Run the regression tests and Python syntax checks:
 
-    python3 -m unittest -v
-    python3 -m py_compile *.py
+    .venv/bin/python -m unittest -v
+    .venv/bin/python -m py_compile *.py
 
 For the 50-subscription, 10,000-item ranking benchmark and measured tradeoffs, see
 [PERFORMANCE.md](PERFORMANCE.md).
@@ -41,7 +50,7 @@ Everything personal is kept in the data directory, never in the code. Where that
 how you run the feed:
 
 - as the systemd service (see Run as a service): `/var/lib/contentfeed`
-- with `python3 server.py`: `data/` next to `server.py` (git-ignored), or the folder given with `--data-dir`
+- with `.venv/bin/python server.py`: `data/` next to `server.py` (git-ignored), or the folder given with `--data-dir`
 
 It holds:
 
@@ -65,9 +74,11 @@ VM. The code is a git checkout at `/opt/contentfeed` owned by root, which the se
 read. The data lives in `/var/lib/contentfeed`, which systemd creates and which only the
 `contentfeed` user can read. As root in the container (Debian/Ubuntu shown):
 
-    apt install python3 git
+    apt install python3 python3-venv git
     useradd --system --no-create-home --home-dir /var/lib/contentfeed --shell /usr/sbin/nologin contentfeed
     git clone https://github.com/andrmoe/contentfeed.git /opt/contentfeed
+    python3 -m venv /opt/contentfeed/.venv
+    /opt/contentfeed/.venv/bin/pip install -r /opt/contentfeed/requirements.txt
     cp /opt/contentfeed/deploy/contentfeed.service /etc/systemd/system/
     systemctl daemon-reload
     systemctl enable --now contentfeed
@@ -78,8 +89,14 @@ The displayed app version is `VERSION`'s major.minor followed by the number of c
 latest commit's short hash next to it, when the code is a git checkout (a full clone, as above);
 otherwise it's `VERSION` alone.
 
-To update: `git -C /opt/contentfeed pull && systemctl restart contentfeed`. If the service
-file changed, copy it to `/etc/systemd/system/` again and run `systemctl daemon-reload` first.
+To update:
+
+    git -C /opt/contentfeed pull
+    /opt/contentfeed/.venv/bin/pip install -r /opt/contentfeed/requirements.txt
+    systemctl restart contentfeed
+
+If the service file changed, copy it to `/etc/systemd/system/` again and run
+`systemctl daemon-reload` before restarting.
 
 To edit your lists by hand, edit `/var/lib/contentfeed/links.txt` or `feeds.txt` as root; the
 running server picks up changes within about 30 seconds.
@@ -427,7 +444,7 @@ Settings that are 0 when the page loads are hidden, along with their part of the
 panel short; add one back with "Add a term" below the others. Similar's hours come and go with Similar. The publish window and component weights stay visible
 whenever either similarity penalty is shown. Update incomplete posts always stays visible. The defaults are at the top of `ranking.py`. The other ranker,
 `chronological`, has no rules: everything scores 0 and the newest item is first. To add another ranker, register a
-function with `@ranker("name")`, then select it with `python3 server.py --ranker name`, or try
+function with `@ranker("name")`, then select it with `.venv/bin/python server.py --ranker name`, or try
 it without a restart at `/api/feed?ranker=name`.
 
 YouTube Shorts has a separate signed points setting in the score panel (default 0).
