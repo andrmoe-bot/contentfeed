@@ -106,6 +106,14 @@ class LiveCalendarTests(unittest.TestCase):
             "calendar_start": dinner["calendar_start"], "deadline": dinner["deadline"], "calendar": "Home"})
         self.assertEqual(result["stop_event"], result["ongoing_event"])
 
+    def test_calendars_read_with_an_older_parser_are_read_again(self):
+        server.subscriptions["https://example.com/feed"] = {"title": "Feed", "source": "feed", "items": []}
+        current = "https://radicale.example/me/work/"
+        server.subscriptions[current] = {"title": "Work", "source": "caldav", "items": [], "events": [],
+                                         "parser": server.icalendar_parser.PARSER_VERSION}
+        self.assertEqual(server.reread_outdated_calendars(), 1)  # CAL was read before parser versions
+        server.schedule_subscription.assert_called_once_with(CAL, force=True)
+
     def test_requests_within_the_gap_reuse_the_check(self):
         with patch.object(server.caldav, "version", return_value="v1") as version:
             server.feed("score")

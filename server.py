@@ -31,6 +31,7 @@ from urllib.parse import parse_qs, urljoin, urlparse
 
 import feeds
 import caldav
+import icalendar_parser
 import jellyfin
 import nrk
 import pages
@@ -1273,6 +1274,17 @@ def check_calendar(url: str):
         state["checked"] = time.monotonic()
 
 
+def reread_outdated_calendars() -> int:
+    """Read again the calendars last read with an older parser, whose saved events and tasks would
+    otherwise stay as that parser read them until the calendar changes. Returns how many."""
+    with lock:
+        outdated = [url for url, s in subscriptions.items() if s.get("source") == "caldav"
+                    and s.get("parser") != icalendar_parser.PARSER_VERSION]
+    for url in outdated:
+        schedule_subscription(url, force=True)
+    return len(outdated)
+
+
 def sync_calendars(subs):
     """Bring every CalDAV calendar among the subscriptions up to date, checking them side by side."""
     for future in [calendar_checker.submit(check_calendar, url) for url in checked_calendars(subs)]:
@@ -1610,6 +1622,8 @@ def main():
         raise SystemExit(f"Can't use port {args.port}: {e.strerror}. Choose another with --port.")
     server.ranker = args.ranker
     feed(args.ranker)  # warm the caches in the background
+    if outdated := reread_outdated_calendars():
+        print(f"Reading {outdated} calendar(s) again with the current parser.")
     threading.Thread(target=poll_subscriptions, daemon=True).start()
 
     suffix = "" if args.port == 80 else f":{args.port}"

@@ -89,6 +89,10 @@ class CalendarParserTests(unittest.TestCase):
         self.assertTrue(task["url"].endswith(f"#item=t-{int(utc(2026, 11, 20))}"))
         self.assertTrue(event_item["url"].endswith(f"#item=event-id-{int(utc(2026, 11, 17, 12))}"))
 
+    def test_calendar_reads_record_the_parser_version(self):
+        result = icalendar_parser.parse_calendar_data(calendar_data(event()), "https://c.test/a.ics")
+        self.assertEqual(result["parser"], icalendar_parser.PARSER_VERSION)
+
     def test_unreadable_resource_gives_no_items_but_a_bad_file_is_an_error(self):
         self.assertEqual(icalendar_parser.parse_calendar_resource("BEGIN:VCALENDAR\r\nnonsense", "https://c.test/"), [])
         with self.assertRaises(icalendar_parser.ICalendarError):

@@ -216,6 +216,9 @@ def parse_calendar_data(body, resource_url):
 
 
 MAX_ENTRIES = 1000  # tasks, and separately events, kept per calendar
+# Saved with each calendar read ("parser"). Raise it whenever a change here would read calendars
+# differently: at startup, calendars last read with another version are read again (see server.py).
+PARSER_VERSION = 2  # 2: read with icalendar and recurring-ical-events
 
 
 def calendar_result(entries: list[CalendarPost], title: str | None, url: str) -> dict:
@@ -223,6 +226,6 @@ def calendar_result(entries: list[CalendarPost], title: str | None, url: str) ->
     scheduled, so they aren't posts and are kept apart ("events") to act only as stop times."""
     entries = sorted(entries, key=lambda entry: entry.get("published") or 0, reverse=True)
     name = title or urllib.parse.unquote(urllib.parse.urlsplit(url).path.rstrip("/").split("/")[-1]) or "Calendar"
-    return {"title": name, "site": url, "icon": None, "complete": True,
+    return {"title": name, "site": url, "icon": None, "complete": True, "parser": PARSER_VERSION,
             "items": [e for e in entries if e["calendar_kind"] != "event"][:MAX_ENTRIES],
             "events": [e for e in entries if e["calendar_kind"] == "event"][:MAX_ENTRIES]}
