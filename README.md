@@ -103,7 +103,9 @@ every event that hasn't ended acts as a stop time at its start minus the Event l
 so the feed shows only posts you can finish before you need to leave for it. The score panel
 controls task urgency during the final 30 days before a deadline. Tasks also get the
 similar-posts-above penalty against other tasks in the same calendar, and the fixed Task term
-adds points to every task (default 0). Paste each calendar's own URL into the Subscriptions page
+adds points to every task (default 0). The Task priority term gives a task points by its
+calendar priority: all of them at priority 1 (highest), down to a ninth of them at 9 (lowest),
+and none without a priority (default 0). Paste each calendar's own URL into the Subscriptions page
 to add it; repeat for each calendar you want. A parent collection URL isn't a substitute for an
 individual calendar URL. For private calendars,
 put the login in `caldav.json` in the data directory and keep credentials out of the URL. A login mapped

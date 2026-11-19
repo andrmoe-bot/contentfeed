@@ -82,6 +82,7 @@ DEFAULT_TERMS = {
     "event_lead_minutes": 30,  # an upcoming event stops watching this many minutes before it starts
     "task_deadline_bonus": 200,  # maximum points for a task due now
     "task_bonus": 0,  # fixed points added to every task
+    "task_priority_bonus": 0,  # points for a priority-1 task, scaled down to 1/9 of them at priority 9
     "green_bonus_points": 0,
     "youtube_shorts_bonus": 0,
     "video_bonus": 0,  # for each media type (see media_type); below 0 is a penalty
@@ -98,7 +99,7 @@ SIGNED = {
     "next_up_bonus", "seen_bonus", "new_sub_bonus", "series_penalty", "similar_penalty",
     "above_similarity_penalty", "green_bonus_points", "video_bonus", "image_bonus",
     "article_bonus", "youtube_shorts_bonus", "length_per_minute", "age_per_year",
-    "task_deadline_bonus", "task_bonus",
+    "task_deadline_bonus", "task_bonus", "task_priority_bonus",
 }
 LIMIT = 10_000_000
 RED = 10_000_000  # red items sink below everything else
@@ -593,8 +594,8 @@ def _similarity_reasons(item: dict, terms: dict) -> Reasons:
 
 
 def _task_score(item: dict, now: float, terms: dict) -> Reasons:
-    """Score calendar tasks under their own rules: deadline urgency, similarity to recently opened
-    tasks, the fixed task term and red. (Events aren't feed items; see effective_stop.)"""
+    """Score calendar tasks under their own rules: deadline urgency, priority, similarity to recently
+    opened tasks, the fixed task term and red. (Events aren't feed items; see effective_stop.)"""
     due = item.get("deadline")
     reasons = []
     if due is not None:
@@ -604,6 +605,9 @@ def _task_score(item: dict, now: float, terms: dict) -> Reasons:
             urgency = points(terms["task_deadline_bonus"] * (1 - hours / horizon))
             if urgency:
                 reasons.append((f"task deadline in {hours_label(hours)}", urgency))
+    priority = item.get("priority")
+    if priority and terms["task_priority_bonus"]:
+        reasons.append((f"priority {priority}", points(terms["task_priority_bonus"] * (10 - priority) / 9)))
     reasons.extend(_similarity_reasons(item, terms))
     if terms["task_bonus"]:
         reasons.append(("task", terms["task_bonus"]))

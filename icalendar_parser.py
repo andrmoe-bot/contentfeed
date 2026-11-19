@@ -25,6 +25,7 @@ class CalendarPost(TypedDict):
     calendar_start: float | None
     deadline: float | None
     calendar_uid: str
+    priority: int | None  # PRIORITY 1 (highest) to 9 (lowest); None if undefined
 
 
 def _datetime(value, params=""):
@@ -321,6 +322,8 @@ def _items(calendar_data, resource_url) -> list[CalendarPost]:
         start = _date(start_value, start_params)
         status = _prop(comp, "STATUS")[1].upper()
         completed = bool(_prop(comp, "COMPLETED")[1])
+        priority = _prop(comp, "PRIORITY")[1].strip()
+        priority = int(priority) if re.fullmatch(r"[1-9]", priority) else None  # 0 means undefined
         if (kind == "task" and (status in ("COMPLETED", "CANCELLED") or completed)) or (kind == "event" and status == "CANCELLED"):
             continue
         uid = _prop(comp, "UID")[1] or title
@@ -351,7 +354,7 @@ def _items(calendar_data, resource_url) -> list[CalendarPost]:
             out.append({
                 "url": url, "title": title[:300], "description": description[:500],
                 "published": published, "calendar_kind": kind, "calendar_start": item_start,
-                "deadline": item_deadline, "calendar_uid": uid,
+                "deadline": item_deadline, "calendar_uid": uid, "priority": priority,
             })
     return out
 

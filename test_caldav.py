@@ -59,6 +59,12 @@ class CalendarParserTests(unittest.TestCase):
         self.assertEqual(items[1]["deadline"], datetime(2026, 11, 20, 12, tzinfo=timezone.utc).timestamp())
         self.assertIsNone(items[2]["deadline"])
 
+    def test_task_priority_is_1_to_9_and_0_or_junk_means_none(self):
+        body = calendar_data(*(todo(f"t{i}", f"T{i}", prop) for i, prop in enumerate(
+            ("PRIORITY:1\r\n", "PRIORITY:9\r\n", "PRIORITY:0\r\n", "PRIORITY:high\r\n", ""))))
+        items = icalendar_parser.parse_calendar_resource(body.decode(), "https://calendar.test/cal/")
+        self.assertEqual([it["priority"] for it in items], [1, 9, None, None, None])
+
     def test_monthly_recurrence_and_exdate_have_distinct_instance_urls(self):
         start = datetime(2026, 10, 16, 12, tzinfo=timezone.utc)
         exdate = datetime(2026, 11, 16, 12, tzinfo=timezone.utc)
