@@ -88,15 +88,23 @@ class LiveCalendarTests(unittest.TestCase):
         self.age_checks(server.CALENDAR_CHECK_GAP)
         self.assertIsNone(server.feed("score")["stop_at"])
 
-    def test_ongoing_event_is_reported_with_its_calendar_and_details(self):
-        self.assertIsNone(server.feed("score")["ongoing_event"])  # dinner starts in ten minutes
+    def test_events_are_reported_with_their_calendar_and_details(self):
+        # Dinner starts in ten minutes: within its lead time, so it stops watching but isn't ongoing.
+        result = server.feed("score")
+        self.assertTrue(result["stopped"])
+        self.assertIsNone(result["ongoing_event"])
+        self.assertEqual(result["stop_event"], {
+            "url": CAL + "#dinner", "title": "Dinner", "description": None, "calendar_kind": "event",
+            "calendar_start": self.events[0]["calendar_start"], "deadline": self.events[0]["deadline"],
+            "calendar": "Home"})
         dinner = dict(self.dinner(-10), description="At Kari's")
         server.subscriptions[CAL]["events"] = [dinner]
         result = server.feed("score")
         self.assertTrue(result["stopped"])
         self.assertEqual(result["ongoing_event"], {
-            "url": CAL + "#dinner", "title": "Dinner", "description": "At Kari's",
+            "url": CAL + "#dinner", "title": "Dinner", "description": "At Kari's", "calendar_kind": "event",
             "calendar_start": dinner["calendar_start"], "deadline": dinner["deadline"], "calendar": "Home"})
+        self.assertEqual(result["stop_event"], result["ongoing_event"])
 
     def test_requests_within_the_gap_reuse_the_check(self):
         with patch.object(server.caldav, "version", return_value="v1") as version:
