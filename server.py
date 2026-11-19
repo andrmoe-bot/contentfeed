@@ -946,14 +946,20 @@ def enrich_posts(ranked: list[dict], count: int):
             schedule(post["url"], force=True)
 
 
-def stop_state(events: list[dict], now: float, terms: dict, stop_at: float | None) -> dict:
+def stop_state(events: list[dict], now: float, terms: dict, stop_at: float | None,
+               calendar_of=lambda event: None) -> dict:
     """The stop-watching state for a feed response: the effective stop time, whether it has run out
-    (stopped), and stop_event, the event that causes it, if it isn't the timer."""
+    (stopped), stop_event, the event that causes it, if it isn't the timer, and ongoing_event, the
+    event taking place now, if any, with all its details and calendar_of(event), its calendar's name,
+    for stop mode to show with a countdown to its end."""
     effective, event = ranking.effective_stop(events, now, terms, stop_at)
+    ongoing = ranking.ongoing_event(events, now)
     return {"stop_at": effective,
             "stopped": effective is not None and now >= effective,
             "stop_event": ({k: event.get(k) for k in ("url", "title", "calendar_kind", "calendar_start", "deadline")}
-                           if event is not None else None)}
+                           if event is not None else None),
+            "ongoing_event": ({**{k: ongoing.get(k) for k in ("url", "title", "description", "calendar_start", "deadline")},
+                               "calendar": calendar_of(ongoing)} if ongoing is not None else None)}
 
 
 def build_items(entries: dict[str, list[str]], subs: dict[str, list[str]], now: float) -> tuple[list[dict], list[str]]:
@@ -1054,7 +1060,8 @@ def feed(ranker: str, limit: int = MAX_ITEMS_SHOWN, terms: dict | None = None, *
     with lock:
         # Every subscribed calendar's events stop watching, on every page, not only their own subscription's.
         events = calendar_events(all_subs)
-    stopping = {**stop_state(events, now, terms, stop.get("stop_at")),
+        stopping = stop_state(events, now, terms, stop.get("stop_at"), lambda event: calendar_name(event, all_subs))
+    stopping = {**stopping,
                 "calendars_unreachable": unreachable_calendars(all_subs)}
     ranked = ranking_for(ranker, terms, entries, subs, search, post_url, stopping, now)
     if post_url is not None:
@@ -1212,6 +1219,15 @@ def migrate_calendar_events() -> bool:
 def calendar_events(subs) -> list[dict]:
     """The subscriptions' calendar events. Call with lock held."""
     return [event for url in subs for event in subscriptions.get(url, {}).get("events", [])]
+
+
+def calendar_name(event: dict, subs) -> str | None:
+    """The name of the subscribed calendar that has the event. Call with lock held."""
+    for url in subs:
+        subscription = subscriptions.get(url, {})
+        if any(e is event for e in subscription.get("events", [])):
+            return subscription.get("title") or url
+    return None
 
 
 # CalDAV calendars are kept in step on every feed request, not only on the subscription timer: each

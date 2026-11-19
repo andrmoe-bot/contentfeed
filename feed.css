@@ -109,6 +109,11 @@ nav button { padding: 0; border: 0; background: none; color: var(--accent); font
   align-items: center; background: var(--card); border: 1px solid var(--border); border-radius: 12px; color: var(--text);
   -webkit-line-clamp: none; }
 #stop-notice button { padding: 2px 8px; font-size: 13px; border-radius: 6px; }
+#stop-notice .ongoing { flex: 1 0 100%; }
+#stop-notice .ongoing .source { color: var(--muted); font-size: 13px; }
+#stop-notice .ongoing h2 { margin: 2px 0 4px; font-size: 18px; }
+#stop-notice .ongoing .countdown { font-weight: 600; font-variant-numeric: tabular-nums; }
+#stop-notice .ongoing .description { margin: 6px 0; white-space: pre-line; }
 /* Stop mode hides the feed but keeps it in the page, so switching back is seamless */
 #feed.stopped { display: none; }
 nav button:hover { text-decoration: underline; }

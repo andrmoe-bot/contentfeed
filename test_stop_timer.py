@@ -63,6 +63,19 @@ class StopFilterTests(unittest.TestCase):
         terms = dict(ranking.DEFAULT_TERMS, event_lead_minutes=90)
         self.assertEqual(ranking.effective_stop([event], NOW, terms), (NOW + 2 * 3600 - 90 * 60, event))
 
+    def test_ongoing_event_is_the_one_taking_place_that_ends_first(self):
+        def event(name, start, end):
+            return dict(item(name, "cal"), calendar_kind="event", calendar_start=start, deadline=end)
+        upcoming = event("upcoming", NOW + 60, NOW + 3600)
+        ended = event("ended", NOW - 3600, NOW)  # ends exactly now: over
+        long = event("long", NOW - 7200, NOW + 7200)
+        short = event("short", NOW - 60, NOW + 600)
+        instant = dict(item("instant", "cal"), calendar_kind="event", calendar_start=NOW - 60)  # no end
+        task = dict(event("task", NOW - 60, NOW + 60), calendar_kind="task")
+        self.assertIsNone(ranking.ongoing_event([upcoming, ended, instant, task], NOW))
+        self.assertIs(ranking.ongoing_event([long, upcoming, short], NOW), short)
+        self.assertIs(ranking.ongoing_event([long, upcoming], NOW), long)
+
     def test_earliest_stop_wins(self):
         event = dict(item("event", "cal"), calendar_kind="event", calendar_start=NOW + 5 * 3600)
         timer = NOW + 3600

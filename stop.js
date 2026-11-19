@@ -2,9 +2,9 @@
 // so every post shown can be finished before the stop time; the post you're viewing stays even when
 // it no longer fits. When the stop time runs out (the timer, or an event's lead time), the page
 // switches to stop mode in JS: the feed is hidden behind a notice naming the event that caused the
-// stop (or a generic timer message), playback is force-stopped and an audio alert sounds (see
-// forceStop) — and since the feed itself is still served, switching back to the normal feed is
-// seamless once the stop is over. The "Stop mode" button next to the timer switches between stop
+// stop (or a generic timer message) and the event taking place now, if any, with a countdown to its
+// end; playback is force-stopped and an audio alert sounds (see forceStop) — and since the feed
+// itself is still served, switching back to the normal feed is seamless once the stop is over. The "Stop mode" button next to the timer switches between stop
 // mode and the normal feed manually at any time. A time earlier today means tomorrow.
 const stopForm = document.getElementById("stop-form");
 const stopTime = document.getElementById("stop-time");
@@ -80,21 +80,66 @@ function renderStopNotice() {
   updateStopModeBtn();
   if (!stopped) { notice?.remove(); return; }
   if (!notice) {
-    notice = el("p", { id: "stop-notice", role: "status" });
+    notice = el("div", { id: "stop-notice", role: "status" });
     feedEl.before(notice);
   }
+  const ongoing = lastStop && lastStop.ongoing_event;
   if (lastStop && lastStop.stopped) {
     const hhmm = clock(lastStop.stop_at);
     const clear = el("button", { type: "button" }, "Clear timer");
     clear.addEventListener("click", () => stopClear.click());
-    notice.replaceChildren(lastStop.stop_event
-      ? `Time to go: “${lastStop.stop_event.title}” starts at ${hhmm}.`
-      : `Stop time reached at ${hhmm}.`, clear);
+    const event = lastStop.stop_event;
+    notice.replaceChildren(
+      // The ongoing event shown below is the cause: no need to say it starts.
+      event && ongoing && event.url === ongoing.url ? "" : event
+        ? `Time to go: “${event.title}” starts at ${hhmm}.`
+        : `Stop time reached at ${hhmm}.`, clear);
   } else {
     const back = el("button", { type: "button" }, "Back to feed");
     back.addEventListener("click", () => { modeOverride = false; render(); });
     notice.replaceChildren("Stop mode is on — the feed is hidden and playback is stopped. ", back);
   }
+  if (ongoing) notice.append(ongoingEvent(ongoing));
+  tickCountdown();
+}
+
+// The event taking place now, in full, with a countdown to its end.
+function ongoingEvent(event) {
+  const day = (unix) => new Date(unix * 1000).toDateString();
+  const when = (unix) => day(unix) === new Date().toDateString() ? clock(unix)
+    : `${new Date(unix * 1000).toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" })} ${clock(unix)}`;
+  const link = /^https?:/.test(event.url || "")
+    ? el("a", { href: event.url, target: "_blank", rel: "noopener noreferrer" }, "Open event ↗") : null;
+  return el("section", { class: "ongoing", "aria-label": "Ongoing event" },
+    el("div", { class: "source" }, ["Now", event.calendar].filter(Boolean).join(" · ")),
+    el("h2", {}, event.title || "Untitled event"),
+    el("div", { class: "when" }, `${when(event.calendar_start)} – ${when(event.deadline)} · `,
+      el("span", { class: "countdown", "data-end": String(event.deadline) }, countdown(event.deadline))),
+    event.description ? el("p", { class: "description" }, event.description) : null,
+    link);
+}
+
+// Such as "1:02:03 left" or "4:05 left", until a unix time.
+function countdown(end) {
+  const s = Math.max(0, Math.ceil(end - Date.now() / 1000));
+  const h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60, sec = String(s % 60).padStart(2, "0");
+  return `${h ? `${h}:${String(m).padStart(2, "0")}` : m}:${sec} left`;
+}
+
+// Updates the countdown every second while it's shown; once the event is over, reloads the feed so
+// stop mode shows what comes next (or the feed returns) without waiting for the next poll.
+let countdownTimer = null, reloadedFor = null;
+function tickCountdown() {
+  clearTimeout(countdownTimer);
+  const span = document.querySelector("#stop-notice .countdown");
+  if (!span) return;
+  const end = Number(span.dataset.end);
+  span.textContent = countdown(end);
+  if (Date.now() / 1000 >= end) {
+    if (reloadedFor !== end) { reloadedFor = end; load(); }  // once: the server's clock may lag behind
+    return;
+  }
+  countdownTimer = setTimeout(tickCountdown, 1000 - Date.now() % 1000);
 }
 
 // In stop mode cards you opened no longer keep their place, playback is stopped, and the alert
