@@ -743,7 +743,8 @@ def mark_older_red(url: str, age: float) -> int | None:
 
 
 def settings() -> dict:
-    return {"terms": ranking.TERMS, "defaults": ranking.DEFAULT_TERMS, "stop_at": stop.get("stop_at")}
+    return {"terms": ranking.TERMS, "defaults": ranking.DEFAULT_TERMS, "limits": ranking.TERM_LIMITS,
+            "stop_at": stop.get("stop_at")}
 
 
 def set_stop(value) -> str | None:
@@ -775,26 +776,39 @@ def save_settings(terms) -> str | None:
         return str(e)
     with lock:
         ranking.TERMS.update(checked)
-    save_json(SETTINGS_FILE, {"terms": checked})
+    save_json(SETTINGS_FILE, {"version": SETTINGS_VERSION, "terms": checked})
     return None
 
 
-def load_settings():
-    data = load_json(SETTINGS_FILE)
+# settings.json's format. Files without a version were saved before it had one; when a term is renamed
+# or changes meaning, bump the version and move saved values in migrate_terms.
+SETTINGS_VERSION = 1
+
+
+def migrate_terms(data: dict) -> dict | None:
+    """The saved terms in the current format, or None if there are none."""
     terms = data.get("terms")
     if terms is None:
         terms = data.get("weights")  # settings saved before the terms were called terms
     if not isinstance(terms, dict):
+        return None
+    if data.get("version", 0) < 1:
+        # The old repeat setting is the per-100%-similarity amount for posts above.
+        if "above_similarity_penalty" not in terms and "repeat_per_post" in terms:
+            terms["above_similarity_penalty"] = terms["repeat_per_post"]
+        # The oldest calendar field, task_bonus, controlled the deadline ramp; task_bonus now means
+        # fixed per-item points, so move a saved ramp setting to its explicit name.
+        if "task_bonus" in terms and "task_deadline_bonus" not in terms:
+            terms["task_deadline_bonus"] = terms.pop("task_bonus")
+    return terms
+
+
+def load_settings():
+    terms = migrate_terms(load_json(SETTINGS_FILE))
+    if terms is None:
         return
     # Settings saved by another version may lack newer terms, which keep their defaults, or have
     # ones that no longer exist, which are dropped.
-    # Preserve the old repeat setting as the new per-100%-similarity amount.
-    if "above_similarity_penalty" not in terms and "repeat_per_post" in terms:
-        terms["above_similarity_penalty"] = terms["repeat_per_post"]
-    # The oldest calendar field, task_bonus, controlled the deadline ramp; task_bonus now means
-    # fixed per-item points, so move a saved ramp setting to its explicit name.
-    if "task_bonus" in terms and "task_deadline_bonus" not in terms:
-        terms["task_deadline_bonus"] = terms.pop("task_bonus")
     terms = {k: v for k, v in terms.items() if k in ranking.DEFAULT_TERMS}
     try:
         ranking.TERMS.update(ranking.check_terms({**ranking.DEFAULT_TERMS, **terms}))

@@ -989,8 +989,7 @@ const SETTINGS = [
 ];
 // Every setting, including the second box some have, such as Similar's hours
 const KEYS = SETTINGS.flatMap(({ key, extra }) => (extra ? [key, extra.key] : [key]));
-const SIGNED = ["youtube_shorts_bonus", "seen_bonus", "video_bonus", "image_bonus", "article_bonus", "length_per_minute", "age_per_year", "next_up_bonus", "new_sub_bonus", "green_bonus_points", "series_penalty", "similar_penalty", "above_similarity_penalty", "task_deadline_bonus", "task_bonus"];  // may be negative: the sign says which way
-const LIMIT = 10_000_000;
+let limits = {};  // each term's {min, max, integer}, from the server
 let saved = {};  // as saved on the server
 let draft = {};  // as shown in the panel
 let defaults = {};
@@ -1018,14 +1017,14 @@ function nearestStep(list, value) {
 const fmt = (n) => Number(n).toLocaleString("en-US", { maximumFractionDigits: 3 }).replaceAll(",", "\u202f").replace("-", "−");
 const plus = (n) => (n < 0 ? ` − ${fmt(-n)}` : ` + ${fmt(n)}`);  // " + 5" or " − 5", for adding a term to a sum
 const sameTerms = (a, b) => KEYS.every((key) => a[key] === b[key]);
-const inRange = (key, v) => (key !== "enrich_count" || (Number.isInteger(v) && v <= 100)) && (key !== "similar_base_percent" || v <= 100) && Number.isFinite(v) && v >= (SIGNED.includes(key) ? -LIMIT : 0) && v <= LIMIT;
+const inRange = (key, v) => Number.isFinite(v) && v >= limits[key].min && v <= limits[key].max && (!limits[key].integer || Number.isInteger(v));
 const controls = {};
 
 function buildSettings() {
   document.getElementById("settings").replaceChildren(...SETTINGS.map(({ key, term, label, before, after, extra, hint }) => {
-    const list = ["enrich_count", "similar_base_percent"].includes(key) ? Array.from({ length: 101 }, (_, i) => i) : SIGNED.includes(key) ? SIGNED_STEPS : BONUS_STEPS;
-    const num = el("input", { type: "number", id: `w-${key}`, step: "any", inputmode: "decimal", required: "",
-      min: SIGNED.includes(key) ? -LIMIT : 0, max: ["enrich_count", "similar_base_percent"].includes(key) ? 100 : LIMIT });
+    const { min, max } = limits[key];
+    const list = max <= 100 ? Array.from({ length: max + 1 }, (_, i) => i) : min < 0 ? SIGNED_STEPS : BONUS_STEPS;
+    const num = el("input", { type: "number", id: `w-${key}`, step: "any", inputmode: "decimal", required: "", min, max });
     const slider = el("input", { type: "range", min: 0, max: list.length - 1, step: 1, "aria-label": `${label} slider` });
     const def = el("span");
     controls[key] = { num, slider, list, def };
@@ -1045,7 +1044,7 @@ function buildSettings() {
     let second = [];
     if (extra) {
       const box = el("input", { type: "number", id: `w-${extra.key}`, step: "any", inputmode: "decimal", required: "",
-        min: 0, max: LIMIT, "aria-label": `${label} ${extra.after}` });
+        min: limits[extra.key].min, max: limits[extra.key].max, "aria-label": `${label} ${extra.after}` });
       controls[extra.key] = { num: box };
       const value = () => (box.value.trim() === "" ? NaN : Number(box.value));
       box.addEventListener("input", () => {
@@ -1145,8 +1144,12 @@ function save() {
 }
 
 async function saveNow() {
-  const valid = KEYS.every((key) => inRange(key, draft[key]));
-  if (!valid) return panelSay("Each setting must be from 0 to 10 000 000; Seen, media bonuses and Content length may also go down to −10 000 000.", true);
+  const invalid = KEYS.find((key) => !inRange(key, draft[key]));
+  if (invalid) {
+    const { label } = SETTINGS.find((s) => s.key === invalid || s.extra?.key === invalid);
+    const { min, max, integer } = limits[invalid];
+    return panelSay(`${label} must be a ${integer ? "whole " : ""}number from ${fmt(min)} to ${fmt(max)}.`, true);
+  }
   if (sameTerms(draft, saved)) return;
   const res = await fetch("/api/settings", {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ terms: draft }),
@@ -1169,6 +1172,8 @@ async function loadSettings() {
   saved = data.terms;
   draft = { ...saved };
   defaults = data.defaults;
+  limits = data.limits;
+  buildSettings();
   if (data.stop_at) {
     const d = new Date(data.stop_at * 1000);
     stopTime.value = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
@@ -1202,11 +1207,6 @@ document.getElementById("panel-toggle").addEventListener("click", () => setPanel
 document.getElementById("panel-close").addEventListener("click", () => setPanel(false));
 let panelOpen = false;
 try { panelOpen = localStorage.getItem("scorePanel") === "open"; } catch {}
-if (location.hash === "#settings") {  // the old /settings page links here
-  panelOpen = true;
-  history.replaceState(null, "", location.pathname + location.search);
-}
-buildSettings();
 setPanel(panelOpen);
 
 document.getElementById("more").addEventListener("click", (e) => {

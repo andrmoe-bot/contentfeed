@@ -218,6 +218,16 @@ class FeedCacheTests(unittest.TestCase):
         saved = server.load_json(server.STATE_FILE)["items"][self.post["url"]]
         self.assertEqual(set(saved), {"skipped"})
 
+    def test_settings_are_saved_with_their_version_and_served_with_limits(self):
+        self.assertIsNone(server.save_settings(dict(ranking.DEFAULT_TERMS, task_bonus=5)))
+        saved = server.load_json(server.SETTINGS_FILE)
+        self.assertEqual(saved["version"], server.SETTINGS_VERSION)
+        server.load_settings()  # task_bonus is the fixed term here, not the old deadline ramp
+        self.assertEqual((ranking.TERMS["task_bonus"], ranking.TERMS["task_deadline_bonus"]), (5, 200))
+        limits = server.settings()["limits"]
+        self.assertEqual(limits["seen_bonus"], {"min": -ranking.LIMIT, "max": ranking.LIMIT, "integer": False})
+        self.assertEqual(limits["enrich_count"], {"min": 0, "max": 100, "integer": True})
+
     def test_saved_settings_ignore_removed_tag_similarity(self):
         server.save_json(server.SETTINGS_FILE, {"terms": dict(ranking.DEFAULT_TERMS, tag_similarity=99)})
         server.load_settings()

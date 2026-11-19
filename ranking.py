@@ -102,6 +102,11 @@ SIGNED = {
 }
 LIMIT = 10_000_000
 RED = 10_000_000  # red items sink below everything else
+# Each term's allowed values, which the score panel also gets, to check what you type.
+TERM_LIMITS = {key: {"min": -LIMIT if key in SIGNED else 0,
+                     "max": 100 if key in ("similar_base_percent", "enrich_count") else LIMIT,
+                     "integer": key == "enrich_count"}
+               for key in DEFAULT_TERMS}
 
 
 def check_terms(terms: dict) -> dict:
@@ -110,13 +115,10 @@ def check_terms(terms: dict) -> dict:
         raise ValueError(f"expected exactly these settings: {', '.join(DEFAULT_TERMS)}")
     out = {}
     for key, value in terms.items():
-        low = -LIMIT if key in SIGNED else 0
-        if isinstance(value, bool) or not isinstance(value, (int, float)) or not low <= value <= LIMIT:
-            raise ValueError(f"{key} must be a number from {low} to {LIMIT}")
-        if key == "similar_base_percent" and value > 100:
-            raise ValueError("similar_base_percent must be from 0 to 100")
-        if key == "enrich_count" and (not float(value).is_integer() or value > 100):
-            raise ValueError("enrich_count must be a whole number from 0 to 100")
+        low, high, integer = TERM_LIMITS[key]["min"], TERM_LIMITS[key]["max"], TERM_LIMITS[key]["integer"]
+        if (isinstance(value, bool) or not isinstance(value, (int, float)) or not low <= value <= high
+                or (integer and not float(value).is_integer())):
+            raise ValueError(f"{key} must be a {'whole ' if integer else ''}number from {low} to {high}")
         out[key] = int(value) if float(value).is_integer() else value
     return out
 
