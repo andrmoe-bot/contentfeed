@@ -49,6 +49,13 @@ try:
                             capture_output=True, text=True, timeout=5, check=True).stdout.strip()
 except (OSError, subprocess.SubprocessError):
     pass
+
+
+def version_label() -> str:
+    """The version shown in the page footer."""
+    return VERSION + (f" ({COMMIT})" if COMMIT else "")
+
+
 DEFAULT_DATA_DIR = ROOT / "data"
 # Data files; set_data_dir() points these into the data directory at startup.
 LINKS_FILE = FEEDS_FILE = CACHE_FILE = ADDED_FILE = FEED_CACHE_FILE = VIEWED_FILE = SKIPPED_FILE = COLORS_FILE = SETTINGS_FILE = JELLYFIN_FILE = CALDAV_FILE = STOP_FILE = Path()
@@ -1090,34 +1097,35 @@ def jellyfin_post(url: str) -> tuple[str, dict] | None:
     return (jellyfin.server_of(url), login) if login is not None else None
 
 
-def jellyfin_relay_target(key: str, item: str) -> tuple[str, dict] | None:
-    """(server, login) for a relay request, if item is a post in the feed on the server with that key."""
+def jellyfin_posts(key: str, item: str) -> list[tuple[dict, str, dict]]:
+    """(post, server, login) for each post in the feed of the Jellyfin item on the server with that relay key."""
     item = jellyfin.normal_id(item)
     with lock:
-        urls = [p["url"] for s in subscriptions.values() for p in s.get("items", [])
-                if p.get("jellyfin") and jellyfin.normal_id(jellyfin.item_id(p["url"]) or "") == item]
-    for url in urls:
-        target = jellyfin_post(url)
-        if target and relay_key(target[0]) == key.lower():
-            return target
-    return None
+        posts = [p for s in subscriptions.values() for p in s.get("items", [])
+                 if p.get("jellyfin") and jellyfin.normal_id(jellyfin.item_id(p["url"]) or "") == item]
+    if not posts:
+        return []
+    logins = jellyfin.read_logins(JELLYFIN_FILE)[0]
+    found = []
+    for post in posts:
+        server, login = jellyfin.server_of(post["url"]), jellyfin.login_for(post["url"], logins)
+        if login is not None and relay_key(server) == key.lower():
+            found.append((post, server, login))
+    return found
+
+
+def jellyfin_relay_target(key: str, item: str) -> tuple[str, dict] | None:
+    """(server, login) for a relay request, if item is a post in the feed on the server with that key."""
+    return next(((server, login) for _, server, login in jellyfin_posts(key, item)), None)
 
 
 def jellyfin_image_target(key: str, item: str) -> tuple[tuple[str, dict], str] | None:
     """The authenticated Jellyfin image URL for a pictured post in the feed."""
-    item = jellyfin.normal_id(item)
-    with lock:
-        posts = [p for s in subscriptions.values() for p in s.get("items", [])
-                 if p.get("jellyfin") and jellyfin.normal_id(jellyfin.item_id(p["url"]) or "") == item
-                 and p.get("image")]
-    for post in posts:
-        target = jellyfin_post(post["url"])
-        if not target or relay_key(target[0]) != key.lower():
-            continue
+    for post, server, login in jellyfin_posts(key, item):
         # The source address came from Jellyfin metadata; relay only its path and query.
         image = urlparse(post.get("_jellyfin_image", ""))
-        if image.scheme in ("http", "https") and image.netloc == urlparse(target[0]).netloc and image.path.startswith("/Items/"):
-            return target, image.path + (f"?{image.query}" if image.query else "")
+        if image.scheme in ("http", "https") and image.netloc == urlparse(server).netloc and image.path.startswith("/Items/"):
+            return (server, login), image.path + (f"?{image.query}" if image.query else "")
     return None
 
 
@@ -1175,6 +1183,11 @@ def jellyfin_play(url: str) -> dict:
     return {"src": f"/jellyfin/{relay_key(server)}{path}", "hls": hls}
 
 
+def query_limit(query: dict) -> int:
+    limit = query.get("limit", [""])[0]
+    return max(int(limit), 1) if limit.isdigit() else MAX_ITEMS_SHOWN
+
+
 class Handler(BaseHTTPRequestHandler):
     def _send(self, code: int, body: bytes, ctype: str):
         self.send_response(code)
@@ -1186,6 +1199,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def _json(self, obj, code=200):
         self._send(code, json.dumps(obj).encode(), "application/json")
+
+    def _not_found(self):
+        self._send(404, b"Not found", "text/plain")
 
     def _feed_json(self, obj):
         """Send the feed compressed, and with an ETag, so the page's checks for changes get a short
@@ -1212,183 +1228,196 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         parsed = urlparse(self.path)
-        path = parsed.path
+        path, query = parsed.path, parse_qs(parsed.query)
         if path in PAGES:
-            name, ctype = PAGES[path]
-            body = (ROOT / name).read_bytes()
-            if ctype.startswith("text/html"):
-                body = body.replace(b"{{VERSION}}", VERSION.encode("ascii"))
-                commit = f" ({COMMIT})" if COMMIT else ""
-                body = body.replace(b"{{COMMIT}}", commit.encode("ascii"))
-            self._send(200, body, ctype)
-        elif path == "/settings":  # the old Settings page is now the feed's score panel
-            self.send_response(302)
-            self.send_header("Location", "/#settings")
-            self.send_header("Content-Length", "0")
-            self.end_headers()
-        elif path in ("/api/feed", "/api/post", "/api/subscription", "/api/subscription/next-up"):
-            query = parse_qs(parsed.query)
-            name = query.get("ranker", [self.server.ranker])[0]
-            if name not in ranking.RANKERS:
-                return self._json({"error": f"unknown ranker; available: {sorted(ranking.RANKERS)}"}, 400)
-            limit = query.get("limit", [""])[0]
-            terms = None
-            if "terms" in query:  # unsaved terms, to preview them while you move a slider
-                try:
-                    terms = ranking.check_terms(json.loads(query["terms"][0]))
-                except (ValueError, TypeError) as e:
-                    return self._json({"error": f"terms: {e}"}, 400)
-            if path in ("/api/subscription", "/api/subscription/next-up"):
-                url = query.get("url", [""])[0]
-                if not url:
-                    return self._json({"error": "url is required"}, 400)
-                result = feed(name, max(int(limit), 1) if limit.isdigit() else MAX_ITEMS_SHOWN,
-                                     terms, enrich=query.get("enrich") == ["1"], subscription_url=url, search=query.get("q", [""])[0])
-                if "error" in result:
-                    return self._json(result, 404)
-                result["subscription"] = next((s for s in subscription_status() if s["url"] == url), None)
-                if path == "/api/subscription/next-up" or query.get("view") in (["next_up"], ["next-up"]):
-                    result["items"] = result.get("next_up", [])
-                    result["total"] = len(result["items"])
-                return self._feed_json(result)
-            if path == "/api/post":
-                url = query.get("url", [""])[0]
-                if not url:
-                    return self._json({"error": "url is required"}, 400)
-                result = feed(name, max(int(limit), 1) if limit.isdigit() else MAX_ITEMS_SHOWN,
-                                     terms, enrich=query.get("enrich") == ["1"], post_url=url, search=query.get("q", [""])[0])
-                if "error" in result:
-                    return self._json(result, 404)
-                return self._feed_json(result)
-            self._feed_json(feed(name, max(int(limit), 1) if limit.isdigit() else MAX_ITEMS_SHOWN, terms,
-                                 enrich=query.get("enrich") == ["1"], search=query.get("q", [""])[0]))
-        elif path == "/api/subscriptions":
-            self._json({"subscriptions": subscription_status(), "interval_minutes": feed_interval / 60})
-        elif path == "/api/settings":
-            self._json(settings())
-        elif path == "/api/jellyfin/play":
-            result = jellyfin_play(parse_qs(parsed.query).get("url", [""])[0])
-            self._json(result, 400 if "error" in result else 200)
-        elif IMAGE_RELAY.fullmatch(path):
-            self._relay_image(IMAGE_RELAY.fullmatch(path))
-        elif RELAY.match(path):
-            self._relay(RELAY.match(path), parsed.query)
-        else:
-            self._send(404, b"Not found", "text/plain")
+            return self._page(*PAGES[path])
+        if path in FEED_APIS:
+            return self._feed(path, query)
+        if path in GET_APIS:
+            return self._json(*GET_APIS[path](query))
+        if m := IMAGE_RELAY.fullmatch(path):
+            return self._relay_image(m)
+        if m := RELAY.fullmatch(path):
+            return self._relay(m, parsed.query)
+        self._not_found()
+
+    def _page(self, name: str, ctype: str):
+        body = (ROOT / name).read_bytes()
+        if ctype.startswith("text/html"):
+            body = body.replace(b"{{VERSION}}", version_label().encode("ascii"))
+        self._send(200, body, ctype)
+
+    def _feed(self, path: str, query: dict):
+        """/api/feed, or with url, /api/post (a post's page) or /api/subscription (one subscription;
+        view=next-up for its next up only)."""
+        ranker = query.get("ranker", [self.server.ranker])[0]
+        if ranker not in ranking.RANKERS:
+            return self._json({"error": f"unknown ranker; available: {sorted(ranking.RANKERS)}"}, 400)
+        terms = None
+        if "terms" in query:  # unsaved terms, to preview them while you move a slider
+            try:
+                terms = ranking.check_terms(json.loads(query["terms"][0]))
+            except (ValueError, TypeError) as e:
+                return self._json({"error": f"terms: {e}"}, 400)
+        options = {"enrich": query.get("enrich") == ["1"], "search": query.get("q", [""])[0]}
+        if path != "/api/feed":
+            url = query.get("url", [""])[0]
+            if not url:
+                return self._json({"error": "url is required"}, 400)
+            options["post_url" if path == "/api/post" else "subscription_url"] = url
+        result = feed(ranker, query_limit(query), terms, **options)
+        if "error" in result:
+            return self._json(result, 404)
+        if path == "/api/subscription":
+            result["subscription"] = next((s for s in subscription_status() if s["url"] == url), None)
+            if query.get("view") == ["next-up"]:
+                result["items"] = result.get("next_up", [])
+                result["total"] = len(result["items"])
+        self._feed_json(result)
+
+    def _stream(self, r, headers: tuple[str, ...], extra: dict | None = None):
+        """Pass on an upstream response's status, the named headers and its body."""
+        self.send_response(r.status)
+        for name in headers:
+            if r.headers.get(name):
+                self.send_header(name, r.headers[name])
+        for name, value in (extra or {}).items():
+            self.send_header(name, value)
+        self.end_headers()
+        try:
+            while chunk := r.read(256 * 1024):
+                self.wfile.write(chunk)
+        except (BrokenPipeError, ConnectionResetError):  # the player stopped or seeked elsewhere
+            pass
+
+    def _open_jellyfin(self, server: str, login: dict, path: str, headers: dict):
+        """The Jellyfin response, or None after sending the error."""
+        try:
+            return jellyfin.stream(server, login, path, headers)
+        except urllib.error.HTTPError as e:
+            self._send(e.code, f"HTTP {e.code} from Jellyfin".encode(), "text/plain")
+        except (OSError, feeds.FeedError) as e:
+            self._send(502, f"couldn't reach Jellyfin: {e}".encode(), "text/plain")
+        return None
 
     def _relay(self, m, query: str):
         """Pass on a Jellyfin video, playlist or segment, with byte ranges so the player can seek."""
         target = jellyfin_relay_target(m.group(1), m.group(3))
         if target is None:
-            return self._send(404, b"Not found", "text/plain")
+            return self._not_found()
         server, login = target
         headers = {"Range": self.headers["Range"]} if self.headers.get("Range") else {}
-        try:
-            r = jellyfin.stream(server, login, m.group(2) + (f"?{jellyfin.without_token(query)}" if query else ""), headers)
-        except urllib.error.HTTPError as e:
-            return self._send(e.code, f"HTTP {e.code} from Jellyfin".encode(), "text/plain")
-        except (OSError, feeds.FeedError) as e:
-            return self._send(502, f"couldn't reach Jellyfin: {e}".encode(), "text/plain")
+        r = self._open_jellyfin(server, login, m.group(2) + (f"?{jellyfin.without_token(query)}" if query else ""), headers)
+        if r is None:
+            return
         with r:
-            ctype = r.headers.get("Content-Type", "application/octet-stream")
             if m.group(2).endswith(".m3u8"):  # playlists name the next files with the token in them
+                ctype = r.headers.get("Content-Type", "application/octet-stream")
                 return self._send(200, jellyfin.without_token(r.read(jellyfin.MAX_BYTES).decode()).encode(), ctype)
-            self.send_response(r.status)
-            for name in ("Content-Type", "Content-Length", "Content-Range", "Accept-Ranges"):
-                if r.headers.get(name):
-                    self.send_header(name, r.headers[name])
-            self.end_headers()
-            try:
-                while chunk := r.read(256 * 1024):
-                    self.wfile.write(chunk)
-            except (BrokenPipeError, ConnectionResetError):  # the player stopped or seeked elsewhere
-                pass
+            self._stream(r, ("Content-Type", "Content-Length", "Content-Range", "Accept-Ranges"))
 
     def _relay_image(self, m):
         """Serve a Jellyfin preview through this origin to avoid browser mixed content blocking."""
         result = jellyfin_image_target(m.group(1), m.group(2))
         if result is None:
-            return self._send(404, b"Not found", "text/plain")
+            return self._not_found()
         (server, login), path = result
-        try:
-            r = jellyfin.stream(server, login, path, {})
-        except urllib.error.HTTPError as e:
-            return self._send(e.code, f"HTTP {e.code} from Jellyfin".encode(), "text/plain")
-        except (OSError, feeds.FeedError) as e:
-            return self._send(502, f"couldn't reach Jellyfin: {e}".encode(), "text/plain")
+        r = self._open_jellyfin(server, login, path, {})
+        if r is None:
+            return
         with r:
-            self.send_response(r.status)
-            self.send_header("Content-Type", r.headers.get("Content-Type", "application/octet-stream"))
-            if r.headers.get("Content-Length"):
-                self.send_header("Content-Length", r.headers["Content-Length"])
-            self.send_header("Cache-Control", "no-store")
-            self.end_headers()
-            try:
-                while chunk := r.read(256 * 1024):
-                    self.wfile.write(chunk)
-            except (BrokenPipeError, ConnectionResetError):
-                pass
+            self._stream(r, ("Content-Length",), {"Content-Type": r.headers.get("Content-Type", "application/octet-stream"),
+                                                  "Cache-Control": "no-store"})
 
     def do_POST(self):
-        path = urlparse(self.path).path
         length = min(int(self.headers.get("Content-Length") or 0), 10_000)
         try:
             body = json.loads(self.rfile.read(length) or b"{}")
         except json.JSONDecodeError:
             return self._json({"error": "invalid json"}, 400)
-        if path == "/api/links":
-            ok = add_link(str(body.get("url", "")))
-            self._json({"ok": ok}, 200 if ok else 400)
-        elif path == "/api/subscriptions":
-            error = subscribe(str(body.get("url", "")))
-            self._json({"ok": not error, "error": error}, 400 if error else 200)
-        elif path in ("/api/subscriptions/tags", "/api/subscriptions/remove", "/api/subscriptions/check"):
-            url = str(body.get("url", ""))
-            if path.endswith("/tags"):
-                tags = body.get("tags", [])
-                ok = set_subscription_tags(url, [str(t) for t in tags] if isinstance(tags, list) else [str(tags)])
-            elif path.endswith("/remove"):
-                ok = unsubscribe(url)
-            else:
-                ok = check_subscription(url)
-            self._json({"ok": ok, "subscriptions": subscription_status()}, 200 if ok else 404)
-        elif path == "/api/subscriptions/red":
-            try:
-                age = float(body.get("age"))
-            except (TypeError, ValueError):
-                age = -1
-            if not 0 <= age < float("inf"):
-                return self._json({"error": "age must be a number of seconds"}, 400)
-            marked = mark_older_red(str(body.get("url", "")), age)
-            self._json({"ok": marked is not None, "marked": marked, "subscriptions": subscription_status()},
-                       200 if marked is not None else 404)
-        elif path == "/api/viewed":
-            ok = set_viewed(str(body.get("url", "")))
-            self._json({"ok": ok}, 200 if ok else 404)
-        elif path == "/api/skipped":
-            ok = set_skipped(str(body.get("url", "")))
-            self._json({"ok": ok}, 200 if ok else 404)
-        elif path == "/api/color":
-            ok = set_color(str(body.get("url", "")), str(body.get("color", "")))
-            self._json({"ok": ok}, 200 if ok else 404)
-        elif path == "/api/settings":
-            error = save_settings(body.get("terms"))
-            self._json({"ok": not error, "error": error, **settings()}, 400 if error else 200)
-        elif path == "/api/stop":
-            error = set_stop(body.get("stop_at"))
-            self._json({"ok": not error, "error": error, "stop_at": stop.get("stop_at")},
-                       400 if error else 200)
-        elif path == "/api/refresh":
-            for u in read_links():
-                schedule(u, force=True)
-            for u in read_entries(FEEDS_FILE):
-                schedule_subscription(u, force=True)
-            self._json({"ok": True})
-        else:
-            self._json({"error": "not found"}, 404)
+        action = POST_APIS.get(urlparse(self.path).path)
+        if action is None or not isinstance(body, dict):
+            return self._json({"error": "not found" if action is None else "expected a json object"},
+                              404 if action is None else 400)
+        self._json(*action(body))
 
     def log_message(self, fmt, *args):
         print(f"{self.address_string()} - {fmt % args}")
+
+
+# The JSON API: each takes the query (GET) or body (POST) and returns (response, status code).
+def ok(done: bool, failed: int = 404, **extra) -> tuple[dict, int]:
+    return {"ok": done, **extra}, 200 if done else failed
+
+
+def with_status(done: bool) -> tuple[dict, int]:
+    return ok(done, subscriptions=subscription_status())
+
+
+def subscribe_api(body):
+    error = subscribe(str(body.get("url", "")))
+    return ok(not error, 400, error=error)
+
+
+def subscription_tags_api(body):
+    tags = body.get("tags", [])
+    return with_status(set_subscription_tags(str(body.get("url", "")), [str(t) for t in tags] if isinstance(tags, list) else [str(tags)]))
+
+
+def mark_red_api(body):
+    try:
+        age = float(body.get("age"))
+    except (TypeError, ValueError):
+        age = -1
+    if not 0 <= age < float("inf"):
+        return {"error": "age must be a number of seconds"}, 400
+    marked = mark_older_red(str(body.get("url", "")), age)
+    return ok(marked is not None, marked=marked, subscriptions=subscription_status())
+
+
+def settings_api(body):
+    error = save_settings(body.get("terms"))
+    return {"ok": not error, "error": error, **settings()}, 400 if error else 200
+
+
+def stop_api(body):
+    error = set_stop(body.get("stop_at"))
+    return {"ok": not error, "error": error, "stop_at": stop.get("stop_at")}, 400 if error else 200
+
+
+def refresh_api(body):
+    for u in read_entries():
+        schedule(u, force=True)
+    for u in read_entries(FEEDS_FILE):
+        schedule_subscription(u, force=True)
+    return {"ok": True}, 200
+
+
+def jellyfin_play_api(query):
+    result = jellyfin_play(query.get("url", [""])[0])
+    return result, 400 if "error" in result else 200
+
+
+FEED_APIS = ("/api/feed", "/api/post", "/api/subscription")
+GET_APIS = {
+    "/api/subscriptions": lambda query: ({"subscriptions": subscription_status(), "interval_minutes": feed_interval / 60}, 200),
+    "/api/settings": lambda query: (settings(), 200),
+    "/api/jellyfin/play": jellyfin_play_api,
+}
+POST_APIS = {
+    "/api/links": lambda body: ok(add_link(str(body.get("url", ""))), 400),
+    "/api/subscriptions": subscribe_api,
+    "/api/subscriptions/tags": subscription_tags_api,
+    "/api/subscriptions/remove": lambda body: with_status(unsubscribe(str(body.get("url", "")))),
+    "/api/subscriptions/check": lambda body: with_status(check_subscription(str(body.get("url", "")))),
+    "/api/subscriptions/red": mark_red_api,
+    "/api/viewed": lambda body: ok(set_viewed(str(body.get("url", "")))),
+    "/api/skipped": lambda body: ok(set_skipped(str(body.get("url", "")))),
+    "/api/color": lambda body: ok(set_color(str(body.get("url", "")), str(body.get("color", "")))),
+    "/api/settings": settings_api,
+    "/api/stop": stop_api,
+    "/api/refresh": refresh_api,
+}
 
 
 def lan_addresses() -> list[str]:

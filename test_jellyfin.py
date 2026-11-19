@@ -39,7 +39,8 @@ class JellyfinImageRelayTests(unittest.TestCase):
         posts = {"feed": {"items": [post]}}
         key = hashlib.sha256(server_url.encode()).hexdigest()[:12]
         with patch.object(server, "subscriptions", posts), \
-                patch.object(server, "jellyfin_post", return_value=(server_url, {"username": "feed"})):
+                patch.object(server.jellyfin, "read_logins", return_value=({}, None)), \
+                patch.object(server.jellyfin, "login_for", return_value={"username": "feed"}):
             result = server.jellyfin_image_target(key, item_id)
             wrong_server = server.jellyfin_image_target("0" * 12, item_id)
 
