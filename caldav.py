@@ -13,7 +13,7 @@ from pathlib import Path
 import outbound
 from icalendar_parser import ICalendarError, calendar_result, parse_calendar_data, parse_calendar_resource
 
-USER_AGENT = "Mozilla/5.0 (compatible; ContentFeed/1.0)"
+USER_AGENT = outbound.USER_AGENT
 TIMEOUT = 10
 MAX_BYTES = 20_000_000
 READ_ONLY_METHODS = {"GET", "PROPFIND", "REPORT"}

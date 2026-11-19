@@ -9,6 +9,7 @@ from email.utils import parsedate_to_datetime
 from urllib.parse import urlparse
 
 MIN_INTERVAL = 1.0
+USER_AGENT = "Mozilla/5.0 (compatible; ContentFeed/1.0)"  # for web pages, feeds and calendars
 _condition = threading.Condition()
 _hosts = {}
 

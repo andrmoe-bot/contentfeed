@@ -131,18 +131,28 @@ def set_data_dir(path: Path):
             (path / name).write_text(text, encoding="utf-8")
 
 
+_entries_read: dict[Path, tuple[tuple, dict[str, list[str]]]] = {}  # path -> (file stamp, entries)
+
+
 def read_entries(path: Path | None = None) -> dict[str, list[str]]:
-    """url -> tags, in file order (links.txt by default). A line is a URL followed by optional tags."""
+    """url -> tags, in file order (links.txt by default). A line is a URL followed by optional tags.
+    The lists are read on almost every request, so they're parsed again only when the file changes."""
     path = path or LINKS_FILE
-    if not path.exists():
+    try:
+        info = path.stat()
+    except FileNotFoundError:
         return {}
-    entries: dict[str, list[str]] = {}
-    for line in path.read_text(encoding="utf-8").splitlines():
-        url, *tags = line.split() or [""]
-        if url.startswith("#") or urlparse(url).scheme not in ("http", "https") or url in entries:
-            continue
-        entries[url] = clean_tags(tags)
-    return entries
+    stamp = (info.st_mtime_ns, info.st_size, info.st_ino)
+    known = _entries_read.get(path)
+    if known is None or known[0] != stamp:
+        entries: dict[str, list[str]] = {}
+        for line in path.read_text(encoding="utf-8").splitlines():
+            url, *tags = line.split() or [""]
+            if url.startswith("#") or urlparse(url).scheme not in ("http", "https") or url in entries:
+                continue
+            entries[url] = clean_tags(tags)
+        known = _entries_read[path] = (stamp, entries)
+    return {url: list(tags) for url, tags in known[1].items()}
 
 
 def clean_tags(words: list[str]) -> list[str]:
@@ -153,10 +163,6 @@ def clean_tags(words: list[str]) -> list[str]:
         if tag and tag not in tags:
             tags.append(tag)
     return tags
-
-
-def read_links() -> list[str]:
-    return list(read_entries())
 
 
 def fetch_metadata(url: str) -> dict:
@@ -678,9 +684,18 @@ def known_urls() -> set[str]:
     return urls
 
 
+def is_known(url: str) -> bool:
+    """Whether url is a link or a subscription's post: an item in the feed."""
+    if url in read_entries():
+        return True
+    subs = read_entries(FEEDS_FILE)
+    with lock:
+        return any(post["url"] == url for sub_url in subs for post in subscriptions.get(sub_url, {}).get("items", []))
+
+
 def set_viewed(url: str) -> bool:
     """Record that you opened url now. Only for items in the feed."""
-    if url not in known_urls():
+    if not is_known(url):
         return False
     with lock:
         viewed[url] = time.time()
@@ -722,7 +737,7 @@ def schedule_video_metadata(video: str):
 
 def set_color(url: str, color: str) -> bool:
     """Give an item a color. White, the default, also skips it (see seen_at). Only for items in the feed."""
-    if color not in COLORS or url not in known_urls():
+    if color not in COLORS or not is_known(url):
         return False
     with lock:
         if color == "white":
@@ -1117,7 +1132,7 @@ def append_line(path: Path, url: str, tags: list[str]):
 def add_link(line: str) -> bool:
     """Append a links.txt line: a URL optionally followed by tags."""
     url, *tags = line.split() or [""]
-    if urlparse(url).scheme not in ("http", "https") or url in read_links():
+    if urlparse(url).scheme not in ("http", "https") or url in read_entries():
         return False
     append_line(LINKS_FILE, url, clean_tags(tags))
     schedule(url)
@@ -1485,16 +1500,10 @@ def main():
     ap.add_argument("--port", type=int, default=80, help="default 80; ports below 1024 need extra permission")
     ap.add_argument("--ranker", default=ranking.DEFAULT, choices=sorted(ranking.RANKERS))
     ap.add_argument("--feed-interval", type=float, default=30, help="minutes between subscription checks")
-    # Items used to be hidden after you opened them; now ranking.py scores them down instead.
-    for old in ("--hide-viewed", "--hide-green"):
-        ap.add_argument(old, help=argparse.SUPPRESS)
     ap.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR,
                     help="where links.txt, feeds.txt and the caches are kept (default: ./data)")
     args = ap.parse_args()
 
-    if args.hide_viewed or args.hide_green:
-        print("Note: --hide-viewed and --hide-green no longer do anything; nothing is hidden now. "
-              "Viewed and colored items are scored instead (see ranking.py).")
     global feed_interval
     feed_interval = max(args.feed_interval, 1) * 60
     set_data_dir(args.data_dir.resolve())
