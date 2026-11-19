@@ -14,8 +14,8 @@ class FeedCacheTests(unittest.TestCase):
         self.stack = contextlib.ExitStack()
         self.addCleanup(self.stack.close)
         root = Path(self.stack.enter_context(tempfile.TemporaryDirectory()))
-        for name in ("LINKS_FILE", "FEEDS_FILE", "CACHE_FILE", "ADDED_FILE", "FEED_CACHE_FILE",
-                     "VIEWED_FILE", "SKIPPED_FILE", "COLORS_FILE", "SETTINGS_FILE", "JELLYFIN_FILE", "CALDAV_FILE"):
+        for name in ("LINKS_FILE", "FEEDS_FILE", "CACHE_FILE", "FEED_CACHE_FILE",
+                     "STATE_FILE", "SETTINGS_FILE", "JELLYFIN_FILE", "CALDAV_FILE"):
             self.stack.enter_context(patch.object(server, name, root / name, create=True))
         for name in ("subscriptions", "cache", "added", "viewed", "skipped", "colors", "ranked_cache"):
             self.stack.enter_context(patch.object(server, name, {}))
@@ -63,13 +63,41 @@ class FeedCacheTests(unittest.TestCase):
         url = "https://calendar.example/work/"
         event = {"url": url + "#item=event", "title": "Event", "published": 2_000_000,
                  "calendar_kind": "event", "calendar_start": 2_000_000, "deadline": None}
-        fresh = {"title": "Work", "site": url, "items": [event], "complete": True}
+        fresh = {"title": "Work", "site": url, "items": [], "events": [event], "complete": True}
         with patch.object(server.caldav, "fetch", return_value=fresh), \
                 patch.object(server.feeds, "discover") as discover:
             self.assertIsNone(server.subscribe(url))
         discover.assert_not_called()
-        self.assertEqual(server.subscriptions[url]["items"][0]["calendar_kind"], "event")
+        self.assertEqual(server.subscriptions[url]["events"], [event])
+        self.assertEqual(server.subscriptions[url]["items"], [])
         self.assertGreater(server.subscriptions[url]["fetched"], 0)
+
+    def test_source_is_found_once_and_saved(self):
+        url = "https://calendar.example/work/"
+        fresh = {"title": "Work", "site": url, "items": [], "events": [], "complete": True}
+        with patch.object(server.caldav, "fetch", return_value=fresh) as fetch, \
+                patch.object(server.feeds, "discover") as discover:
+            self.assertIsNone(server.subscribe(url))
+            server.refresh_subscription(url, force=True)
+        self.assertEqual(server.subscriptions[url]["source"], "caldav")
+        self.assertEqual(fetch.call_count, 2)
+        discover.assert_not_called()
+
+    def test_saved_subscriptions_get_their_source_from_what_was_saved(self):
+        self.refresh({"title": "Example", "items": [copy.deepcopy(self.post)]})
+        self.assertEqual(server.subscriptions[self.url]["source"], "feed")
+        self.assertEqual(server.known_source("https://x.example/", {"page": True}), "page")
+        self.assertEqual(server.known_source("https://x.example/", {"items": [{"url": "u", "jellyfin": True}]}), "jellyfin")
+        self.assertEqual(server.known_source("https://x.example/", {"events": [{}]}), "caldav")
+        self.assertEqual(server.known_source("https://tv.nrk.no/serie/skam", {}), "nrk")
+        self.assertIsNone(server.known_source("https://x.example/", {}))
+
+    def test_vanished_feed_falls_back_to_reading_the_page(self):
+        page = {"title": "Example", "page": True, "items": [copy.deepcopy(self.post)]}
+        with patch.object(server.feeds, "fetch", side_effect=server.feeds.NoFeed("gone")), \
+                patch.object(server.pages, "fetch", return_value=page):
+            server.refresh_subscription(self.url)
+        self.assertEqual(server.subscriptions[self.url]["source"], "page")
 
     def test_caldav_login_is_loaded_server_side_and_passed_to_fetch(self):
         url = "https://calendar.example/work/"
@@ -160,10 +188,45 @@ class FeedCacheTests(unittest.TestCase):
     def test_expired_cache_reranks(self):
         with patch.object(ranking, "rank", wraps=ranking.rank) as rank:
             server.feed("score")
-            for key, value in list(server.ranked_cache.items()):
-                server.ranked_cache[key] = (0, *value[1:])  # age the entry, keep the rest
+            for cached in server.ranked_cache.values():
+                cached.built = 0  # age the entry, keep the rest
             server.feed("score")
         self.assertEqual(rank.call_count, 2)
+
+    def test_per_item_files_move_into_state_json(self):
+        data = server.STATE_FILE.parent
+        (data / "added.json").write_text('{"a": 1}')
+        (data / "viewed.json").write_text('{"a": 2, "b": 3}')
+        (data / "skipped.json").write_text('{"b": 4}')
+        (data / "colors.json").write_text('{"a": "green"}')
+        server.load_state()
+        self.assertEqual(server.load_json(server.STATE_FILE), {"version": 1, "items": {
+            "a": {"added": 1, "viewed": 2, "color": "green"}, "b": {"viewed": 3, "skipped": 4}}})
+        self.assertFalse((data / "viewed.json").exists())
+        self.assertTrue((data / "viewed.json.bak").exists())
+        for values in (server.added, server.viewed, server.skipped, server.colors):
+            values.clear()
+        server.load_state()  # now from state.json
+        self.assertEqual((server.added, server.viewed, server.skipped, server.colors),
+                         ({"a": 1}, {"a": 2, "b": 3}, {"b": 4}, {"a": "green"}))
+
+    def test_white_skips_in_one_request(self):
+        self.assertTrue(server.set_color(self.post["url"], "green"))
+        self.assertTrue(server.set_color(self.post["url"], "white"))
+        self.assertNotIn(self.post["url"], server.colors)
+        self.assertIn(self.post["url"], server.skipped)
+        saved = server.load_json(server.STATE_FILE)["items"][self.post["url"]]
+        self.assertEqual(set(saved), {"skipped"})
+
+    def test_settings_are_saved_with_their_version_and_served_with_limits(self):
+        self.assertIsNone(server.save_settings(dict(ranking.DEFAULT_TERMS, task_bonus=5)))
+        saved = server.load_json(server.SETTINGS_FILE)
+        self.assertEqual(saved["version"], server.SETTINGS_VERSION)
+        server.load_settings()  # task_bonus is the fixed term here, not the old deadline ramp
+        self.assertEqual((ranking.TERMS["task_bonus"], ranking.TERMS["task_deadline_bonus"]), (5, 200))
+        limits = server.settings()["limits"]
+        self.assertEqual(limits["seen_bonus"], {"min": -ranking.LIMIT, "max": ranking.LIMIT, "integer": False})
+        self.assertEqual(limits["enrich_count"], {"min": 0, "max": 100, "integer": True})
 
     def test_saved_settings_ignore_removed_tag_similarity(self):
         server.save_json(server.SETTINGS_FILE, {"terms": dict(ranking.DEFAULT_TERMS, tag_similarity=99)})
@@ -190,7 +253,7 @@ class FeedCacheTests(unittest.TestCase):
 
         def rank_and_change(*args, **kwargs):
             result = original_rank(*args, **kwargs)
-            server.save_json(server.COLORS_FILE, {})
+            server.save_state()
             return result
 
         with patch.object(ranking, "rank", side_effect=rank_and_change):
@@ -210,7 +273,7 @@ class FeedCacheTests(unittest.TestCase):
         server.subscriptions[self.url]['items'] = [dict(self.post, url=f'https://example.com/{i}') for i in range(20)]
         with patch.object(ranking, 'rank', wraps=ranking.rank) as rank:
             first = server.feed('score', limit=2)
-            cached = next(iter(server.ranked_cache.values()))[1]
+            cached = next(iter(server.ranked_cache.values())).ranked
             self.assertEqual(len(cached.items), 2)
             self.assertEqual(first['total'], 20)
             next_page = server.feed('score', limit=5)
@@ -227,7 +290,7 @@ class FeedCacheTests(unittest.TestCase):
         result = server.feed('score', limit=10, enrich=True)
         self.assertEqual(result['total'], 40)
         self.assertEqual(len(result['items']), 10)
-        cached = next(iter(server.ranked_cache.values()))[1]
+        cached = next(iter(server.ranked_cache.values())).ranked
         self.assertEqual(len(cached.items), 30)
         self.assertEqual([call.args[0] for call in server.schedule.call_args_list],
                          [f'https://example.com/{i}' for i in range(25, 30)])

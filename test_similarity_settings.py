@@ -85,7 +85,7 @@ class SimilaritySettingsTests(unittest.TestCase):
              'published': now - 15 * 86400, 'first_seen': now, 'estimated_minutes': 40},
         ]
         with contextlib.ExitStack() as stack:
-            for name in ['LINKS_FILE', 'FEEDS_FILE', 'ADDED_FILE']:
+            for name in ['LINKS_FILE', 'FEEDS_FILE', 'STATE_FILE']:
                 stack.enter_context(patch.object(server, name, root / name))
             server.FEEDS_FILE.write_text(sub)
             for name in ['cache', 'added', 'viewed', 'skipped', 'colors', 'ranked_cache']:
@@ -149,9 +149,13 @@ class SimilaritySettingsTests(unittest.TestCase):
                     html = response.read().decode()
                 self.assertIn(f'ContentFeed · v{server.VERSION}', html)
                 self.assertNotIn('{{VERSION}}', html)
-                self.assertNotIn('{{COMMIT}}', html)
                 if server.COMMIT:
                     self.assertIn(f'v{server.VERSION} ({server.COMMIT})', html)
+                    self.assertRegex(server.VERSION, r'^\d+\.\d+\.\d+$')  # major.minor.commits
+                self.assertIn('<script src="/settings.js"></script>', html)
+                with urllib.request.urlopen(base + '/settings.js', timeout=5) as response:
+                    self.assertEqual(response.headers['Content-Type'], 'text/javascript; charset=utf-8')
+                    html = response.read().decode()  # the score panel's settings
                 self.assertIn('label: "Publish time similarity"', html)
                 self.assertIn('label: "Content length similarity"', html)
                 self.assertIn('label: "Title similarity"', html)

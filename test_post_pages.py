@@ -19,7 +19,7 @@ class PostPageTests(unittest.TestCase):
         stack = contextlib.ExitStack()
         self.addCleanup(stack.close)
         root = Path(stack.enter_context(tempfile.TemporaryDirectory()))
-        for name in ('LINKS_FILE', 'FEEDS_FILE', 'ADDED_FILE', 'VIEWED_FILE', 'COLORS_FILE', 'SKIPPED_FILE'):
+        for name in ('LINKS_FILE', 'FEEDS_FILE', 'STATE_FILE'):
             stack.enter_context(patch.object(server, name, root / name))
         for name in ('subscriptions', 'cache', 'added', 'viewed', 'skipped', 'colors', 'ranked_cache'):
             stack.enter_context(patch.object(server, name, {}))
@@ -36,7 +36,7 @@ class PostPageTests(unittest.TestCase):
         self.url = self.posts[1]['url']
 
     def page(self, url=None, limit=300, **kwargs):
-        return server.ranked_feed('score', limit, post_url=url or self.url, **kwargs)
+        return server.feed('score', limit, post_url=url or self.url, **kwargs)
 
     def urls(self, items):
         return [p['url'] for p in items]
@@ -47,32 +47,32 @@ class PostPageTests(unittest.TestCase):
         server.subscriptions[other] = {'title': 'Other', 'items': [dict(self.posts[0], url='https://other.example/post')]}
         # A link also present in the subscription must still appear on its page.
         server.LINKS_FILE.write_text(self.posts[0]['url'])
-        page = server.ranked_feed('score', 2, subscription_url=self.sub)
+        page = server.feed('score', 2, subscription_url=self.sub)
         self.assertEqual(page['total'], 3)
         self.assertEqual(len(page['items']), 2)
         self.assertTrue(all(p['sub'] == self.sub for p in page['items']))
-        full = server.ranked_feed('score', 300, subscription_url=self.sub)
+        full = server.feed('score', 300, subscription_url=self.sub)
         self.assertEqual(set(self.urls(full['items'])), set(self.urls(self.posts)))
         self.assertEqual(server.viewed, {})
 
     def test_subscription_feed_missing_and_empty(self):
-        self.assertEqual(server.ranked_feed('score', 300, subscription_url='missing'),
+        self.assertEqual(server.feed('score', 300, subscription_url='missing'),
                          {'error': 'Subscription not found'})
         server.subscriptions[self.sub]['items'] = []
-        page = server.ranked_feed('score', 300, subscription_url=self.sub)
+        page = server.feed('score', 300, subscription_url=self.sub)
         self.assertEqual(page['total'], 0)
         self.assertEqual(page['items'], [])
 
     def test_search_filters_before_limit_and_keeps_caches_separate(self):
         self.posts[2]['description'] = 'Rare Needle'
-        result = server.ranked_feed('score', 1, search='rare NEEDLE')
+        result = server.feed('score', 1, search='rare NEEDLE')
         self.assertEqual(result['total'], 1)
         self.assertEqual(self.urls(result['items']), [self.posts[2]['url']])
         self.assertEqual(self.page(search='rare NEEDLE')['item']['url'], self.url)
-        self.assertEqual(server.ranked_feed('score', 1, search='rare NEEDLE')['total'], 1)
-        self.assertEqual(server.ranked_feed('score', 1)['total'], 3)
-        self.assertEqual(server.ranked_feed('score', 1, search='absent')['total'], 0)
-        self.assertEqual(server.ranked_feed('score', 1, subscription_url=self.sub, search='needle')['total'], 1)
+        self.assertEqual(server.feed('score', 1, search='rare NEEDLE')['total'], 1)
+        self.assertEqual(server.feed('score', 1)['total'], 3)
+        self.assertEqual(server.feed('score', 1, search='absent')['total'], 0)
+        self.assertEqual(server.feed('score', 1, subscription_url=self.sub, search='needle')['total'], 1)
 
     def test_post_search_keeps_target_and_filters_related_posts(self):
         page = self.page(search='Part 1', limit=1)
@@ -108,33 +108,33 @@ class PostPageTests(unittest.TestCase):
                    title=f'Show 2 Ep {i}', first_seen=100, published=i * 100) for i in (2, 1)]
         server.subscriptions[self.sub]['items'] = s1 + s2
 
-        page = server.ranked_feed('score', 300, subscription_url=self.sub)
+        page = server.feed('score', 300, subscription_url=self.sub)
         self.assertEqual(page['next_up'], [])
 
         server.viewed[s1[2]['url']] = 100  # Ep 1
         server.viewed[s2[1]['url']] = 110  # Ep 1
         server.ranked_cache.clear()
 
-        page = server.ranked_feed('score', 300, subscription_url=self.sub)
+        page = server.feed('score', 300, subscription_url=self.sub)
         self.assertEqual(set(self.urls(page['next_up'])), {s1[1]['url'], s2[0]['url']})
         for p in page['next_up']:
             self.assertTrue(any('next up' in r['label'] for r in p['reasons']))
 
-        limited = server.ranked_feed('score', 1, subscription_url=self.sub)
+        limited = server.feed('score', 1, subscription_url=self.sub)
         self.assertEqual(len(limited['items']), 1)
         self.assertEqual(set(self.urls(limited['next_up'])), {s1[1]['url'], s2[0]['url']})
 
-        searched = server.ranked_feed('score', 10, subscription_url=self.sub, search='Show 1')
+        searched = server.feed('score', 10, subscription_url=self.sub, search='Show 1')
         self.assertEqual(self.urls(searched['next_up']), [s1[1]['url']])
 
         server.skipped[s1[1]['url']] = 200
         server.ranked_cache.clear()
-        page = server.ranked_feed('score', 300, subscription_url=self.sub)
+        page = server.feed('score', 300, subscription_url=self.sub)
         self.assertEqual(self.urls(page['next_up']), [s2[0]['url']])
 
         server.FEEDS_FILE.write_text(self.sub + ' latest')
         server.ranked_cache.clear()
-        page = server.ranked_feed('score', 300, subscription_url=self.sub)
+        page = server.feed('score', 300, subscription_url=self.sub)
         self.assertEqual(page['next_up'], [])
 
     def test_numbered_series_order_and_similarity(self):
@@ -251,6 +251,8 @@ class PostPageTests(unittest.TestCase):
             self.assertEqual(error.exception.code, code)
         with urllib.request.urlopen(base + '/post?' + urllib.parse.urlencode({'url': self.url})) as response:
             self.assertEqual(response.status, 200)
+            self.assertIn('<script src="/feed.js"></script>', response.read().decode())
+        with urllib.request.urlopen(base + '/feed.js') as response:
             self.assertIn('Post & related', response.read().decode())
         sub_query = '/api/subscription?' + urllib.parse.urlencode({'url': self.sub, 'view': 'next-up'})
         with urllib.request.urlopen(base + sub_query) as response:
@@ -259,4 +261,4 @@ class PostPageTests(unittest.TestCase):
         self.assertEqual(page['items'], page['next_up'])
         with urllib.request.urlopen(base + '/subscription/next-up?' + urllib.parse.urlencode({'url': self.sub})) as response:
             self.assertEqual(response.status, 200)
-            self.assertIn('Next up', response.read().decode())
+            self.assertIn('<script src="/feed.js"></script>', response.read().decode())

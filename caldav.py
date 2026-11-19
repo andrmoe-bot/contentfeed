@@ -11,9 +11,9 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import outbound
-from icalendar_parser import ICalendarError, parse_calendar_data, parse_calendar_resource
+from icalendar_parser import ICalendarError, calendar_result, parse_calendar_data, parse_calendar_resource
 
-USER_AGENT = "Mozilla/5.0 (compatible; ContentFeed/1.0)"
+USER_AGENT = outbound.USER_AGENT
 TIMEOUT = 10
 MAX_BYTES = 20_000_000
 READ_ONLY_METHODS = {"GET", "PROPFIND", "REPORT"}
@@ -224,9 +224,7 @@ def fetch(url, login=None):
             data = response.find(f".//{{{CAL}}}calendar-data")
             if data is not None and data.text:
                 items.extend(parse_calendar_resource(data.text, resource_url))
-    items.sort(key=lambda item: item.get("published") or 0, reverse=True)
-    return {"title": title or urllib.parse.unquote(urllib.parse.urlsplit(clean_url).path.rstrip("/").split("/")[-1]) or "Calendar",
-            "site": clean_url, "icon": None, "items": items[:1000], "complete": True}
+    return calendar_result(items, title, clean_url)
 
 
 def _parse_calendar_data(body, resource_url):

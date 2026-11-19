@@ -20,7 +20,7 @@ import outbound
 
 from content_length import duration_minutes, reading_minutes, youtube_minutes
 
-USER_AGENT = "Mozilla/5.0 (compatible; ContentFeed/1.0)"
+USER_AGENT = outbound.USER_AGENT
 FETCH_TIMEOUT = 10
 MAX_FEED_BYTES = 20_000_000  # some blogs put every whole post in their feed
 MAX_ITEMS_PER_FEED = 50

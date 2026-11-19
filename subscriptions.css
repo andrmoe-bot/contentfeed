@@ -1,0 +1,32 @@
+/* The Subscriptions page */
+.tools { max-width: 720px; margin: 0 auto; padding: 0 16px 12px; display: flex; gap: 8px; flex-wrap: wrap; }
+.tools input { flex: 1 1 200px; }
+.subscription-hint { flex-basis: 100%; margin: 0; color: var(--muted); font-size: 13px; }
+select {
+  padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border);
+  background: var(--card); color: var(--text); font: inherit;
+}
+main { gap: 12px; }
+.sub {
+  background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+  padding: 12px 16px; display: grid; gap: 8px; min-width: 0;
+}
+.sub.failed { border-color: var(--error); }
+.title { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.title img { width: 20px; height: 20px; border-radius: 4px; flex: none; }
+.title a { color: inherit; font-weight: 600; font-size: 16px; text-decoration: none; overflow-wrap: anywhere; }
+.title a:hover { text-decoration: underline; }
+.addr, .stats { font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+.addr a, .stats a { color: inherit; }
+.error { font-size: 13px; color: var(--error); overflow-wrap: anywhere; }
+.tag-edit { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.tag-edit label { font-size: 13px; color: var(--muted); }
+.tag-edit input { flex: 1 1 180px; padding: 6px 8px; }
+.actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.actions button, .tag-edit button, .red-edit button { padding: 6px 10px; font-size: 14px; }
+.red-edit { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; font-size: 13px; color: var(--muted); }
+.red-edit input { width: 5em; padding: 6px 8px; }
+.red-edit select { padding: 6px 8px; font-size: 14px; }
+button:disabled { opacity: .5; cursor: default; }
+button.danger { color: var(--error); }
+.empty { text-align: center; color: var(--muted); padding: 48px 0; }
