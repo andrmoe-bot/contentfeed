@@ -18,6 +18,19 @@ class CalendarScoringTests(unittest.TestCase):
             reasons = ranking.score(task, NOW, dict(ranking.DEFAULT_TERMS, task_bonus=value))
             self.assertIn(("task", value), reasons)
 
+    def test_task_priority_scales_from_priority_1_and_defaults_to_off(self):
+        self.assertEqual(ranking.DEFAULT_TERMS["task_priority_bonus"], 0)
+        terms = dict(ranking.DEFAULT_TERMS, task_deadline_bonus=0, task_priority_bonus=90)
+        for priority, expected in ((1, 90), (5, 50), (9, 10), (None, 0), (0, 0)):
+            task = dict(item("task"), calendar_kind="task", priority=priority)
+            reasons = ranking.score(task, NOW, terms)
+            self.assertEqual(sum(points for _, points in reasons), expected)
+            if expected:
+                self.assertEqual(reasons, [(f"priority {priority}", expected)])
+        task = dict(item("task"), calendar_kind="task", priority=1)
+        self.assertEqual(ranking.score(task, NOW, ranking.DEFAULT_TERMS), [])
+        self.assertEqual(ranking.score(task, NOW, dict(terms, task_priority_bonus=-90)), [("priority 1", -90)])
+
     def test_task_recent_similarity_uses_tasks_from_its_calendar_only(self):
         task = dict(item("task", "calendar"), calendar_kind="task")
         opened_task = dict(item("opened-task", "calendar", age=1), calendar_kind="task")

@@ -21,6 +21,8 @@ const SETTINGS = [
     hint: "Maximum points for a task due now. The bonus ramps from 0 to this amount during the final 30 days before its deadline. Tasks in the same calendar can also get the similar-posts-above penalty." },
   { key: "task_bonus", label: "Task", before: "", after: "points",
     hint: "Fixed points added to every task, independent of its deadline. Below 0: a penalty. Default: 0." },
+  { key: "task_priority_bonus", label: "Task priority", before: "", after: "points at priority 1",
+    hint: "Points for a task by its calendar priority: all of them at priority 1 (highest), scaling down by a ninth per level to a ninth of them at priority 9 (lowest). Many apps use 1 for high, 5 for medium and 9 for low. Tasks without a priority get none. Below 0: a penalty. Default: 0." },
   { key: "video_bonus", label: "Video", before: "", after: "points",
     hint: "For YouTube, Jellyfin and NRK TV videos. Below 0: a penalty." },
   { key: "youtube_shorts_bonus", label: "YouTube Shorts", before: "", after: "points",
@@ -175,6 +177,7 @@ function showFormula() {
     ["above_similarity_penalty", `${plus(w.above_similarity_penalty)} × summed similarity to posts above`],
     ["task_deadline_bonus", `${plus(w.task_deadline_bonus)} × task urgency (ramps over the final 30 days)`],
     ["task_bonus", `${plus(w.task_bonus)} if task`],
+    ["task_priority_bonus", `${plus(w.task_priority_bonus)} × (10 − task priority) / 9`],
   ].filter(([key]) => shownTerms.has(key)).map(([, text]) => text).join("");
   const next = shownTerms.has("next_up_bonus") ? `next up: ${fmt(w.next_up_bonus)} · ` : "";
   const opened = shownTerms.has("seen_bonus") ? `opened: ${fmt(w.seen_bonus)} · ` : "";
