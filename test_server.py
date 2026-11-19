@@ -72,6 +72,33 @@ class FeedCacheTests(unittest.TestCase):
         self.assertEqual(server.subscriptions[url]["items"], [])
         self.assertGreater(server.subscriptions[url]["fetched"], 0)
 
+    def test_source_is_found_once_and_saved(self):
+        url = "https://calendar.example/work/"
+        fresh = {"title": "Work", "site": url, "items": [], "events": [], "complete": True}
+        with patch.object(server.caldav, "fetch", return_value=fresh) as fetch, \
+                patch.object(server.feeds, "discover") as discover:
+            self.assertIsNone(server.subscribe(url))
+            server.refresh_subscription(url, force=True)
+        self.assertEqual(server.subscriptions[url]["source"], "caldav")
+        self.assertEqual(fetch.call_count, 2)
+        discover.assert_not_called()
+
+    def test_saved_subscriptions_get_their_source_from_what_was_saved(self):
+        self.refresh({"title": "Example", "items": [copy.deepcopy(self.post)]})
+        self.assertEqual(server.subscriptions[self.url]["source"], "feed")
+        self.assertEqual(server.known_source("https://x.example/", {"page": True}), "page")
+        self.assertEqual(server.known_source("https://x.example/", {"items": [{"url": "u", "jellyfin": True}]}), "jellyfin")
+        self.assertEqual(server.known_source("https://x.example/", {"events": [{}]}), "caldav")
+        self.assertEqual(server.known_source("https://tv.nrk.no/serie/skam", {}), "nrk")
+        self.assertIsNone(server.known_source("https://x.example/", {}))
+
+    def test_vanished_feed_falls_back_to_reading_the_page(self):
+        page = {"title": "Example", "page": True, "items": [copy.deepcopy(self.post)]}
+        with patch.object(server.feeds, "fetch", side_effect=server.feeds.NoFeed("gone")), \
+                patch.object(server.pages, "fetch", return_value=page):
+            server.refresh_subscription(self.url)
+        self.assertEqual(server.subscriptions[self.url]["source"], "page")
+
     def test_caldav_login_is_loaded_server_side_and_passed_to_fetch(self):
         url = "https://calendar.example/work/"
         login = {"username": "reader", "password": "secret"}

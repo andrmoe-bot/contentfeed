@@ -308,44 +308,97 @@ def merge_posts(old: list[dict], new: list[dict], now: float) -> list[dict]:
     return posts[:MAX_POSTS_KEPT]
 
 
+# Where a subscription's posts come from, saved as its "source" once found. Subscriptions saved before
+# sources were recorded get theirs from what was saved about them (see known_source).
+SOURCES = ("nrk", "jellyfin", "caldav", "feed", "page")
+
+
+def known_source(url: str, old: dict) -> str | None:
+    """The subscription's source, if it has been found before."""
+    if old.get("source") in SOURCES:
+        return old["source"]
+    if nrk.series_id(url):
+        return "nrk"
+    if any(p.get("jellyfin") for p in old.get("items", [])):
+        return "jellyfin"
+    if old.get("page"):
+        return "page"
+    if old.get("feed_url"):
+        return "feed"
+    if old.get("events") or any(p.get("calendar_kind") for p in old.get("items", [])):
+        return "caldav"
+    return None
+
+
+def fetch_calendar(url: str) -> dict:
+    """A CalDAV calendar or .ics file, with its login from caldav.json. A missing login is a FeedError."""
+    logins, problem = caldav.read_logins(CALDAV_FILE)
+    try:
+        return caldav.fetch(url, caldav.login_for(url, logins))
+    except caldav.CredentialsInURL as e:
+        raise feeds.FeedError(str(e)) from e
+    except caldav.CalDAVError as e:
+        if "HTTP 401" in str(e):
+            detail = problem or f"add a username and password for this calendar to {CALDAV_FILE}"
+            raise feeds.FeedError(f"CalDAV requires a login: {detail}") from e
+        raise
+
+
+def jellyfin_login(url: str) -> dict:
+    logins, problem = jellyfin.read_logins(JELLYFIN_FILE)
+    login = jellyfin.login_for(url, logins)
+    if login is None:
+        raise feeds.FeedError(jellyfin.missing_login(url, logins, problem, JELLYFIN_FILE))
+    return login
+
+
+def fetch_source(source: str, url: str, old: dict, force: bool) -> tuple[str, dict | None]:
+    """(source, posts) from a known source; posts are None when a feed is unchanged since last time."""
+    known = {p["url"] for p in old.get("items", [])}
+    if source == "nrk":
+        return source, nrk.fetch(url, known)
+    if source == "jellyfin":
+        return source, jellyfin.fetch(url, jellyfin_login(url))
+    if source == "page":
+        return source, pages.fetch(url, known)
+    if source == "caldav":
+        return source, fetch_calendar(url)
+    try:
+        return source, feeds.fetch(old["feed_url"], *(() if force else (old.get("etag"), old.get("modified"))))
+    except feeds.NoFeed:
+        return "page", pages.fetch(url)  # the feed is gone, so read the posts from the page
+
+
+def detect_source(url: str) -> tuple[str, dict]:
+    """(source, posts) for a new subscription, trying each kind of source in turn."""
+    if nrk.series_id(url):
+        return "nrk", nrk.fetch(url)
+    logins, problem = jellyfin.read_logins(JELLYFIN_FILE)
+    login = jellyfin.login_for(url, logins)
+    if login is not None:
+        return "jellyfin", jellyfin.fetch(url, login)
+    try:
+        try:
+            return "caldav", fetch_calendar(url)
+        except caldav.CalDAVError:
+            pass  # not a calendar
+        return "feed", feeds.fetch(feeds.discover(url))
+    except feeds.FeedError as e:
+        if jellyfin.is_jellyfin(url):
+            raise feeds.FeedError(jellyfin.missing_login(url, logins, problem, JELLYFIN_FILE)) from e
+        if not isinstance(e, feeds.NoFeed):
+            raise
+        return "page", pages.fetch(url)  # no feed, so read the posts from the page
+
+
 @job("feed:")
 def refresh_subscription(url: str, force: bool = False):
     """Check one subscription and merge its posts, keeping posts that have left the feed."""
     with lock:
         old = dict(subscriptions.get(url, {}))
     try:
-        logins, problem = jellyfin.read_logins(JELLYFIN_FILE)
-        login = jellyfin.login_for(url, logins)
-        if nrk.series_id(url):
-            fresh = nrk.fetch(url, {p["url"] for p in old.get("items", [])})
-        elif login is not None:
-            fresh = jellyfin.fetch(url, login)
-        elif old.get("page"):  # a page without a feed, read before
-            fresh = pages.fetch(url, {p["url"] for p in old.get("items", [])})
-        else:
-            try:
-                if old.get("feed_url"):
-                    feed_url = old["feed_url"]
-                    fresh = feeds.fetch(feed_url, *(() if force else (old.get("etag"), old.get("modified"))))
-                else:
-                    try:
-                        caldav_logins, caldav_problem = caldav.read_logins(CALDAV_FILE)
-                        login = caldav.login_for(url, caldav_logins)
-                        fresh = caldav.fetch(url, login)
-                    except caldav.CredentialsInURL as e:
-                        raise feeds.FeedError(str(e)) from e
-                    except caldav.CalDAVError as e:
-                        if "HTTP 401" in str(e):
-                            detail = caldav_problem or f"add a username and password for this calendar to {CALDAV_FILE}"
-                            raise feeds.FeedError(f"CalDAV requires a login: {detail}") from e
-                        feed_url = feeds.discover(url)
-                        fresh = feeds.fetch(feed_url, *(() if force else (old.get("etag"), old.get("modified"))))
-            except feeds.FeedError as e:
-                if jellyfin.is_jellyfin(url):
-                    raise feeds.FeedError(jellyfin.missing_login(url, logins, problem, JELLYFIN_FILE)) from e
-                if not isinstance(e, feeds.NoFeed):
-                    raise
-                fresh = pages.fetch(url)  # no feed, so read the posts from the page
+        source = known_source(url, old)
+        source, fresh = fetch_source(source, url, old, force) if source else detect_source(url)
     except Exception as e:  # keep the old posts; show the error in the subscriptions list
         with lock:
             subscriptions[url] = {**old, "error": str(e)[:600], "fetched": time.time()}
@@ -353,13 +406,13 @@ def refresh_subscription(url: str, force: bool = False):
         return
     now = time.time()
     if fresh is None:  # not modified since last check
-        entry = {**old, "fetched": now}
+        entry = {**old, "fetched": now, "source": source}
     else:
         kept = old.get("items", [])
         if fresh.get("complete"):  # the source lists everything it has, so posts missing from it are gone
             current = {post_key(p) for p in fresh["items"]}
             kept = [p for p in kept if post_key(p) in current]
-        entry = {**old, **fresh, "items": merge_posts(kept, fresh["items"], now), "fetched": now}
+        entry = {**old, **fresh, "items": merge_posts(kept, fresh["items"], now), "fetched": now, "source": source}
     entry.pop("error", None)
     with lock:
         affects_feed = any(old.get(field) != entry.get(field) for field in ("items", "events", "title", "icon"))
@@ -464,7 +517,8 @@ def subscription_status() -> list[dict]:
                 "site": s.get("site"),
                 "icon": s.get("icon"),
                 "feed_url": s.get("feed_url"),
-                "page": bool(s.get("page")),
+                "page": s.get("source") == "page" or bool(s.get("page")),
+                "source": s.get("source"),
                 "posts": len(s.get("items", [])),
                 "opened": sum(state["last_viewed"] is not None and not state["skipped"] for state in states),
                 "skipped": sum(state["skipped"] for state in states),
