@@ -46,10 +46,10 @@ how you run the feed:
 It holds:
 
 - `links.txt` and `feeds.txt`: your links and subscriptions (created with instructions on first run)
-- `added.json`: when each link or post was first seen
-- `viewed.json`: when you last opened each item
-- `skipped.json`: when you last skipped each item (the white dot)
-- `colors.json`: the items you marked green or red
+- `state.json`: for each link or post, when it was first seen, when you last opened or skipped it
+  (the white dot), and the color you gave it. Older versions kept these in `added.json`,
+  `viewed.json`, `skipped.json` and `colors.json`; they're moved into `state.json` at startup and the
+  old files kept as `.bak`.
 - `settings.json`: your score settings from the feed's score panel, if you changed them
 - `stop.json`: the stop-watching timer, if you set one (see Stop watching)
 - `jellyfin.json`: logins for Jellyfin servers you subscribe to (see Jellyfin), if any

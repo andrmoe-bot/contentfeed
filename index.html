@@ -404,8 +404,7 @@ async function setColor(item, color) {
   stay.add(item.url);
   if (skip) Object.assign(item, { last_viewed: Date.now() / 1000, skipped: true });
   for (const c of cards.values()) if (c.url === item.url) showViewState(c.el, item);  // show the new color right away
-  await post("/api/color", { url: item.url, color }).catch(() => {});
-  if (skip) await post("/api/skipped", { url: item.url }).catch(() => {});
+  await post("/api/color", { url: item.url, color }).catch(() => {});  // white also skips it
   load();
 }
 

@@ -91,8 +91,8 @@ class StopTimerServerTests(unittest.TestCase):
         self.stack = contextlib.ExitStack()
         self.addCleanup(self.stack.close)
         root = Path(self.stack.enter_context(tempfile.TemporaryDirectory()))
-        for name in ("LINKS_FILE", "FEEDS_FILE", "CACHE_FILE", "ADDED_FILE", "FEED_CACHE_FILE",
-                     "VIEWED_FILE", "SKIPPED_FILE", "COLORS_FILE", "SETTINGS_FILE", "JELLYFIN_FILE",
+        for name in ("LINKS_FILE", "FEEDS_FILE", "CACHE_FILE", "FEED_CACHE_FILE",
+                     "STATE_FILE", "SETTINGS_FILE", "JELLYFIN_FILE",
                      "CALDAV_FILE", "STOP_FILE"):
             self.stack.enter_context(patch.object(server, name, root / name, create=True))
         for name in ("subscriptions", "cache", "added", "viewed", "skipped", "colors", "ranked_cache", "stop"):

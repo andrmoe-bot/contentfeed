@@ -85,7 +85,7 @@ class SimilaritySettingsTests(unittest.TestCase):
              'published': now - 15 * 86400, 'first_seen': now, 'estimated_minutes': 40},
         ]
         with contextlib.ExitStack() as stack:
-            for name in ['LINKS_FILE', 'FEEDS_FILE', 'ADDED_FILE']:
+            for name in ['LINKS_FILE', 'FEEDS_FILE', 'STATE_FILE']:
                 stack.enter_context(patch.object(server, name, root / name))
             server.FEEDS_FILE.write_text(sub)
             for name in ['cache', 'added', 'viewed', 'skipped', 'colors', 'ranked_cache']:

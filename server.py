@@ -58,7 +58,14 @@ def version_label() -> str:
 
 DEFAULT_DATA_DIR = ROOT / "data"
 # Data files; set_data_dir() points these into the data directory at startup.
-LINKS_FILE = FEEDS_FILE = CACHE_FILE = ADDED_FILE = FEED_CACHE_FILE = VIEWED_FILE = SKIPPED_FILE = COLORS_FILE = SETTINGS_FILE = JELLYFIN_FILE = CALDAV_FILE = STOP_FILE = Path()
+DATA_FILES = {
+    "LINKS_FILE": "links.txt", "FEEDS_FILE": "feeds.txt", "CACHE_FILE": "cache.json", "FEED_CACHE_FILE": "feeds.json",
+    "STATE_FILE": "state.json", "SETTINGS_FILE": "settings.json", "JELLYFIN_FILE": "jellyfin.json",
+    "CALDAV_FILE": "caldav.json", "STOP_FILE": "stop.json",
+}
+LINKS_FILE = FEEDS_FILE = CACHE_FILE = FEED_CACHE_FILE = STATE_FILE = SETTINGS_FILE = JELLYFIN_FILE = CALDAV_FILE = STOP_FILE = Path()
+# Before state.json, each of its fields had a file of its own, {url: value}.
+OLD_STATE_FILES = {"added": "added.json", "viewed": "viewed.json", "skipped": "skipped.json", "color": "colors.json"}
 TEMPLATES = {
     "links.txt": """\
 # One link per line, optionally followed by tags: https://example.com music longread
@@ -95,6 +102,7 @@ OLDER_RETRY = 6 * 3600  # seconds before trying again to load a channel's older 
 
 lock = threading.Lock()
 cache: dict[str, dict] = {}
+# What you did with each item, saved together in state.json (see save_state):
 added: dict[str, float] = {}  # url -> unix time the server first saw the link
 viewed: dict[str, float] = {}  # url -> unix time you last opened it
 skipped: dict[str, float] = {}  # url -> unix time you last skipped it (the white dot)
@@ -109,13 +117,8 @@ executor = ThreadPoolExecutor(max_workers=8)
 
 def set_data_dir(path: Path):
     """Use path for all data files, creating it and the starter lists if they don't exist yet."""
-    global LINKS_FILE, FEEDS_FILE, CACHE_FILE, ADDED_FILE, FEED_CACHE_FILE, VIEWED_FILE, SKIPPED_FILE, COLORS_FILE, SETTINGS_FILE, JELLYFIN_FILE, CALDAV_FILE, STOP_FILE
     path.mkdir(parents=True, exist_ok=True)
-    LINKS_FILE, FEEDS_FILE = path / "links.txt", path / "feeds.txt"
-    CACHE_FILE, ADDED_FILE, FEED_CACHE_FILE = path / "cache.json", path / "added.json", path / "feeds.json"
-    VIEWED_FILE, SKIPPED_FILE, COLORS_FILE = path / "viewed.json", path / "skipped.json", path / "colors.json"
-    SETTINGS_FILE, JELLYFIN_FILE, CALDAV_FILE = path / "settings.json", path / "jellyfin.json", path / "caldav.json"
-    STOP_FILE = path / "stop.json"
+    globals().update({name: path / file for name, file in DATA_FILES.items()})
     for name, text in TEMPLATES.items():
         if not (path / name).exists():
             (path / name).write_text(text, encoding="utf-8")
@@ -205,6 +208,38 @@ def load_json(path: Path) -> dict:
         return json.loads(path.read_text(encoding="utf-8"))
     except (FileNotFoundError, json.JSONDecodeError):
         return {}
+
+
+def save_state(*, affects_feed: bool = True):
+    """Save what you did with each item to state.json, as
+    {"version": 1, "items": {url: {"added": time, "viewed": time, "skipped": time, "color": color}}},
+    each field only when it has a value."""
+    with lock:
+        items: dict[str, dict] = {}
+        for field, values in (("added", added), ("viewed", viewed), ("skipped", skipped), ("color", colors)):
+            for url, value in values.items():
+                items.setdefault(url, {})[field] = value
+    save_json(STATE_FILE, {"version": 1, "items": items}, affects_feed=affects_feed)
+
+
+def load_state():
+    """Read state.json, or the files it replaced, which are kept as .bak once it's written."""
+    maps = {"added": added, "viewed": viewed, "skipped": skipped, "color": colors}
+    if STATE_FILE.exists():
+        for url, fields in load_json(STATE_FILE).get("items", {}).items():
+            for field, value in fields.items():
+                if field in maps:
+                    maps[field][url] = value
+        return
+    old = {field: STATE_FILE.parent / name for field, name in OLD_STATE_FILES.items()}
+    for field, path in old.items():
+        maps[field].update(load_json(path))
+    if any(path.exists() for path in old.values()):
+        save_state(affects_feed=False)
+        for path in old.values():
+            if path.exists():
+                path.replace(path.with_name(path.name + ".bak"))
+        print(f"Moved added.json, viewed.json, skipped.json and colors.json into {STATE_FILE}.")
 
 
 def migrate_caldav_url_credentials() -> int:
@@ -577,9 +612,7 @@ def unsubscribe(url: str) -> bool:
             skipped.pop(post, None)
             colors.pop(post, None)
     save_json(FEED_CACHE_FILE, subscriptions)
-    save_json(VIEWED_FILE, viewed)
-    save_json(SKIPPED_FILE, skipped)
-    save_json(COLORS_FILE, colors)
+    save_state()
     return True
 
 
@@ -647,7 +680,7 @@ def set_viewed(url: str) -> bool:
         video = next((p["youtube"] for s in subscriptions.values() for p in s.get("items", [])
                       if p["url"] == url and p.get("youtube")
                       and (p.get("date_approx") or not p.get("estimated_minutes"))), None)
-    save_json(VIEWED_FILE, viewed)
+    save_state()
     if video:
         schedule_video_metadata(video)
     return True
@@ -680,25 +713,17 @@ def schedule_video_metadata(video: str):
     submit_once(update_video_metadata, video)
 
 
-def set_skipped(url: str) -> bool:
-    """Record that you skipped url now. Only for items in the feed."""
-    if url not in known_urls():
-        return False
-    with lock:
-        skipped[url] = time.time()
-    save_json(SKIPPED_FILE, skipped)
-    return True
-
-
 def set_color(url: str, color: str) -> bool:
+    """Give an item a color. White, the default, also skips it (see seen_at). Only for items in the feed."""
     if color not in COLORS or url not in known_urls():
         return False
     with lock:
         if color == "white":
             colors.pop(url, None)
+            skipped[url] = time.time()
         else:
             colors[url] = color
-    save_json(COLORS_FILE, colors)
+    save_state()
     return True
 
 
@@ -713,7 +738,7 @@ def mark_older_red(url: str, age: float) -> int | None:
                  if p["published"] and p["published"] < cutoff and p["url"] not in colors]
         for post in posts:
             colors[post] = "red"
-    save_json(COLORS_FILE, colors)
+    save_state()
     return len(posts)
 
 
@@ -955,7 +980,7 @@ def ranking_for(ranker: str, terms: dict, entries: dict, subs: dict, search: str
         version = state_version
         items, new = build_items(entries, subs, now)
     if new:
-        save_json(ADDED_FILE, added, affects_feed=False)
+        save_state(affects_feed=False)
     if post_url is None and search.strip():
         items = [p for p in items if matches_search(p, search)]
     ranked = ranking.rank(ranker, fitting_before_stop(items, stopping, now, post_url), now, terms, lazy=True)
@@ -1412,7 +1437,6 @@ POST_APIS = {
     "/api/subscriptions/check": lambda body: with_status(check_subscription(str(body.get("url", "")))),
     "/api/subscriptions/red": mark_red_api,
     "/api/viewed": lambda body: ok(set_viewed(str(body.get("url", "")))),
-    "/api/skipped": lambda body: ok(set_skipped(str(body.get("url", "")))),
     "/api/color": lambda body: ok(set_color(str(body.get("url", "")), str(body.get("color", "")))),
     "/api/settings": settings_api,
     "/api/stop": stop_api,
@@ -1454,16 +1478,13 @@ def main():
     feed_interval = max(args.feed_interval, 1) * 60
     set_data_dir(args.data_dir.resolve())
     cache.update(load_json(CACHE_FILE))
-    added.update(load_json(ADDED_FILE))
     subscriptions.update(load_json(FEED_CACHE_FILE))
     migrated_credentials = migrate_caldav_url_credentials()
     if migrated_credentials:
         print(f"Moved credentials out of {FEEDS_FILE} for {migrated_credentials} CalDAV subscription(s).")
     if migrate_calendar_events() | migrate_jellyfin_images():
         save_json(FEED_CACHE_FILE, subscriptions, affects_feed=False)
-    viewed.update(load_json(VIEWED_FILE))
-    skipped.update(load_json(SKIPPED_FILE))
-    colors.update(load_json(COLORS_FILE))
+    load_state()
     load_settings()
     load_stop()
     try:

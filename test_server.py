@@ -14,8 +14,8 @@ class FeedCacheTests(unittest.TestCase):
         self.stack = contextlib.ExitStack()
         self.addCleanup(self.stack.close)
         root = Path(self.stack.enter_context(tempfile.TemporaryDirectory()))
-        for name in ("LINKS_FILE", "FEEDS_FILE", "CACHE_FILE", "ADDED_FILE", "FEED_CACHE_FILE",
-                     "VIEWED_FILE", "SKIPPED_FILE", "COLORS_FILE", "SETTINGS_FILE", "JELLYFIN_FILE", "CALDAV_FILE"):
+        for name in ("LINKS_FILE", "FEEDS_FILE", "CACHE_FILE", "FEED_CACHE_FILE",
+                     "STATE_FILE", "SETTINGS_FILE", "JELLYFIN_FILE", "CALDAV_FILE"):
             self.stack.enter_context(patch.object(server, name, root / name, create=True))
         for name in ("subscriptions", "cache", "added", "viewed", "skipped", "colors", "ranked_cache"):
             self.stack.enter_context(patch.object(server, name, {}))
@@ -193,6 +193,31 @@ class FeedCacheTests(unittest.TestCase):
             server.feed("score")
         self.assertEqual(rank.call_count, 2)
 
+    def test_per_item_files_move_into_state_json(self):
+        data = server.STATE_FILE.parent
+        (data / "added.json").write_text('{"a": 1}')
+        (data / "viewed.json").write_text('{"a": 2, "b": 3}')
+        (data / "skipped.json").write_text('{"b": 4}')
+        (data / "colors.json").write_text('{"a": "green"}')
+        server.load_state()
+        self.assertEqual(server.load_json(server.STATE_FILE), {"version": 1, "items": {
+            "a": {"added": 1, "viewed": 2, "color": "green"}, "b": {"viewed": 3, "skipped": 4}}})
+        self.assertFalse((data / "viewed.json").exists())
+        self.assertTrue((data / "viewed.json.bak").exists())
+        for values in (server.added, server.viewed, server.skipped, server.colors):
+            values.clear()
+        server.load_state()  # now from state.json
+        self.assertEqual((server.added, server.viewed, server.skipped, server.colors),
+                         ({"a": 1}, {"a": 2, "b": 3}, {"b": 4}, {"a": "green"}))
+
+    def test_white_skips_in_one_request(self):
+        self.assertTrue(server.set_color(self.post["url"], "green"))
+        self.assertTrue(server.set_color(self.post["url"], "white"))
+        self.assertNotIn(self.post["url"], server.colors)
+        self.assertIn(self.post["url"], server.skipped)
+        saved = server.load_json(server.STATE_FILE)["items"][self.post["url"]]
+        self.assertEqual(set(saved), {"skipped"})
+
     def test_saved_settings_ignore_removed_tag_similarity(self):
         server.save_json(server.SETTINGS_FILE, {"terms": dict(ranking.DEFAULT_TERMS, tag_similarity=99)})
         server.load_settings()
@@ -218,7 +243,7 @@ class FeedCacheTests(unittest.TestCase):
 
         def rank_and_change(*args, **kwargs):
             result = original_rank(*args, **kwargs)
-            server.save_json(server.COLORS_FILE, {})
+            server.save_state()
             return result
 
         with patch.object(ranking, "rank", side_effect=rank_and_change):

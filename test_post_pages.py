@@ -19,7 +19,7 @@ class PostPageTests(unittest.TestCase):
         stack = contextlib.ExitStack()
         self.addCleanup(stack.close)
         root = Path(stack.enter_context(tempfile.TemporaryDirectory()))
-        for name in ('LINKS_FILE', 'FEEDS_FILE', 'ADDED_FILE', 'VIEWED_FILE', 'COLORS_FILE', 'SKIPPED_FILE'):
+        for name in ('LINKS_FILE', 'FEEDS_FILE', 'STATE_FILE'):
             stack.enter_context(patch.object(server, name, root / name))
         for name in ('subscriptions', 'cache', 'added', 'viewed', 'skipped', 'colors', 'ranked_cache'):
             stack.enter_context(patch.object(server, name, {}))
