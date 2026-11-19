@@ -205,7 +205,7 @@ class StopTimerServerTests(unittest.TestCase):
         event = {"url": self.url + "#item=dinner", "title": "Dinner", "first_seen": 1_000_000,
                  "published": start, "calendar_kind": "event", "calendar_start": start,
                  "deadline": start + 3600}
-        server.subscriptions[self.url]["items"].append(event)
+        server.subscriptions[self.url]["events"] = [event]
         server.viewed[self.long["url"]] = time.time() - 60  # you're watching the long one
         result = server.feed("score")
         self.assertTrue(result["stopped"])
@@ -218,7 +218,7 @@ class StopTimerServerTests(unittest.TestCase):
         event = {"url": self.url + "#item=dinner", "title": "Dinner", "first_seen": 1_000_000,
                  "published": start, "calendar_kind": "event", "calendar_start": start,
                  "deadline": start + 3600}
-        server.subscriptions[self.url]["items"].append(event)
+        server.subscriptions[self.url]["events"] = [event]
         result = server.ranked_feed("score", 300, post_url=self.long["url"])
         self.assertEqual(result["item"]["url"], self.long["url"])  # its page keeps the post
         self.assertTrue(result["stopped"])
@@ -230,7 +230,7 @@ class StopTimerServerTests(unittest.TestCase):
         event = {"url": self.url + "#item=dinner", "title": "Dinner", "first_seen": 1_000_000,
                  "published": t + 30, "calendar_kind": "event", "calendar_start": t + 30,
                  "deadline": t + 45}  # stop = t+30-30min, fired at t; ends at t+45
-        server.subscriptions[self.url]["items"].append(event)
+        server.subscriptions[self.url]["events"] = [event]
         with patch.object(server.time, "time", lambda: t):
             fired = server.feed("score")
             self.assertTrue(fired["stopped"])
@@ -250,7 +250,7 @@ class StopTimerServerTests(unittest.TestCase):
         event = {"url": self.url + "#item=dinner", "title": "Dinner", "first_seen": 1_000_000,
                  "published": t + 30, "calendar_kind": "event", "calendar_start": t + 30,
                  "deadline": t + 45}
-        server.subscriptions[self.url]["items"].append(event)
+        server.subscriptions[self.url]["events"] = [event]
         server.set_stop(t - 10)  # fired, and earlier than the event's own stop (t+30)
         with patch.object(server.time, "time", lambda: t):
             fired = server.feed("score")
@@ -285,7 +285,7 @@ class StopTimerServerTests(unittest.TestCase):
         event = {"url": self.url + "#item=dinner", "title": "Dinner", "first_seen": 1_000_000,
                  "published": start, "calendar_kind": "event", "calendar_start": start,
                  "deadline": start + 3600}
-        server.subscriptions[self.url]["items"].append(event)
+        server.subscriptions[self.url]["events"] = [event]
         result = server.feed("score")
         self.assertAlmostEqual(result["stop_at"], start - 30 * 60, places=3)
         self.assertFalse(result["stopped"])
@@ -299,7 +299,7 @@ class StopTimerServerTests(unittest.TestCase):
         event = {"url": self.url + "#item=dinner", "title": "Dinner", "first_seen": 1_000_000,
                  "published": start, "calendar_kind": "event", "calendar_start": start,
                  "deadline": start + 3600}
-        server.subscriptions[self.url]["items"].append(event)
+        server.subscriptions[self.url]["events"] = [event]
         result = server.feed("score")
         self.assertNotIn(event["url"], self.urls(result))  # no event card
         self.assertIn(self.short["url"], self.urls(result))
@@ -312,7 +312,7 @@ class StopTimerServerTests(unittest.TestCase):
         event = {"url": self.url + "#item=dinner", "title": "Dinner", "first_seen": 1_000_000,
                  "published": start, "calendar_kind": "event", "calendar_start": start,
                  "deadline": start + 3600}
-        server.subscriptions[self.url]["items"].append(event)
+        server.subscriptions[self.url]["events"] = [event]
         result = server.ranked_feed("score", 300, post_url=event["url"])
         self.assertEqual(result.get("error"), "Post not found")
 
@@ -321,7 +321,7 @@ class StopTimerServerTests(unittest.TestCase):
         event = {"url": self.url + "#item=dinner", "title": "Dinner", "first_seen": 1_000_000,
                  "published": start, "calendar_kind": "event", "calendar_start": start,
                  "deadline": start + 3600}
-        server.subscriptions[self.url]["items"].append(event)
+        server.subscriptions[self.url]["events"] = [event]
         server.save_settings(dict(ranking.DEFAULT_TERMS, event_lead_minutes=90))
         result = server.feed("score")
         self.assertAlmostEqual(result["stop_at"], start - 90 * 60, places=3)
@@ -331,7 +331,7 @@ class StopTimerServerTests(unittest.TestCase):
         event = {"url": self.url + "#item=dinner", "title": "Dinner", "first_seen": 1_000_000,
                  "published": start, "calendar_kind": "event", "calendar_start": start,
                  "deadline": start + 3600}
-        server.subscriptions[self.url]["items"].append(event)
+        server.subscriptions[self.url]["events"] = [event]
         result = server.feed("score")
         self.assertTrue(result["stopped"])
         self.assertEqual(self.urls(result), {self.short["url"], self.long["url"]})  # feed kept
@@ -343,6 +343,39 @@ class StopTimerServerTests(unittest.TestCase):
         result = server.ranked_feed("score", 300, post_url=self.long["url"])
         self.assertEqual(result["item"]["url"], self.long["url"])
         self.assertEqual(result["stop_at"], server.stop["stop_at"])
+
+    def dinner(self, minutes_from_now):
+        start = time.time() + minutes_from_now * 60
+        return {"url": self.url + "#item=dinner", "title": "Dinner", "first_seen": 1_000_000,
+                "published": start, "calendar_kind": "event", "calendar_start": start, "deadline": start + 3600}
+
+    def test_events_saved_among_posts_move_to_events_at_startup(self):
+        event = self.dinner(120)
+        server.subscriptions[self.url]["items"].append(event)
+        self.assertTrue(server.migrate_calendar_events())
+        self.assertEqual(server.subscriptions[self.url]["events"], [event])
+        self.assertNotIn(event, server.subscriptions[self.url]["items"])
+        self.assertFalse(server.migrate_calendar_events())  # nothing left to move
+
+    def test_events_are_not_counted_as_posts(self):
+        server.subscriptions[self.url]["events"] = [self.dinner(120)]
+        status = server.subscription_status()[0]
+        self.assertEqual(status["posts"], 2)
+        self.assertEqual(status["unseen"], 2)
+
+    def test_search_does_not_hide_an_event_stop(self):
+        server.subscriptions[self.url]["events"] = [self.dinner(10)]
+        result = server.feed("score", search="short")
+        self.assertTrue(result["stopped"])
+        self.assertEqual(result["stop_event"]["title"], "Dinner")
+
+    def test_event_stop_applies_on_another_subscriptions_page(self):
+        calendar = "https://calendar.example/home/"
+        server.FEEDS_FILE.write_text(self.url + "\n" + calendar)
+        server.subscriptions[calendar] = {"title": "Home", "items": [], "events": [self.dinner(10)], "fetched": 1}
+        result = server.ranked_feed("score", 300, subscription_url=self.url)
+        self.assertTrue(result["stopped"])
+        self.assertEqual(result["stop_event"]["title"], "Dinner")
 
 
 if __name__ == "__main__":

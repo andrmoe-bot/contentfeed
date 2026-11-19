@@ -63,12 +63,13 @@ class FeedCacheTests(unittest.TestCase):
         url = "https://calendar.example/work/"
         event = {"url": url + "#item=event", "title": "Event", "published": 2_000_000,
                  "calendar_kind": "event", "calendar_start": 2_000_000, "deadline": None}
-        fresh = {"title": "Work", "site": url, "items": [event], "complete": True}
+        fresh = {"title": "Work", "site": url, "items": [], "events": [event], "complete": True}
         with patch.object(server.caldav, "fetch", return_value=fresh), \
                 patch.object(server.feeds, "discover") as discover:
             self.assertIsNone(server.subscribe(url))
         discover.assert_not_called()
-        self.assertEqual(server.subscriptions[url]["items"][0]["calendar_kind"], "event")
+        self.assertEqual(server.subscriptions[url]["events"], [event])
+        self.assertEqual(server.subscriptions[url]["items"], [])
         self.assertGreater(server.subscriptions[url]["fetched"], 0)
 
     def test_caldav_login_is_loaded_server_side_and_passed_to_fetch(self):

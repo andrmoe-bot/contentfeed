@@ -37,8 +37,8 @@ The post you're viewing (the one you opened most recently) is exempt, so it does
 passes; server.py applies that exemption, since viewing state lives there. Once the stop time has run
 out, the feed itself is left unchanged and the response's stopped flag tells the page to switch to
 stop mode (notice, playback force-stopped, alert), so it can switch back seamlessly. Calendar events
-are not feed items at all — they take place when scheduled — so they reach the feed only as stop
-times; server.py filters them out of the ranked items but keeps them for effective_stop.
+are not feed items at all — they take place when scheduled — so subscriptions keep them apart from
+their posts, and they reach the feed only as stop times through effective_stop.
 
 A ranker registered with spread=True penalizes similarity to posts above it (see rank).
 
@@ -153,11 +153,11 @@ def valid_minutes(value) -> bool:
             and math.isfinite(value) and value > 0)
 
 
-def _timer_released(items: list[dict], now: float, stop_at: float) -> bool:
+def _timer_released(events: list[dict], now: float, stop_at: float) -> bool:
     """Whether a fired timer's stop is over: an event that was still upcoming when the timer fired
     (its end is after the stop time) has now ended. The timer was presumably set to get to that
     event, so once the event is over the feed should return, not stay stopped until cleared."""
-    for it in items:
+    for it in events:
         if it.get("calendar_kind") != "event":
             continue
         end = it.get("deadline") or it.get("calendar_start")
@@ -166,7 +166,7 @@ def _timer_released(items: list[dict], now: float, stop_at: float) -> bool:
     return False
 
 
-def effective_stop(items: list[dict], now: float, terms: dict, stop_at: float | None = None):
+def effective_stop(events: list[dict], now: float, terms: dict, stop_at: float | None = None):
     """The stop-watching state: (stop, event), or (None, None) when nothing stops watching. The stop
     timer (stop_at) if set — unless it has fired and the event it was set for has since ended (see
     _timer_released) — and every event that hasn't ended, at its start minus the event lead
@@ -174,10 +174,10 @@ def effective_stop(items: list[dict], now: float, terms: dict, stop_at: float | 
     earliest wins; event is the event that causes it, or None when it's the timer. A stop in the
     past means the time has run out: watching should stop now."""
     candidates = []
-    if stop_at is not None and not _timer_released(items, now, stop_at):
+    if stop_at is not None and not _timer_released(events, now, stop_at):
         candidates.append((stop_at, None))
     lead = terms["event_lead_minutes"] * 60
-    for it in items:
+    for it in events:
         if it.get("calendar_kind") != "event":
             continue
         start = it.get("calendar_start")
@@ -374,6 +374,14 @@ def similarity_breakdown(item: dict, other: dict, terms: dict) -> dict:
             "self": item["url"] == other["url"], "components": components}
 
 
+def similarity_group(item: dict) -> tuple:
+    """Items only match others in their group: a calendar's tasks, a subscription's other posts, or
+    a link only itself."""
+    if item.get("calendar_kind"):
+        return ("calendar", item.get("sub") or item["url"])
+    return ("sub", item["sub"]) if item.get("sub") else ("url", item["url"])
+
+
 def explain_similarities(visible: list[dict], source: list[dict], terms: dict, now: float) -> list[dict]:
     """Enrich only displayed cards, keeping pair details out of the ranking cache."""
     by_url = {item["url"]: item for item in source}
@@ -398,17 +406,13 @@ def explain_similarities(visible: list[dict], source: list[dict], terms: dict, n
                 out["recent_matches"] = [match for _, match in sorted(matches, key=lambda pair: pair[0], reverse=True)]
         if any(r["label"].startswith("similarity to ") for r in item["reasons"]):
             matches = []
-            group = (("calendar", item["calendar_kind"], item.get("sub") or item["url"])
-                     if item.get("calendar_kind") in ("event", "task") else ("sub", item.get("sub")))
-            for other in groups.get(group, []):
+            for other in groups.get(similarity_group(item), []):
                 match = similarity_breakdown(item, other, terms)
                 if match["percent"]:
                     matches.append(match)
             out["above_matches"] = matches
-        if item.get("sub") and not item.get("calendar_kind"):
-            groups.setdefault(("sub", item["sub"]), []).append(item)
-        elif item.get("sub") and item.get("calendar_kind") in ("event", "task"):
-            groups.setdefault(("calendar", item["calendar_kind"], item["sub"]), []).append(item)
+        if item.get("sub"):
+            groups.setdefault(similarity_group(item), []).append(item)
         explained.append(out)
     return explained
 
@@ -463,19 +467,13 @@ def recent_view_index(items: list[dict], now: float, window: float, title_words:
 
 
 def recent_candidates(it: dict, recent_by_sub: dict, recent_by_url: dict) -> list[tuple]:
-    """The indexed items an item can match: same subscription (tasks only with tasks, events
-    with nothing), or itself for links."""
-    candidates = recent_by_sub.get(it.get("sub"), [])
-    own = recent_by_url.get(it["url"])
-    if it.get("calendar_kind") == "task":
-        candidates = [entry for entry in candidates if entry[0].get("calendar_kind") == "task"]
-    elif it.get("calendar_kind"):
-        candidates = []
-    else:
-        candidates = [entry for entry in candidates if not entry[0].get("calendar_kind")]
+    """The indexed items an item can match: those in its similarity group (see similarity_group),
+    which for a link is only itself."""
     if not it.get("sub"):
-        candidates = [own] if own else []
-    return candidates
+        own = recent_by_url.get(it["url"])
+        return [own] if own else []
+    group = similarity_group(it)
+    return [entry for entry in recent_by_sub.get(it["sub"], []) if similarity_group(entry[0]) == group]
 
 
 def similar_to_recent(items: list[dict], now: float, terms: dict, title_words: dict | None = None):
@@ -602,25 +600,21 @@ def _similarity_reasons(item: dict, terms: dict) -> Reasons:
     return [(label, points(terms["similar_penalty"] * like["total"] / 100))]
 
 
-def _calendar_score(item: dict, now: float, terms: dict) -> Reasons:
-    """Score calendar tasks under calendar-specific rules. Events aren't feed items (server.py
-    leaves them out, since they take place when scheduled): they reach the feed only as stop
-    times, through the stop-time filter (see effective_stop)."""
-    kind = item["calendar_kind"]
+def _task_score(item: dict, now: float, terms: dict) -> Reasons:
+    """Score calendar tasks under their own rules: deadline urgency, similarity to recently opened
+    tasks, the fixed task term and red. (Events aren't feed items; see effective_stop.)"""
     due = item.get("deadline")
     reasons = []
-    if kind == "task" and due is not None:
+    if due is not None:
         hours = max(0, int((due - now) // 3600))
         horizon = 30 * 24
         if hours <= horizon:
             urgency = points(terms["task_deadline_bonus"] * (1 - hours / horizon))
             if urgency:
                 reasons.append((f"task deadline in {hours_label(hours)}", urgency))
-    if kind == "task":
-        reasons.extend(_similarity_reasons(item, terms))
-    type_bonus = terms.get(f"{kind}_bonus", 0)
-    if type_bonus:
-        reasons.append((kind, type_bonus))
+    reasons.extend(_similarity_reasons(item, terms))
+    if terms["task_bonus"]:
+        reasons.append(("task", terms["task_bonus"]))
     if item["color"] == "red":
         reasons.append(("red", -RED))
     return reasons
@@ -632,9 +626,8 @@ def score(item: dict, now: float, terms: dict) -> Reasons:
     something opened recently, its media type, and green. rank() then penalizes similarity to posts above it."""
     w = terms
     reasons = []
-    calendar_kind = item.get("calendar_kind")
-    if calendar_kind in ("event", "task"):
-        return _calendar_score(item, now, w)
+    if item.get("calendar_kind"):
+        return _task_score(item, now, w)
     if item.get("next_after") and "latest" not in item["tags"]:
         if w["next_up_bonus"]:
             reasons.append((f"next up after “{short(item['next_after'])}”", w["next_up_bonus"]))
@@ -746,10 +739,7 @@ def spread_by_similarity(scored: list[dict], penalty: float, metric: SimilarityM
     matches = [0] * len(scored)
     groups = {}
     for i, it in enumerate(scored):
-        key = (("calendar", it["calendar_kind"], it.get("sub") or it["url"])
-               if it.get("calendar_kind") in ("event", "task")
-               else ("sub", it["sub"]) if it.get("sub") else ("url", it["url"]))
-        groups.setdefault(key, []).append(i)
+        groups.setdefault(similarity_group(it), []).append(i)
     queues = []
     for indices in groups.values():
         queue = [(-base_cents[i], scored[i]["last_viewed"] is not None,

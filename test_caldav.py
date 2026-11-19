@@ -226,7 +226,8 @@ class CalendarFetchTests(unittest.TestCase):
         body = calendar_data(event())
         with patch.object(caldav, "_request", return_value=(body, "https://example.test/a.ics", headers)) as request:
             result = caldav.fetch("https://example.test/a.ics")
-        self.assertEqual([it["title"] for it in result["items"]], ["Event"])
+        self.assertEqual([it["title"] for it in result["events"]], ["Event"])
+        self.assertEqual(result["items"], [])  # events aren't posts
         request.assert_called_once()
 
     def test_rejects_truncated_ics_files(self):
@@ -246,6 +247,7 @@ class CalendarFetchTests(unittest.TestCase):
                 (propfind, collection, Message()), (empty, collection, Message()), (empty, collection, Message())]):
             result = caldav.fetch(collection)
         self.assertEqual(result["items"], [])
+        self.assertEqual(result["events"], [])
         self.assertTrue(result["complete"])
 
     def test_caldav_uses_separate_event_and_task_reports(self):
@@ -272,7 +274,8 @@ class CalendarFetchTests(unittest.TestCase):
         with patch.object(caldav, "_request", side_effect=responses) as request:
             result = caldav.fetch(collection, login)
         self.assertEqual(result["title"], "Work")
-        self.assertEqual({it["calendar_kind"] for it in result["items"]}, {"event", "task"})
+        self.assertEqual([it["calendar_kind"] for it in result["items"]], ["task"])
+        self.assertEqual([it["calendar_kind"] for it in result["events"]], ["event"])
         self.assertEqual([call.args[1] for call in request.call_args_list], ["PROPFIND", "REPORT", "REPORT"])
         self.assertIn(b'name="VEVENT"', request.call_args_list[1].args[2])
         self.assertIn(b'name="VTODO"', request.call_args_list[2].args[2])

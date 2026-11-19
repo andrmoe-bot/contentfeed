@@ -333,7 +333,7 @@ def refresh_subscription(url: str, force: bool = False):
             entry = {**old, **fresh, "items": merge_posts(kept, fresh["items"], now), "fetched": now}
         entry.pop("error", None)
         with lock:
-            affects_feed = any(old.get(field) != entry.get(field) for field in ("items", "title", "icon"))
+            affects_feed = any(old.get(field) != entry.get(field) for field in ("items", "events", "title", "icon"))
             subscriptions[url] = entry
         save_json(FEED_CACHE_FILE, subscriptions, affects_feed=affects_feed)
     finally:
@@ -832,10 +832,10 @@ def feed(ranker: str, limit: int = MAX_ITEMS_SHOWN, terms: dict | None = None, e
     return ranked_feed(ranker, limit, terms, enrich=enrich, search=search)
 
 
-def stop_fields(source: list[dict], now: float, terms: dict, stop_at: float | None) -> dict:
+def stop_fields(events: list[dict], now: float, terms: dict, stop_at: float | None) -> dict:
     """The stop-watching state for a feed response: the effective stop time, whether it has run out
     (stopped; then content is gone and stop_event is the event that caused it, if any)."""
-    effective, event = ranking.effective_stop(source, now, terms, stop_at)
+    effective, event = ranking.effective_stop(events, now, terms, stop_at)
     return {"stop_at": effective,
             "stopped": effective is not None and now >= effective,
             "stop_event": ({k: event.get(k) for k in ("url", "title", "calendar_kind", "calendar_start", "deadline")}
@@ -844,7 +844,7 @@ def stop_fields(source: list[dict], now: float, terms: dict, stop_at: float | No
 
 def ranked_feed(ranker: str, limit: int, terms: dict | None = None, *, enrich: bool = False, post_url: str | None = None, subscription_url: str | None = None, search: str = "") -> dict:
     entries = read_entries()
-    subs = read_entries(FEEDS_FILE)
+    subs = all_subs = read_entries(FEEDS_FILE)
     if subscription_url is not None:
         if subscription_url not in subs:
             return {"error": "Subscription not found"}
@@ -857,6 +857,8 @@ def ranked_feed(ranker: str, limit: int, terms: dict | None = None, *, enrich: b
     now = time.time()
     stop_at = stop.get("stop_at")  # a passed timer has fired: it stops the feed until cleared
     with lock:
+        # Every subscribed calendar's events stop watching, on every page, not only their own subscription's.
+        events = calendar_events(all_subs)
         key = (ranker, json.dumps(terms or ranking.TERMS, sort_keys=True), json.dumps([entries, subs, search, post_url is not None]),
                state_version)
         hit = ranked_cache.get(key)
@@ -865,11 +867,11 @@ def ranked_feed(ranker: str, limit: int, terms: dict | None = None, *, enrich: b
             # time-dependent: reuse the cache only while the whole stop state (effective stop and
             # whether it has fired) is unchanged, so a response never mixes items filtered at one
             # moment with stop fields computed at another.
-            eff, _ = ranking.effective_stop(hit[2], now, terms or ranking.TERMS, stop_at)
+            eff, _ = ranking.effective_stop(events, now, terms or ranking.TERMS, stop_at)
             if (eff, eff is not None and now >= eff) != (hit[3], hit[4]):
                 hit = None
         if hit and now - hit[0] < RANKED_TTL:
-            ranked, source = hit[1], hit[2]  # source keeps the events, for stop_fields
+            ranked = hit[1]
             items = None
             new = []
         else:
@@ -910,11 +912,8 @@ def ranked_feed(ranker: str, limit: int, terms: dict | None = None, *, enrich: b
     if items is not None:
         if post_url is None and search.strip():
             items = [p for p in items if matches_search(p, search)]
-        source = items  # stop computation sees events too; events aren't feed items themselves
-        effective, _ = ranking.effective_stop(source, now, terms or ranking.TERMS, stop_at)
-        # Events take place when scheduled, so they aren't feed items: only their stop times reach
-        # the feed, never the events as cards.
-        feed_items = [it for it in source if it.get("calendar_kind") != "event"]
+        effective, _ = ranking.effective_stop(events, now, terms or ranking.TERMS, stop_at)
+        feed_items = items
         if effective is not None and now < effective:
             # While the stop is ahead, leave out posts that would run past it, so each one shown can
             # be finished before it. The post whose page is open stays, and so does the one you're
@@ -932,11 +931,11 @@ def ranked_feed(ranker: str, limit: int, terms: dict | None = None, *, enrich: b
             if len(ranked_cache) >= 20:
                 ranked_cache.pop(next(iter(ranked_cache)))
             if key[3] == state_version:
-                ranked_cache[key] = (now, ranked, source, effective, effective is not None and now >= effective)
+                ranked_cache[key] = (now, ranked, None, effective, effective is not None and now >= effective)
     if post_url is not None:
         result = post_details(ranked.source, post_url, ranker, limit, terms or ranking.TERMS, now,
                               enrich=enrich, search=search)
-        result.update(stop_fields(source, now, terms or ranking.TERMS, stop_at))
+        result.update(stop_fields(events, now, terms or ranking.TERMS, stop_at))
         return result
     extra_count = (terms or ranking.TERMS)["enrich_count"] if enrich else 0
     with lock:
@@ -947,7 +946,7 @@ def ranked_feed(ranker: str, limit: int, terms: dict | None = None, *, enrich: b
         n_pending = len(pending)
     result = {"items": ranking.explain_similarities(visible, ranked.source, terms or ranking.TERMS, now),
             "total": ranked.total, "pending": n_pending, "ranker": ranker,
-            **stop_fields(source, now, terms or ranking.TERMS, stop_at)}
+            **stop_fields(events, now, terms or ranking.TERMS, stop_at)}
     if subscription_url is not None:
         order = lambda it: (it["score"], it["last_viewed"] is None, it["date"], it["position"])
         next_up_items = sorted(
@@ -1105,6 +1104,25 @@ def jellyfin_image_target(key: str, item: str) -> tuple[tuple[str, dict], str] |
         if image.scheme in ("http", "https") and image.netloc == urlparse(target[0]).netloc and image.path.startswith("/Items/"):
             return target, image.path + (f"?{image.query}" if image.query else "")
     return None
+
+
+def migrate_calendar_events() -> bool:
+    """Move calendar events saved among a subscription's posts, before they were kept apart, to its events."""
+    changed = False
+    with lock:
+        for subscription in subscriptions.values():
+            items = subscription.get("items", [])
+            events = [p for p in items if p.get("calendar_kind") == "event"]
+            if events:
+                subscription["items"] = [p for p in items if p.get("calendar_kind") != "event"]
+                subscription["events"] = [*subscription.get("events", []), *events]
+                changed = True
+    return changed
+
+
+def calendar_events(subs) -> list[dict]:
+    """The subscriptions' calendar events. Call with lock held."""
+    return [event for url in subs for event in subscriptions.get(url, {}).get("events", [])]
 
 
 def migrate_jellyfin_images() -> bool:
@@ -1397,7 +1415,7 @@ def main():
     migrated_credentials = migrate_caldav_url_credentials()
     if migrated_credentials:
         print(f"Moved credentials out of {FEEDS_FILE} for {migrated_credentials} CalDAV subscription(s).")
-    if migrate_jellyfin_images():
+    if migrate_calendar_events() | migrate_jellyfin_images():
         save_json(FEED_CACHE_FILE, subscriptions, affects_feed=False)
     viewed.update(load_json(VIEWED_FILE))
     skipped.update(load_json(SKIPPED_FILE))

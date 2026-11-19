@@ -333,9 +333,19 @@ def parse_calendar_data(body, resource_url):
     text = body.decode("utf-8-sig", errors="replace")
     if not re.search(r"(?im)^BEGIN:VCALENDAR\s*$", text) or not re.search(r"(?im)^END:VCALENDAR\s*$", text):
         raise ICalendarError("The .ics response is not a complete iCalendar object.")
-    items = parse_calendar_resource(text, resource_url)
-    items.sort(key=lambda item: item.get("published") or 0, reverse=True)
-    return {"title": urllib.parse.unquote(urllib.parse.urlsplit(resource_url).path.rstrip("/").split("/")[-1]) or "Calendar",
-            "site": resource_url, "icon": None, "items": items[:1000], "complete": True}
+    return calendar_result(parse_calendar_resource(text, resource_url), None, resource_url)
+
+
+MAX_ENTRIES = 1000  # tasks, and separately events, kept per calendar
+
+
+def calendar_result(entries: list[CalendarPost], title: str | None, url: str) -> dict:
+    """A calendar subscription's fetch result. Tasks are its posts ("items"); events take place when
+    scheduled, so they aren't posts and are kept apart ("events") to act only as stop times."""
+    entries = sorted(entries, key=lambda entry: entry.get("published") or 0, reverse=True)
+    name = title or urllib.parse.unquote(urllib.parse.urlsplit(url).path.rstrip("/").split("/")[-1]) or "Calendar"
+    return {"title": name, "site": url, "icon": None, "complete": True,
+            "items": [e for e in entries if e["calendar_kind"] != "event"][:MAX_ENTRIES],
+            "events": [e for e in entries if e["calendar_kind"] == "event"][:MAX_ENTRIES]}
 
 
