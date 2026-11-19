@@ -238,23 +238,52 @@ def migrate_caldav_url_credentials() -> int:
     return migrated
 
 
+# Background jobs. Each job has a pending key, its prefix and argument, such as "feed:<url>": while
+# it's queued or running the key is in pending, so it isn't started twice, and the page can say how
+# many fetches are under way.
+def job(prefix: str):
+    """Make fn a job whose pending key is prefix + its first argument, released however it ends."""
+    def wrap(fn):
+        @functools.wraps(fn)
+        def run(arg, *args, **kwargs):
+            try:
+                return fn(arg, *args, **kwargs)
+            finally:
+                with lock:
+                    pending.discard(prefix + arg)
+        run.key = lambda arg: prefix + arg
+        return run
+    return wrap
+
+
+def submit_once(work, arg, *args, unless=None) -> bool:
+    """Queue a job unless it's already pending or unless() (called with lock held) is true."""
+    key = work.key(arg)
+    with lock:
+        if key in pending or (unless is not None and unless()):
+            return False
+        pending.add(key)
+    executor.submit(work, arg, *args)
+    return True
+
+
+def run_now(work, arg, *args):
+    """Run a job here and wait for it, marking it pending meanwhile."""
+    with lock:
+        pending.add(work.key(arg))
+    return work(arg, *args)
+
+
+@job("")
 def refresh(url: str):
-    try:
-        item = fetch_metadata(url)
-        with lock:
-            cache[url] = item
-        save_json(CACHE_FILE, cache)
-    finally:
-        with lock:
-            pending.discard(url)
+    item = fetch_metadata(url)
+    with lock:
+        cache[url] = item
+    save_json(CACHE_FILE, cache)
 
 
 def schedule(url: str, force: bool = False):
-    with lock:
-        if url in pending or (url in cache and not force):
-            return
-        pending.add(url)
-    executor.submit(refresh, url)
+    submit_once(refresh, url, unless=lambda: url in cache and not force)
 
 
 def post_key(post: dict) -> str:
@@ -279,136 +308,121 @@ def merge_posts(old: list[dict], new: list[dict], now: float) -> list[dict]:
     return posts[:MAX_POSTS_KEPT]
 
 
+@job("feed:")
 def refresh_subscription(url: str, force: bool = False):
     """Check one subscription and merge its posts, keeping posts that have left the feed."""
+    with lock:
+        old = dict(subscriptions.get(url, {}))
     try:
-        with lock:
-            old = dict(subscriptions.get(url, {}))
-        try:
-            logins, problem = jellyfin.read_logins(JELLYFIN_FILE)
-            login = jellyfin.login_for(url, logins)
-            if nrk.series_id(url):
-                fresh = nrk.fetch(url, {p["url"] for p in old.get("items", [])})
-            elif login is not None:
-                fresh = jellyfin.fetch(url, login)
-            elif old.get("page"):  # a page without a feed, read before
-                fresh = pages.fetch(url, {p["url"] for p in old.get("items", [])})
-            else:
-                try:
-                    if old.get("feed_url"):
-                        feed_url = old["feed_url"]
-                        fresh = feeds.fetch(feed_url, *(() if force else (old.get("etag"), old.get("modified"))))
-                    else:
-                        try:
-                            caldav_logins, caldav_problem = caldav.read_logins(CALDAV_FILE)
-                            login = caldav.login_for(url, caldav_logins)
-                            fresh = caldav.fetch(url, login)
-                        except caldav.CredentialsInURL as e:
-                            raise feeds.FeedError(str(e)) from e
-                        except caldav.CalDAVError as e:
-                            if "HTTP 401" in str(e):
-                                detail = caldav_problem or f"add a username and password for this calendar to {CALDAV_FILE}"
-                                raise feeds.FeedError(f"CalDAV requires a login: {detail}") from e
-                            feed_url = feeds.discover(url)
-                            fresh = feeds.fetch(feed_url, *(() if force else (old.get("etag"), old.get("modified"))))
-                except feeds.FeedError as e:
-                    if jellyfin.is_jellyfin(url):
-                        raise feeds.FeedError(jellyfin.missing_login(url, logins, problem, JELLYFIN_FILE)) from e
-                    if not isinstance(e, feeds.NoFeed):
-                        raise
-                    fresh = pages.fetch(url)  # no feed, so read the posts from the page
-        except Exception as e:  # keep the old posts; show the error in the subscriptions list
-            with lock:
-                subscriptions[url] = {**old, "error": str(e)[:600], "fetched": time.time()}
-            save_json(FEED_CACHE_FILE, subscriptions, affects_feed=False)
-            return
-        now = time.time()
-        if fresh is None:  # not modified since last check
-            entry = {**old, "fetched": now}
+        logins, problem = jellyfin.read_logins(JELLYFIN_FILE)
+        login = jellyfin.login_for(url, logins)
+        if nrk.series_id(url):
+            fresh = nrk.fetch(url, {p["url"] for p in old.get("items", [])})
+        elif login is not None:
+            fresh = jellyfin.fetch(url, login)
+        elif old.get("page"):  # a page without a feed, read before
+            fresh = pages.fetch(url, {p["url"] for p in old.get("items", [])})
         else:
-            kept = old.get("items", [])
-            if fresh.get("complete"):  # the source lists everything it has, so posts missing from it are gone
-                current = {post_key(p) for p in fresh["items"]}
-                kept = [p for p in kept if post_key(p) in current]
-            entry = {**old, **fresh, "items": merge_posts(kept, fresh["items"], now), "fetched": now}
-        entry.pop("error", None)
+            try:
+                if old.get("feed_url"):
+                    feed_url = old["feed_url"]
+                    fresh = feeds.fetch(feed_url, *(() if force else (old.get("etag"), old.get("modified"))))
+                else:
+                    try:
+                        caldav_logins, caldav_problem = caldav.read_logins(CALDAV_FILE)
+                        login = caldav.login_for(url, caldav_logins)
+                        fresh = caldav.fetch(url, login)
+                    except caldav.CredentialsInURL as e:
+                        raise feeds.FeedError(str(e)) from e
+                    except caldav.CalDAVError as e:
+                        if "HTTP 401" in str(e):
+                            detail = caldav_problem or f"add a username and password for this calendar to {CALDAV_FILE}"
+                            raise feeds.FeedError(f"CalDAV requires a login: {detail}") from e
+                        feed_url = feeds.discover(url)
+                        fresh = feeds.fetch(feed_url, *(() if force else (old.get("etag"), old.get("modified"))))
+            except feeds.FeedError as e:
+                if jellyfin.is_jellyfin(url):
+                    raise feeds.FeedError(jellyfin.missing_login(url, logins, problem, JELLYFIN_FILE)) from e
+                if not isinstance(e, feeds.NoFeed):
+                    raise
+                fresh = pages.fetch(url)  # no feed, so read the posts from the page
+    except Exception as e:  # keep the old posts; show the error in the subscriptions list
         with lock:
-            affects_feed = any(old.get(field) != entry.get(field) for field in ("items", "events", "title", "icon"))
-            subscriptions[url] = entry
-        save_json(FEED_CACHE_FILE, subscriptions, affects_feed=affects_feed)
-    finally:
-        with lock:
-            pending.discard("feed:" + url)
+            subscriptions[url] = {**old, "error": str(e)[:600], "fetched": time.time()}
+        save_json(FEED_CACHE_FILE, subscriptions, affects_feed=False)
+        return
+    now = time.time()
+    if fresh is None:  # not modified since last check
+        entry = {**old, "fetched": now}
+    else:
+        kept = old.get("items", [])
+        if fresh.get("complete"):  # the source lists everything it has, so posts missing from it are gone
+            current = {post_key(p) for p in fresh["items"]}
+            kept = [p for p in kept if post_key(p) in current]
+        entry = {**old, **fresh, "items": merge_posts(kept, fresh["items"], now), "fetched": now}
+    entry.pop("error", None)
+    with lock:
+        affects_feed = any(old.get(field) != entry.get(field) for field in ("items", "events", "title", "icon"))
+        subscriptions[url] = entry
+    save_json(FEED_CACHE_FILE, subscriptions, affects_feed=affects_feed)
 
 
 def schedule_subscription(url: str, force: bool = False):
-    key = "feed:" + url
-    with lock:
-        last = subscriptions.get(url, {}).get("fetched", 0)
-        if key in pending or (not force and time.time() - last < feed_interval):
-            return
-        pending.add(key)
-    executor.submit(refresh_subscription, url, force)
+    submit_once(refresh_subscription, url, force, unless=lambda: not force and
+                time.time() - subscriptions.get(url, {}).get("fetched", 0) < feed_interval)
 
 
+@job("older:")
 def load_older(url: str):
     """Import video history and playlists independently, retaining completed work on retry."""
-    try:
-        with lock:
-            original = subscriptions.get(url, {})
-            feed_url = original.get("feed_url")
-            older_loaded = original.get("older_loaded")
-            playlists_loaded = original.get("playlists_loaded")
-        if not feed_url:
-            return
-        for kind, loaded, fetch in (("older", older_loaded, feeds.older_videos),
-                                    ("playlists", playlists_loaded, feeds.channel_playlists)):
-            if loaded:
-                continue
-            try:
-                result = fetch(feed_url)
-            except feeds.FeedError as e:
-                with lock:
-                    s = subscriptions.get(url)
-                    if s is None or s.get("feed_url") != feed_url:
-                        return
-                    s["older_error"] = {"error": str(e)[:300], "time": time.time()}
-                save_json(FEED_CACHE_FILE, subscriptions, affects_feed=False)
-                return
-            now = time.time()
+    with lock:
+        original = subscriptions.get(url, {})
+        feed_url = original.get("feed_url")
+        older_loaded = original.get("older_loaded")
+        playlists_loaded = original.get("playlists_loaded")
+    if not feed_url:
+        return
+    for kind, loaded, fetch in (("older", older_loaded, feeds.older_videos),
+                                ("playlists", playlists_loaded, feeds.channel_playlists)):
+        if loaded:
+            continue
+        try:
+            result = fetch(feed_url)
+        except feeds.FeedError as e:
             with lock:
                 s = subscriptions.get(url)
                 if s is None or s.get("feed_url") != feed_url:
                     return
-                if kind == "older":
-                    known = {post_key(p) for p in s.get("items", [])}
-                    durations = {post_key(p): p.get("estimated_minutes") for p in result}
-                    for post in s.get("items", []):
-                        if not post.get("estimated_minutes") and durations.get(post_key(post)):
-                            post["estimated_minutes"] = durations[post_key(post)]
-                    s["items"] = merge_posts(s.get("items", []),
-                                             [p for p in result if post_key(p) not in known], now)
-                else:
-                    s["youtube_playlists"] = result
-                s[kind + "_loaded"] = now
-                s.pop("older_error", None)
-            save_json(FEED_CACHE_FILE, subscriptions)
-    finally:
+                s["older_error"] = {"error": str(e)[:300], "time": time.time()}
+            save_json(FEED_CACHE_FILE, subscriptions, affects_feed=False)
+            return
+        now = time.time()
         with lock:
-            pending.discard("older:" + url)
+            s = subscriptions.get(url)
+            if s is None or s.get("feed_url") != feed_url:
+                return
+            if kind == "older":
+                known = {post_key(p) for p in s.get("items", [])}
+                durations = {post_key(p): p.get("estimated_minutes") for p in result}
+                for post in s.get("items", []):
+                    if not post.get("estimated_minutes") and durations.get(post_key(post)):
+                        post["estimated_minutes"] = durations[post_key(post)]
+                s["items"] = merge_posts(s.get("items", []),
+                                         [p for p in result if post_key(p) not in known], now)
+            else:
+                s["youtube_playlists"] = result
+            s[kind + "_loaded"] = now
+            s.pop("older_error", None)
+        save_json(FEED_CACHE_FILE, subscriptions)
 
 
 def schedule_older(url: str):
     """Load a YouTube subscription's older videos once, after its feed has been read."""
-    key = "older:" + url
-    with lock:
+    def done_or_failed_lately():
         s = subscriptions.get(url, {})
-        failed = s.get("older_error", {}).get("time", 0)
-        if (key in pending or (s.get("older_loaded") and s.get("playlists_loaded")) or not feeds.youtube_playlist_id(s.get("feed_url") or "")
-                or time.time() - failed < OLDER_RETRY):
-            return
-        pending.add(key)
-    executor.submit(load_older, url)
+        return ((s.get("older_loaded") and s.get("playlists_loaded")) or not feeds.youtube_playlist_id(s.get("feed_url") or "")
+                or time.time() - s.get("older_error", {}).get("time", 0) < OLDER_RETRY)
+    submit_once(load_older, url, unless=done_or_failed_lately)
 
 
 def subscribe(line: str) -> str | None:
@@ -420,9 +434,7 @@ def subscribe(line: str) -> str | None:
         return "Don't put credentials in a subscription URL. For CalDAV, store them in caldav.json."
     if url in read_entries(FEEDS_FILE):
         return "Already subscribed."
-    with lock:
-        pending.add("feed:" + url)
-    refresh_subscription(url, force=True)
+    run_now(refresh_subscription, url, True)
     with lock:
         error = subscriptions.get(url, {}).get("error")
         if error:
@@ -512,9 +524,7 @@ def check_subscription(url: str) -> bool:
     """Check one subscription now and wait for the result."""
     if url not in read_entries(FEEDS_FILE):
         return False
-    with lock:
-        pending.add("feed:" + url)
-    refresh_subscription(url, force=True)
+    run_now(refresh_subscription, url, True)
     return True
 
 
@@ -580,39 +590,31 @@ def set_viewed(url: str) -> bool:
     return True
 
 
+@job("video:")
 def update_video_metadata(video: str):
     """Enrich every copy of a video with its exact date and runtime in one fetch."""
-    try:
-        metadata = feeds.video_metadata(video)
-        now = time.time()
-        with lock:
-            for subscription in subscriptions.values():
-                changed_date = False
-                for post in subscription.get("items", []):
-                    if post.get("youtube") != video:
-                        continue
-                    post["video_metadata_checked"] = now
-                    if metadata.get("estimated_minutes"):
-                        post["estimated_minutes"] = metadata["estimated_minutes"]
-                    if post.get("date_approx") and metadata.get("published"):
-                        post["published"] = metadata["published"]
-                        post.pop("date_approx", None)
-                        changed_date = True
-                if changed_date:
-                    subscription["items"].sort(key=post_date, reverse=True)
-        save_json(FEED_CACHE_FILE, subscriptions)
-    finally:
-        with lock:
-            pending.discard("video:" + video)
+    metadata = feeds.video_metadata(video)
+    now = time.time()
+    with lock:
+        for subscription in subscriptions.values():
+            changed_date = False
+            for post in subscription.get("items", []):
+                if post.get("youtube") != video:
+                    continue
+                post["video_metadata_checked"] = now
+                if metadata.get("estimated_minutes"):
+                    post["estimated_minutes"] = metadata["estimated_minutes"]
+                if post.get("date_approx") and metadata.get("published"):
+                    post["published"] = metadata["published"]
+                    post.pop("date_approx", None)
+                    changed_date = True
+            if changed_date:
+                subscription["items"].sort(key=post_date, reverse=True)
+    save_json(FEED_CACHE_FILE, subscriptions)
 
 
 def schedule_video_metadata(video: str):
-    key = "video:" + video
-    with lock:
-        if key in pending:
-            return
-        pending.add(key)
-    executor.submit(update_video_metadata, video)
+    submit_once(update_video_metadata, video)
 
 
 def set_skipped(url: str) -> bool:
