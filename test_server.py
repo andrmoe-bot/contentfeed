@@ -1,5 +1,6 @@
 import contextlib
 import copy
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -408,3 +409,12 @@ class LengthEnrichmentTests(FeedCacheTests):
         for invalid in [-1, 1.5, 101]:
             with self.assertRaises(ValueError):
                 ranking.check_terms(dict(ranking.DEFAULT_TERMS, enrich_count=invalid))
+
+
+class GitVersionTests(unittest.TestCase):
+    @unittest.skipUnless((server.ROOT / ".git").exists(), "not running from a git checkout")
+    def test_reads_a_checkout_owned_by_another_user_from_another_directory(self):
+        # As the service: its own working directory, no home, and a checkout owned by root
+        env = {"PATH": os.environ.get("PATH", ""), "HOME": "/nonexistent", "GIT_TEST_ASSUME_DIFFERENT_OWNER": "1"}
+        with tempfile.TemporaryDirectory() as cwd, patch.dict(os.environ, env, clear=True), contextlib.chdir(cwd):
+            self.assertRegex(server.git("rev-parse", "--short", "HEAD"), r"^[0-9a-f]{4,}$")
