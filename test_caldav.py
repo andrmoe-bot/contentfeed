@@ -179,6 +179,35 @@ class CalendarParserTests(unittest.TestCase):
             datetime(2026, 11, 30, 12, tzinfo=timezone.utc).timestamp(),
         ])
 
+    def test_edited_instance_is_dropped_once_its_series_no_longer_has_it(self):
+        """Ending a series sooner, or excluding the date, leaves the edited instance stored in the
+        resource; it must not stay behind as an event."""
+        override = ("BEGIN:VEVENT\r\nUID:meeting\r\nRECURRENCE-ID:20261130T120000Z\r\n"
+                    "DTSTART:20261130T140000Z\r\nSUMMARY:Rescheduled\r\nEND:VEVENT")
+        for rule, kept in [("RRULE:FREQ=WEEKLY", True), ("RRULE:FREQ=WEEKLY;COUNT=4", True),
+                           ("RRULE:FREQ=WEEKLY;UNTIL=20261124T000000Z", False),
+                           ("RRULE:FREQ=WEEKLY;COUNT=2", False),
+                           ("RRULE:FREQ=WEEKLY\r\nEXDATE:20261130T120000Z", False),
+                           ("RRULE:FREQ=DAILY;INTERVAL=3", False)]:
+            with self.subTest(rule=rule):
+                data = calendar_data("BEGIN:VEVENT\r\nUID:meeting\r\nDTSTART:20261116T120000Z\r\n" + rule
+                                     + "\r\nSUMMARY:Weekly\r\nEND:VEVENT", override)
+                with patch.object(icalendar_parser.clock_time, "time", return_value=NOW):
+                    items = icalendar_parser.parse_calendar_resource(data.decode(), "https://calendar.test/cal/")
+                self.assertEqual(any(it["title"] == "Rescheduled" for it in items), kept)
+                self.assertFalse(any(it["calendar_start"] == datetime(2026, 11, 30, 12, tzinfo=timezone.utc).timestamp()
+                                     for it in items))
+
+    def test_edited_instance_of_a_local_time_series_is_kept(self):
+        data = calendar_data(
+            "BEGIN:VEVENT\r\nUID:gym\r\nDTSTART;TZID=Europe/Oslo:20261116T180000\r\nRRULE:FREQ=DAILY\r\n"
+            "SUMMARY:Gym\r\nEND:VEVENT",
+            "BEGIN:VEVENT\r\nUID:gym\r\nRECURRENCE-ID;TZID=Europe/Oslo:20261120T180000\r\n"
+            "DTSTART;TZID=Europe/Oslo:20261120T190000\r\nSUMMARY:Gym later\r\nEND:VEVENT")
+        with patch.object(icalendar_parser.clock_time, "time", return_value=NOW):
+            items = icalendar_parser.parse_calendar_resource(data.decode(), "https://calendar.test/cal/")
+        self.assertIn("Gym later", [it["title"] for it in items])
+
     def test_recurring_tasks_shift_due_date_from_dtstart(self):
         data = calendar_data(todo("daily-task", "Daily task",
             "DTSTART:20261116T080000Z\r\nDUE:20261116T160000Z\r\nRRULE:FREQ=DAILY;COUNT=3\r\n"))

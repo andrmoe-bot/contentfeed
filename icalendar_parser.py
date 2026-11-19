@@ -243,15 +243,16 @@ def _monthly_yearly_occurrences(dt, lower, upper, interval, count, yearly):
     return occurrences
 
 
-def _occurrences(component, start, base_value="", base_params=""):
-    """Expand supported RRULEs into instances in a bounded window."""
+def _occurrences(component, start, base_value="", base_params="", window=None):
+    """Expand supported RRULEs into instances in a bounded window: (lower, upper) unix times,
+    by default from a day ago to 90 days ahead."""
     rule = _parse_rrule(component)
     if not start or rule is None:
         return [start]
     freq, interval, count, until, byday = rule
     if freq not in ("DAILY", "WEEKLY", "MONTHLY", "YEARLY"):
         return [start]
-    lower, upper = clock_time.time() - 86400, clock_time.time() + 90 * 86400
+    lower, upper = window or (clock_time.time() - 86400, clock_time.time() + 90 * 86400)
     if interval > 1_000_000:
         return [start] if lower <= start <= upper else []
     dt = _datetime(base_value, base_params) or datetime.fromtimestamp(start, timezone.utc)
@@ -268,15 +269,46 @@ def _occurrences(component, start, base_value="", base_params=""):
     return occurrences or ([start] if start >= lower else [])
 
 
+def _base(comp):
+    """(time, value, params) that a component's recurrences repeat: its start, or a task's due date."""
+    start_params, start_value = _prop(comp, "DTSTART")
+    start = _date(start_value, start_params)
+    if comp["_type"] == "VEVENT" or start is not None:
+        return start, start_value, start_params
+    due_params, due_value = _prop(comp, "DUE")
+    return _date(due_value, due_params), due_value, due_params
+
+
+def _excluded(comp):
+    return {_date(part, params) for params, value in comp.get("EXDATE", []) for part in value.split(",")}
+
+
+def _is_instance(master, recurrence):
+    """Whether the recurring master still has an instance at recurrence. An edited instance whose series
+    has since been shortened or changed no longer belongs to it, even if the edit is still stored."""
+    base, base_value, base_params = _base(master)
+    instances = set(_occurrences(master, base, base_value, base_params, (recurrence - 1, recurrence + 1)))
+    for params, value in master.get("RDATE", []):
+        instances.update(_date(part, params) for part in value.split(","))
+    return recurrence in instances and recurrence not in _excluded(master)
+
+
 def _items(calendar_data, resource_url) -> list[CalendarPost]:
     out = []
     components = list(_components(calendar_data))
     overrides = set()
+    masters = {}
     for component in components:
         recurrence = _date_prop(component, "RECURRENCE-ID")
         if recurrence is not None:
             overrides.add((_prop(component, "UID")[1], recurrence))
+        else:
+            masters.setdefault(_prop(component, "UID")[1], component)
     for comp in components:
+        recurrence = _date_prop(comp, "RECURRENCE-ID")
+        master = masters.get(_prop(comp, "UID")[1])
+        if recurrence is not None and master is not None and not _is_instance(master, recurrence):
+            continue  # left over from before its series changed
         kind = "event" if comp["_type"] == "VEVENT" else "task"
         title = _unescape(_prop(comp, "SUMMARY")[1]) or "Untitled calendar item"
         description = _unescape(_prop(comp, "DESCRIPTION")[1])
@@ -301,7 +333,7 @@ def _items(calendar_data, resource_url) -> list[CalendarPost]:
         for params, value in comp.get("RDATE", []):
             occurrences.extend(stamp for stamp in (_date(part, params) for part in value.split(",")) if stamp is not None)
         occurrences = sorted(set(occurrences), key=lambda stamp: stamp if stamp is not None else float("-inf"))
-        excluded = {_date(part, params) for params, value in comp.get("EXDATE", []) for part in value.split(",")}
+        excluded = _excluded(comp)
         for occurrence in occurrences:
             if occurrence in excluded:
                 continue
