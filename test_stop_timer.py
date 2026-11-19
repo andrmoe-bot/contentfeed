@@ -194,7 +194,7 @@ class StopTimerServerTests(unittest.TestCase):
 
     def test_fired_stop_still_keeps_the_open_post_page(self):
         server.set_stop(time.time() - 10)  # the timer ran out
-        result = server.ranked_feed("score", 300, post_url=self.long["url"])
+        result = server.feed("score", 300, post_url=self.long["url"])
         self.assertEqual(result["item"]["url"], self.long["url"])  # its page keeps the post
         self.assertTrue(result["stopped"])
 
@@ -219,7 +219,7 @@ class StopTimerServerTests(unittest.TestCase):
                  "published": start, "calendar_kind": "event", "calendar_start": start,
                  "deadline": start + 3600}
         server.subscriptions[self.url]["events"] = [event]
-        result = server.ranked_feed("score", 300, post_url=self.long["url"])
+        result = server.feed("score", 300, post_url=self.long["url"])
         self.assertEqual(result["item"]["url"], self.long["url"])  # its page keeps the post
         self.assertTrue(result["stopped"])
 
@@ -313,7 +313,7 @@ class StopTimerServerTests(unittest.TestCase):
                  "published": start, "calendar_kind": "event", "calendar_start": start,
                  "deadline": start + 3600}
         server.subscriptions[self.url]["events"] = [event]
-        result = server.ranked_feed("score", 300, post_url=event["url"])
+        result = server.feed("score", 300, post_url=event["url"])
         self.assertEqual(result.get("error"), "Post not found")
 
     def test_lead_time_is_configurable_as_a_term(self):
@@ -340,7 +340,7 @@ class StopTimerServerTests(unittest.TestCase):
 
     def test_post_page_keeps_its_post_even_when_it_no_longer_fits(self):
         server.set_stop(time.time() + 30 * 60)
-        result = server.ranked_feed("score", 300, post_url=self.long["url"])
+        result = server.feed("score", 300, post_url=self.long["url"])
         self.assertEqual(result["item"]["url"], self.long["url"])
         self.assertEqual(result["stop_at"], server.stop["stop_at"])
 
@@ -373,7 +373,7 @@ class StopTimerServerTests(unittest.TestCase):
         calendar = "https://calendar.example/home/"
         server.FEEDS_FILE.write_text(self.url + "\n" + calendar)
         server.subscriptions[calendar] = {"title": "Home", "items": [], "events": [self.dinner(10)], "fetched": 1}
-        result = server.ranked_feed("score", 300, subscription_url=self.url)
+        result = server.feed("score", 300, subscription_url=self.url)
         self.assertTrue(result["stopped"])
         self.assertEqual(result["stop_event"]["title"], "Dinner")
 

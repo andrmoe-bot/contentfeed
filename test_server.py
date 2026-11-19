@@ -188,8 +188,8 @@ class FeedCacheTests(unittest.TestCase):
     def test_expired_cache_reranks(self):
         with patch.object(ranking, "rank", wraps=ranking.rank) as rank:
             server.feed("score")
-            for key, value in list(server.ranked_cache.items()):
-                server.ranked_cache[key] = (0, *value[1:])  # age the entry, keep the rest
+            for cached in server.ranked_cache.values():
+                cached.built = 0  # age the entry, keep the rest
             server.feed("score")
         self.assertEqual(rank.call_count, 2)
 
@@ -238,7 +238,7 @@ class FeedCacheTests(unittest.TestCase):
         server.subscriptions[self.url]['items'] = [dict(self.post, url=f'https://example.com/{i}') for i in range(20)]
         with patch.object(ranking, 'rank', wraps=ranking.rank) as rank:
             first = server.feed('score', limit=2)
-            cached = next(iter(server.ranked_cache.values()))[1]
+            cached = next(iter(server.ranked_cache.values())).ranked
             self.assertEqual(len(cached.items), 2)
             self.assertEqual(first['total'], 20)
             next_page = server.feed('score', limit=5)
@@ -255,7 +255,7 @@ class FeedCacheTests(unittest.TestCase):
         result = server.feed('score', limit=10, enrich=True)
         self.assertEqual(result['total'], 40)
         self.assertEqual(len(result['items']), 10)
-        cached = next(iter(server.ranked_cache.values()))[1]
+        cached = next(iter(server.ranked_cache.values())).ranked
         self.assertEqual(len(cached.items), 30)
         self.assertEqual([call.args[0] for call in server.schedule.call_args_list],
                          [f'https://example.com/{i}' for i in range(25, 30)])

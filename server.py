@@ -24,6 +24,7 @@ import tempfile
 import urllib.error
 import time
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urljoin, urlparse
@@ -508,7 +509,7 @@ def subscription_status() -> list[dict]:
         next_up_map, _ = series_state(subs)
         for url, tags in subs.items():
             s = subscriptions.get(url, {})
-            dates = [it["published"] or it["first_seen"] for it in s.get("items", [])]
+            dates = [post_date(it) for it in s.get("items", [])]
             states = [view_state(u) for u in {p["url"] for p in s.get("items", [])}]
             next_up_count = sum(1 for p in s.get("items", []) if p["url"] in next_up_map)
             status.append({
@@ -827,7 +828,18 @@ def domain(url: str) -> str:
 # Recently ranked feeds, so checking for changes or moving a slider back doesn't rank everything again.
 # Each is kept for a minute at most, as points change with the time since things were published or opened.
 RANKED_TTL = 60
-ranked_cache: dict[tuple, tuple[float, ranking.RankedItems]] = {}
+RANKED_KEPT = 20
+
+
+@dataclass
+class CachedRanking:
+    built: float  # unix time
+    ranked: ranking.RankedItems
+    stop: tuple  # (stop_at, stopped) it was filtered for; see ranking_for
+    state_version: int
+
+
+ranked_cache: dict[tuple, CachedRanking] = {}
 
 
 def enrichment_key(post: dict, cached: dict, pending_keys: set, now: float) -> str | None:
@@ -863,13 +875,9 @@ def enrich_posts(ranked: list[dict], count: int):
             schedule(post["url"], force=True)
 
 
-def feed(ranker: str, limit: int = MAX_ITEMS_SHOWN, terms: dict | None = None, enrich: bool = False, search: str = "") -> dict:
-    return ranked_feed(ranker, limit, terms, enrich=enrich, search=search)
-
-
-def stop_fields(events: list[dict], now: float, terms: dict, stop_at: float | None) -> dict:
+def stop_state(events: list[dict], now: float, terms: dict, stop_at: float | None) -> dict:
     """The stop-watching state for a feed response: the effective stop time, whether it has run out
-    (stopped; then content is gone and stop_event is the event that caused it, if any)."""
+    (stopped), and stop_event, the event that causes it, if it isn't the timer."""
     effective, event = ranking.effective_stop(events, now, terms, stop_at)
     return {"stop_at": effective,
             "stopped": effective is not None and now >= effective,
@@ -877,7 +885,88 @@ def stop_fields(events: list[dict], now: float, terms: dict, stop_at: float | No
                            if event is not None else None)}
 
 
-def ranked_feed(ranker: str, limit: int, terms: dict | None = None, *, enrich: bool = False, post_url: str | None = None, subscription_url: str | None = None, search: str = "") -> dict:
+def build_items(entries: dict[str, list[str]], subs: dict[str, list[str]], now: float) -> tuple[list[dict], list[str]]:
+    """The links and subscriptions' posts as feed items (see ranking.py for their fields), each url once,
+    and the links seen for the first time. Call with lock held."""
+    new = [url for url in entries if url not in added]
+    added.update({url: now for url in new})
+    items = [
+        {**cache.get(url, {"url": url, "loading": True}), "kind": "link", "tags": tags,
+         "added": added[url], "date": added[url], "position": i, "sub": None}
+        for i, (url, tags) in enumerate(entries.items())
+    ]
+    seen = set(entries)
+    next_after, series_first = series_state(subs)
+    sub_opened = last_opened(subs)
+    for sub_url, tags in subs.items():
+        s = subscriptions.get(sub_url, {})
+        playlists_by_video = {}
+        for playlist in s.get("youtube_playlists", []):
+            for video in playlist["videos"]:
+                playlists_by_video.setdefault(video, []).append(playlist["id"])
+        for post in s.get("items", []):
+            if post["url"] in seen:
+                continue
+            seen.add(post["url"])
+            items.append({
+                **post, "youtube_playlists": playlists_by_video.get(post.get("youtube"), []),
+                "estimated_minutes": post.get("estimated_minutes") or cache.get(post["url"], {}).get("estimated_minutes"),
+                "kind": "subscription", "tags": tags, "feed": s["title"], "icon": s.get("icon"),
+                "domain": domain(post["url"]),
+                "added": post["first_seen"], "date": post_date(post), "position": -1,
+                "sub_last_viewed": sub_opened.get(sub_url), "sub": sub_url,
+            })
+    for item in items:
+        item.update(view_state(item["url"]), next_after=next_after.get(item["url"]),
+                    series_first=series_first.get(item["url"]))
+    return items, new
+
+
+def fitting_before_stop(items: list[dict], stopping: dict, now: float, post_url: str | None) -> list[dict]:
+    """While the stop is ahead, leave out posts that would run past it, so each one shown can be
+    finished before it. The post whose page is open stays, and so does the one you're viewing, even
+    when it no longer fits. Once the stop has fired the feed itself is left alone: the response's
+    stopped flag tells the page to switch to stop mode in JS, so switching back is seamless."""
+    if stopping["stop_at"] is None or stopping["stopped"]:
+        return items
+    watching = being_viewed(items)
+    return [it for it in items if it is watching or it["url"] == post_url
+            or ranking.fits_before_stop(it, now, stopping["stop_at"])]
+
+
+def ranking_for(ranker: str, terms: dict, entries: dict, subs: dict, search: str, post_url: str | None,
+                stopping: dict, now: float) -> ranking.RankedItems:
+    """The ranked feed, from the cache when it's recent and was filtered for the same stop state. The
+    stop state changes with time alone, so a cached ranking is reused only while it's unchanged, and a
+    response never mixes items filtered at one moment with stop fields computed at another."""
+    stop_key = (stopping["stop_at"], stopping["stopped"])
+    with lock:
+        key = (ranker, json.dumps(terms, sort_keys=True), json.dumps([entries, subs, search, post_url]))
+        hit = ranked_cache.get(key)
+        if hit and now - hit.built < RANKED_TTL and hit.stop == stop_key and hit.state_version == state_version:
+            return hit.ranked
+        version = state_version
+        items, new = build_items(entries, subs, now)
+    if new:
+        save_json(ADDED_FILE, added, affects_feed=False)
+    if post_url is None and search.strip():
+        items = [p for p in items if matches_search(p, search)]
+    ranked = ranking.rank(ranker, fitting_before_stop(items, stopping, now, post_url), now, terms, lazy=True)
+    with lock:
+        for k in [k for k, c in ranked_cache.items() if now - c.built >= RANKED_TTL or c.state_version != state_version]:
+            del ranked_cache[k]
+        if len(ranked_cache) >= RANKED_KEPT:
+            ranked_cache.pop(next(iter(ranked_cache)))
+        if version == state_version:
+            ranked_cache[key] = CachedRanking(now, ranked, stop_key, version)
+    return ranked
+
+
+def feed(ranker: str, limit: int = MAX_ITEMS_SHOWN, terms: dict | None = None, *, enrich: bool = False,
+         search: str = "", post_url: str | None = None, subscription_url: str | None = None) -> dict:
+    """The ranked feed: everything, or a subscription's posts (with its next up), or a post's page
+    (see post_details). terms other than the saved ones preview them, such as while you move a slider."""
+    terms = terms or ranking.TERMS
     entries = read_entries()
     subs = all_subs = read_entries(FEEDS_FILE)
     if subscription_url is not None:
@@ -890,110 +979,32 @@ def ranked_feed(ranker: str, limit: int, terms: dict | None = None, *, enrich: b
     for url in subs:
         schedule_subscription(url)
     now = time.time()
-    stop_at = stop.get("stop_at")  # a passed timer has fired: it stops the feed until cleared
     with lock:
         # Every subscribed calendar's events stop watching, on every page, not only their own subscription's.
         events = calendar_events(all_subs)
-        key = (ranker, json.dumps(terms or ranking.TERMS, sort_keys=True), json.dumps([entries, subs, search, post_url is not None]),
-               state_version)
-        hit = ranked_cache.get(key)
-        if hit and now - hit[0] < RANKED_TTL:
-            # The cached ranking was filtered for the stop state at build time, and that state is
-            # time-dependent: reuse the cache only while the whole stop state (effective stop and
-            # whether it has fired) is unchanged, so a response never mixes items filtered at one
-            # moment with stop fields computed at another.
-            eff, _ = ranking.effective_stop(events, now, terms or ranking.TERMS, stop_at)
-            if (eff, eff is not None and now >= eff) != (hit[3], hit[4]):
-                hit = None
-        if hit and now - hit[0] < RANKED_TTL:
-            ranked = hit[1]
-            items = None
-            new = []
-        else:
-            new = [url for url in entries if url not in added]
-            added.update({url: now for url in new})
-            items = [
-                {**cache.get(url, {"url": url, "loading": True}), "kind": "link", "tags": tags,
-                 "added": added[url], "date": added[url], "position": i, "sub": None}
-                for i, (url, tags) in enumerate(entries.items())
-            ]
-            seen = set(entries)
-            next_after, series_first = series_state(subs)
-            sub_opened = last_opened(subs)
-            for sub_url, tags in subs.items():
-                s = subscriptions.get(sub_url, {})
-                playlists_by_video = {}
-                for playlist in s.get("youtube_playlists", []):
-                    for video in playlist["videos"]:
-                        playlists_by_video.setdefault(video, []).append(playlist["id"])
-                for post in s.get("items", []):
-                    if post["url"] in seen:
-                        continue
-                    seen.add(post["url"])
-                    items.append({
-                        **post, "youtube_playlists": playlists_by_video.get(post.get("youtube"), []),
-                        "estimated_minutes": post.get("estimated_minutes") or cache.get(post["url"], {}).get("estimated_minutes"),
-                        "kind": "subscription", "tags": tags, "feed": s["title"], "icon": s.get("icon"),
-                        "domain": domain(post["url"]),
-                        "added": post["first_seen"], "date": post["published"] or post["first_seen"], "position": -1,
-                        "sub_last_viewed": sub_opened.get(sub_url), "sub": sub_url,
-                    })
-            for item in items:
-                item.update(view_state(item["url"]), next_after=next_after.get(item["url"]),
-                            series_first=series_first.get(item["url"]))
-            n_pending = len(pending)
-    if new:
-        save_json(ADDED_FILE, added, affects_feed=False)
-    if items is not None:
-        if post_url is None and search.strip():
-            items = [p for p in items if matches_search(p, search)]
-        effective, _ = ranking.effective_stop(events, now, terms or ranking.TERMS, stop_at)
-        feed_items = items
-        if effective is not None and now < effective:
-            # While the stop is ahead, leave out posts that would run past it, so each one shown can
-            # be finished before it. The post whose page is open stays, and so does the one you're
-            # viewing, even when it no longer fits. Once the stop has fired the feed itself is left
-            # alone: the response's stopped flag tells the page to switch to stop mode in JS
-            # (notice, playback force-stopped, alert), so switching back is seamless.
-            watching = being_viewed(feed_items)
-            feed_items = [it for it in feed_items if it is watching
-                          or (post_url is not None and it["url"] == post_url)
-                          or ranking.fits_before_stop(it, now, effective)]
-        ranked = ranking.rank(ranker, feed_items, now, terms, lazy=True)
-        with lock:
-            for k in [k for k, (t, *_rest) in ranked_cache.items() if now - t >= RANKED_TTL or k[3] != state_version]:
-                del ranked_cache[k]
-            if len(ranked_cache) >= 20:
-                ranked_cache.pop(next(iter(ranked_cache)))
-            if key[3] == state_version:
-                ranked_cache[key] = (now, ranked, None, effective, effective is not None and now >= effective)
+    stopping = stop_state(events, now, terms, stop.get("stop_at"))
+    ranked = ranking_for(ranker, terms, entries, subs, search, post_url, stopping, now)
     if post_url is not None:
-        result = post_details(ranked.source, post_url, ranker, limit, terms or ranking.TERMS, now,
-                              enrich=enrich, search=search)
-        result.update(stop_fields(events, now, terms or ranking.TERMS, stop_at))
-        return result
-    extra_count = (terms or ranking.TERMS)["enrich_count"] if enrich else 0
+        return {**post_details(ranked.source, post_url, ranker, limit, terms, now, enrich=enrich, search=search), **stopping}
+    extra_count = terms["enrich_count"] if enrich else 0
     with lock:
         cached, pending_keys = dict(cache), set(pending)
-    match_key = lambda post: enrichment_key(post, cached, pending_keys, now)
-    visible, extra = ranked.read(limit, extra_count, match_key)
-    with lock:
-        n_pending = len(pending)
-    result = {"items": ranking.explain_similarities(visible, ranked.source, terms or ranking.TERMS, now),
-            "total": ranked.total, "pending": n_pending, "ranker": ranker,
-            **stop_fields(events, now, terms or ranking.TERMS, stop_at)}
+    visible, extra = ranked.read(limit, extra_count, lambda post: enrichment_key(post, cached, pending_keys, now))
+    result = {"items": ranking.explain_similarities(visible, ranked.source, terms, now),
+              "total": ranked.total, "pending": pending_count(), "ranker": ranker, **stopping}
     if subscription_url is not None:
-        order = lambda it: (it["score"], it["last_viewed"] is None, it["date"], it["position"])
-        next_up_items = sorted(
-            [p for p in ranked.source if p.get("next_after")],
-            key=order, reverse=True
-        )
+        next_up = sorted((p for p in ranked.source if p.get("next_after")), key=ranking.order, reverse=True)
         if enrich:
-            enrich_posts([*next_up_items, *extra], extra_count)
-        result["next_up"] = ranking.explain_similarities(next_up_items, ranked.source, terms or ranking.TERMS, now)
+            enrich_posts([*next_up, *extra], extra_count)
+        result["next_up"] = ranking.explain_similarities(next_up, ranked.source, terms, now)
     elif enrich:
         enrich_posts(extra, extra_count)
     return result
+
+
+def pending_count() -> int:
+    with lock:
+        return len(pending)
 
 
 def matches_search(post: dict, search: str) -> bool:
@@ -1038,10 +1049,8 @@ def post_details(source: list[dict], url: str, ranker: str, limit: int, terms: d
     item = cards([target])[0]
     if enrich:
         enrich_posts([item, *(p for group in feeds_of_series for p in group["items"]), *similar], terms["enrich_count"])
-    with lock:
-        n_pending = len(pending)
     return {"item": item, "series": feeds_of_series, "similar": {"items": similar, "total": len(matches)},
-            "pending": n_pending, "ranker": ranker}
+            "pending": pending_count(), "ranker": ranker}
 
 
 def append_line(path: Path, url: str, tags: list[str]):
@@ -1233,7 +1242,7 @@ class Handler(BaseHTTPRequestHandler):
                 url = query.get("url", [""])[0]
                 if not url:
                     return self._json({"error": "url is required"}, 400)
-                result = ranked_feed(name, max(int(limit), 1) if limit.isdigit() else MAX_ITEMS_SHOWN,
+                result = feed(name, max(int(limit), 1) if limit.isdigit() else MAX_ITEMS_SHOWN,
                                      terms, enrich=query.get("enrich") == ["1"], subscription_url=url, search=query.get("q", [""])[0])
                 if "error" in result:
                     return self._json(result, 404)
@@ -1246,7 +1255,7 @@ class Handler(BaseHTTPRequestHandler):
                 url = query.get("url", [""])[0]
                 if not url:
                     return self._json({"error": "url is required"}, 400)
-                result = ranked_feed(name, max(int(limit), 1) if limit.isdigit() else MAX_ITEMS_SHOWN,
+                result = feed(name, max(int(limit), 1) if limit.isdigit() else MAX_ITEMS_SHOWN,
                                      terms, enrich=query.get("enrich") == ["1"], post_url=url, search=query.get("q", [""])[0])
                 if "error" in result:
                     return self._json(result, 404)

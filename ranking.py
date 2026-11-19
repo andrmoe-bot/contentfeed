@@ -661,6 +661,12 @@ def score(item: dict, now: float, terms: dict) -> Reasons:
     return reasons
 
 
+def order(item: dict) -> tuple:
+    """Sort key for scored items, highest first with reverse=True: on equal scores, things you haven't
+    opened first, then newest first, then earlier lines of links.txt."""
+    return item["score"], item["last_viewed"] is None, item["date"], item["position"]
+
+
 class RankedItems:
     """A resumable exact ranking. Concurrent requests can safely extend its cached prefix."""
     def __init__(self, source: list[dict], iterator: Iterator[dict]):
@@ -710,8 +716,6 @@ def rank(name: str, items: list[dict], now: float, terms: dict | None = None,
     for item in items:
         reasons = [{"label": label, "points": points} for label, points in fn(item, now, terms)]
         scored.append({**item, "score": points(sum(r["points"] for r in reasons)), "reasons": reasons})
-    # On equal scores: things you haven't opened first, then newest first
-    order = lambda it: (it["score"], it["last_viewed"] is None, it["date"], it["position"])
     penalty = terms.get("above_similarity_penalty", 0) if fn.spread else 0
     metric = similarity_metric(terms["similar_days"], terms["similar_publish_weight"],
                                terms["similar_length_weight"], terms["similar_title_weight"], terms["similar_base_percent"])
