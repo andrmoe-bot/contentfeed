@@ -19,6 +19,22 @@ function ago(unix) {
   }
 }
 
+// Such as "09:30", for a unix time.
+function clock(unix) {
+  const d = new Date(unix * 1000);
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+// GET path, or with a body, POST it as JSON. Returns { ok, data }; a server that doesn't answer is an error too.
+async function api(path, body) {
+  const res = await fetch(path, body ? {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+  } : undefined).catch(() => null);
+  if (!res) return { ok: false, data: { error: "the server didn't answer" } };
+  const data = await res.json().catch(() => ({}));
+  return { ok: res.ok, data };
+}
+
 const messageEl = document.getElementById("message");
 
 function say(text, isError = false) {

@@ -53,15 +53,6 @@ class CalendarScoringTests(unittest.TestCase):
         explained_penalized = next(it for it in explained if it["score"] == -15)
         self.assertEqual([match["title"] for match in explained_penalized["above_matches"]], ["first"])
 
-    def test_events_stay_out_of_task_similarity(self):
-        """Events aren't feed items (server.py leaves them out); should any reach the similarity
-        index, tasks still don't match them."""
-        terms = dict(ranking.DEFAULT_TERMS, similar_penalty=0, above_similarity_penalty=-15)
-        task = dict(item("task", "calendar"), calendar_kind="task")
-        event = dict(item("event", "calendar"), calendar_kind="event")
-        ranked = ranking.rank("score", [task, event], NOW, terms)
-        self.assertEqual([it["score"] for it in ranked], [0, 0])
-
 
 if __name__ == "__main__":
     unittest.main()

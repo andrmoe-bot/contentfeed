@@ -11,14 +11,18 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import outbound
-from icalendar_parser import ICalendarError, parse_calendar_data, parse_calendar_resource
+from icalendar_parser import ICalendarError, calendar_result, parse_calendar_data, parse_calendar_resource
 
-USER_AGENT = "Mozilla/5.0 (compatible; ContentFeed/1.0)"
+USER_AGENT = outbound.USER_AGENT
 TIMEOUT = 10
 MAX_BYTES = 20_000_000
 READ_ONLY_METHODS = {"GET", "PROPFIND", "REPORT"}
 DAV = "DAV:"
 CAL = "urn:ietf:params:xml:ns:caldav"
+CS = "http://calendarserver.org/ns/"
+CHECK_TIMEOUT = 2  # seconds to wait for a calendar's version; see version()
+# A collection's version changes with every change in it: its sync token (RFC 6578), or else its CTag.
+VERSION_PROPS = '<D:sync-token/><CS:getctag/>'
 
 
 class CalDAVError(Exception):
@@ -150,7 +154,7 @@ def read_logins(path: Path):
     return logins, None
 
 
-def _request(url, method="GET", body=None, headers=None, auth=None):
+def _request(url, method="GET", body=None, headers=None, auth=None, *, timeout=TIMEOUT, paced=True):
     if method not in READ_ONLY_METHODS:
         raise CalDAVError(f"CalDAV method {method} is not allowed; calendars are read-only.")
     h = {"User-Agent": USER_AGENT, **(headers or {})}
@@ -159,7 +163,7 @@ def _request(url, method="GET", body=None, headers=None, auth=None):
     request = urllib.request.Request(url, data=body, headers=h, method=method)
     try:
         opener = _SameOriginRedirect() if auth else None
-        with outbound.urlopen(request, timeout=TIMEOUT, redirect_handler=opener) as response:
+        with outbound.urlopen(request, timeout=timeout, redirect_handler=opener, paced=paced) as response:
             payload = response.read(MAX_BYTES + 1)
             if len(payload) > MAX_BYTES:
                 raise CalDAVError("The calendar response is too large.")
@@ -184,14 +188,8 @@ def fetch(url, login=None):
         except CalDAVError:
             pass  # Some CalDAV collection URLs also end in .ics.
 
-    propfind = f'''<?xml version="1.0" encoding="utf-8"?>
-<D:propfind xmlns:D="{DAV}"><D:prop><D:resourcetype/><D:displayname/></D:prop></D:propfind>'''.encode()
-    body, _, _ = _request(clean_url, "PROPFIND", propfind,
-        {"Depth": "0", "Content-Type": "application/xml; charset=utf-8", "Accept": "application/xml"}, auth)
-    try:
-        root = ET.fromstring(body)
-    except ET.ParseError as e:
-        raise CalDAVError("The CalDAV server returned invalid XML.") from e
+    root = _propfind(clean_url, "<D:resourcetype/><D:displayname/>" + VERSION_PROPS, auth)
+    version = _version_of(root)  # before reading the events, so a change made meanwhile is read next time
     resources = root.findall(f".//{{{DAV}}}resourcetype")
     if not any(resource.find(f"{{{CAL}}}calendar") is not None for resource in resources):
         raise CalDAVError("That address is not a CalDAV calendar collection or .ics file.")
@@ -224,9 +222,32 @@ def fetch(url, login=None):
             data = response.find(f".//{{{CAL}}}calendar-data")
             if data is not None and data.text:
                 items.extend(parse_calendar_resource(data.text, resource_url))
-    items.sort(key=lambda item: item.get("published") or 0, reverse=True)
-    return {"title": title or urllib.parse.unquote(urllib.parse.urlsplit(clean_url).path.rstrip("/").split("/")[-1]) or "Calendar",
-            "site": clean_url, "icon": None, "items": items[:1000], "complete": True}
+    return {**calendar_result(items, title, clean_url), "version": version}
+
+
+def _propfind(url, props, auth, **options):
+    body, _, _ = _request(url, "PROPFIND", f'''<?xml version="1.0" encoding="utf-8"?>
+<D:propfind xmlns:D="{DAV}" xmlns:CS="{CS}"><D:prop>{props}</D:prop></D:propfind>'''.encode(),
+        {"Depth": "0", "Content-Type": "application/xml; charset=utf-8", "Accept": "application/xml"}, auth, **options)
+    try:
+        return ET.fromstring(body)
+    except ET.ParseError as e:
+        raise CalDAVError("The CalDAV server returned invalid XML.") from e
+
+
+def _version_of(root) -> str | None:
+    for name in (f"{{{DAV}}}sync-token", f"{{{CS}}}getctag"):
+        found = root.find(f".//{name}")
+        if found is not None and found.text and found.text.strip():
+            return found.text.strip()
+    return None
+
+
+def version(url, login=None) -> str | None:
+    """The calendar collection's current version, which changes whenever anything in it does, or None if
+    the server doesn't report one. A quick request that answers within CHECK_TIMEOUT or fails."""
+    clean_url, auth = _url_and_auth(url, login)
+    return _version_of(_propfind(clean_url, VERSION_PROPS, auth, timeout=CHECK_TIMEOUT, paced=False))
 
 
 def _parse_calendar_data(body, resource_url):

@@ -46,10 +46,10 @@ how you run the feed:
 It holds:
 
 - `links.txt` and `feeds.txt`: your links and subscriptions (created with instructions on first run)
-- `added.json`: when each link or post was first seen
-- `viewed.json`: when you last opened each item
-- `skipped.json`: when you last skipped each item (the white dot)
-- `colors.json`: the items you marked green or red
+- `state.json`: for each link or post, when it was first seen, when you last opened or skipped it
+  (the white dot), and the color you gave it. Older versions kept these in `added.json`,
+  `viewed.json`, `skipped.json` and `colors.json`; they're moved into `state.json` at startup and the
+  old files kept as `.bak`.
 - `settings.json`: your score settings from the feed's score panel, if you changed them
 - `stop.json`: the stop-watching timer, if you set one (see Stop watching)
 - `jellyfin.json`: logins for Jellyfin servers you subscribe to (see Jellyfin), if any
@@ -74,8 +74,9 @@ read. The data lives in `/var/lib/contentfeed`, which systemd creates and which 
 
 The container needs an address on your LAN (e.g. a bridged network) for other devices to reach
 port 80. Logs: `journalctl -u contentfeed -f`; they include the addresses the server fetches.
-The displayed app version comes from `VERSION`, with the latest commit's short hash next to it
-when the code is a git checkout; increment the final number for each release.
+The displayed app version is `VERSION`'s major.minor followed by the number of commits, with the
+latest commit's short hash next to it, when the code is a git checkout (a full clone, as above);
+otherwise it's `VERSION` alone.
 
 To update: `git -C /opt/contentfeed pull && systemctl restart contentfeed`. If the service
 file changed, copy it to `/etc/systemd/system/` again and run `systemctl daemon-reload` first.
@@ -108,6 +109,14 @@ individual calendar URL. For private calendars,
 put the login in `caldav.json` in the data directory and keep credentials out of the URL. A login mapped
 to a parent collection URL applies to calendars beneath that path. Use a dedicated account with
 read-only access if the server supports it; ContentFeed only sends calendar-reading requests.
+
+CalDAV calendars (such as Radicale's) stay in step with the feed: every time the page updates, the
+server asks the calendar for its version, a small request that changes whenever anything in the
+calendar does, and reads the calendar again only if it has changed. So a change in your calendar
+reaches the feed within seconds. If the calendar server doesn't answer within 2 seconds, the feed
+keeps using the events it read last, says so in the status line, and tries again every 30 seconds.
+A server that reports no version is read again at most once a minute. Shared `.ics` links are
+checked on the subscription timer like feeds.
 
 For example, `caldav.json` can map the Radicale user collection to a login used by selected child calendars:
 

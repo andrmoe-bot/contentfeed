@@ -24,6 +24,7 @@ import tempfile
 import urllib.error
 import time
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urljoin, urlparse
@@ -36,20 +37,42 @@ import pages
 from content_length import page_minutes, youtube_minutes
 
 import ranking
+import series
 
 ROOT = Path(__file__).resolve().parent  # code and pages; the server never writes here
-VERSION = (ROOT / "VERSION").read_text(encoding="ascii").strip()
-# Short hash of the latest commit, shown next to the version in the page footer.
-# The code runs from a git checkout (see deploy/), but stay quiet without one.
-COMMIT = ""
-try:
-    COMMIT = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "--short", "HEAD"],
-                            capture_output=True, text=True, timeout=5, check=True).stdout.strip()
-except (OSError, subprocess.SubprocessError):
-    pass
+
+
+def git(*args: str) -> str:
+    """A git command's output for the checkout the code runs from, or "" without git or a checkout."""
+    try:
+        return subprocess.run(["git", "-C", str(ROOT), *args], capture_output=True, text=True,
+                              timeout=5, check=True).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+# The version is VERSION's major.minor plus the number of commits, so each merged change counts up
+# without anyone editing a file that every pull request would then conflict on. The code runs from
+# a git checkout (see deploy/); without one, the version is VERSION alone.
+COMMIT = git("rev-parse", "--short", "HEAD")  # shown next to the version in the page footer
+VERSION = ".".join(filter(None, [(ROOT / "VERSION").read_text(encoding="ascii").strip(), git("rev-list", "--count", "HEAD")]))
+
+
+def version_label() -> str:
+    """The version shown in the page footer."""
+    return VERSION + (f" ({COMMIT})" if COMMIT else "")
+
+
 DEFAULT_DATA_DIR = ROOT / "data"
 # Data files; set_data_dir() points these into the data directory at startup.
-LINKS_FILE = FEEDS_FILE = CACHE_FILE = ADDED_FILE = FEED_CACHE_FILE = VIEWED_FILE = SKIPPED_FILE = COLORS_FILE = SETTINGS_FILE = JELLYFIN_FILE = CALDAV_FILE = STOP_FILE = Path()
+DATA_FILES = {
+    "LINKS_FILE": "links.txt", "FEEDS_FILE": "feeds.txt", "CACHE_FILE": "cache.json", "FEED_CACHE_FILE": "feeds.json",
+    "STATE_FILE": "state.json", "SETTINGS_FILE": "settings.json", "JELLYFIN_FILE": "jellyfin.json",
+    "CALDAV_FILE": "caldav.json", "STOP_FILE": "stop.json",
+}
+LINKS_FILE = FEEDS_FILE = CACHE_FILE = FEED_CACHE_FILE = STATE_FILE = SETTINGS_FILE = JELLYFIN_FILE = CALDAV_FILE = STOP_FILE = Path()
+# Before state.json, each of its fields had a file of its own, {url: value}.
+OLD_STATE_FILES = {"added": "added.json", "viewed": "viewed.json", "skipped": "skipped.json", "color": "colors.json"}
 TEMPLATES = {
     "links.txt": """\
 # One link per line, optionally followed by tags: https://example.com music longread
@@ -70,14 +93,13 @@ TEMPLATES = {
 # https://xkcd.com comics
 """,
 }
-PAGES = {  # request path -> (file, content type)
-    "/": ("index.html", "text/html; charset=utf-8"),
-    "/subscription": ("index.html", "text/html; charset=utf-8"),
-    "/subscription/next-up": ("index.html", "text/html; charset=utf-8"),
-    "/post": ("index.html", "text/html; charset=utf-8"),
-    "/subscriptions": ("subscriptions.html", "text/html; charset=utf-8"),
-    "/style.css": ("style.css", "text/css; charset=utf-8"),
-    "/common.js": ("common.js", "text/javascript; charset=utf-8"),
+CONTENT_TYPES = {".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8",
+                 ".js": "text/javascript; charset=utf-8"}
+PAGES = {  # request path -> file
+    "/": "index.html", "/subscription": "index.html", "/subscription/next-up": "index.html", "/post": "index.html",
+    "/subscriptions": "subscriptions.html",
+    **{"/" + name: name for name in ("style.css", "common.js", "feed.css", "feed.js", "stop.js", "settings.js",
+                                     "subscriptions.css", "subscriptions.js")},
 }
 MAX_BYTES = 1_000_000
 MAX_ITEMS_SHOWN = 300  # per page of the feed; "Show more" asks for the next page
@@ -86,6 +108,7 @@ OLDER_RETRY = 6 * 3600  # seconds before trying again to load a channel's older 
 
 lock = threading.Lock()
 cache: dict[str, dict] = {}
+# What you did with each item, saved together in state.json (see save_state):
 added: dict[str, float] = {}  # url -> unix time the server first saw the link
 viewed: dict[str, float] = {}  # url -> unix time you last opened it
 skipped: dict[str, float] = {}  # url -> unix time you last skipped it (the white dot)
@@ -100,30 +123,35 @@ executor = ThreadPoolExecutor(max_workers=8)
 
 def set_data_dir(path: Path):
     """Use path for all data files, creating it and the starter lists if they don't exist yet."""
-    global LINKS_FILE, FEEDS_FILE, CACHE_FILE, ADDED_FILE, FEED_CACHE_FILE, VIEWED_FILE, SKIPPED_FILE, COLORS_FILE, SETTINGS_FILE, JELLYFIN_FILE, CALDAV_FILE, STOP_FILE
     path.mkdir(parents=True, exist_ok=True)
-    LINKS_FILE, FEEDS_FILE = path / "links.txt", path / "feeds.txt"
-    CACHE_FILE, ADDED_FILE, FEED_CACHE_FILE = path / "cache.json", path / "added.json", path / "feeds.json"
-    VIEWED_FILE, SKIPPED_FILE, COLORS_FILE = path / "viewed.json", path / "skipped.json", path / "colors.json"
-    SETTINGS_FILE, JELLYFIN_FILE, CALDAV_FILE = path / "settings.json", path / "jellyfin.json", path / "caldav.json"
-    STOP_FILE = path / "stop.json"
+    globals().update({name: path / file for name, file in DATA_FILES.items()})
     for name, text in TEMPLATES.items():
         if not (path / name).exists():
             (path / name).write_text(text, encoding="utf-8")
 
 
+_entries_read: dict[Path, tuple[tuple, dict[str, list[str]]]] = {}  # path -> (file stamp, entries)
+
+
 def read_entries(path: Path | None = None) -> dict[str, list[str]]:
-    """url -> tags, in file order (links.txt by default). A line is a URL followed by optional tags."""
+    """url -> tags, in file order (links.txt by default). A line is a URL followed by optional tags.
+    The lists are read on almost every request, so they're parsed again only when the file changes."""
     path = path or LINKS_FILE
-    if not path.exists():
+    try:
+        info = path.stat()
+    except FileNotFoundError:
         return {}
-    entries: dict[str, list[str]] = {}
-    for line in path.read_text(encoding="utf-8").splitlines():
-        url, *tags = line.split() or [""]
-        if url.startswith("#") or urlparse(url).scheme not in ("http", "https") or url in entries:
-            continue
-        entries[url] = clean_tags(tags)
-    return entries
+    stamp = (info.st_mtime_ns, info.st_size, info.st_ino)
+    known = _entries_read.get(path)
+    if known is None or known[0] != stamp:
+        entries: dict[str, list[str]] = {}
+        for line in path.read_text(encoding="utf-8").splitlines():
+            url, *tags = line.split() or [""]
+            if url.startswith("#") or urlparse(url).scheme not in ("http", "https") or url in entries:
+                continue
+            entries[url] = clean_tags(tags)
+        known = _entries_read[path] = (stamp, entries)
+    return {url: list(tags) for url, tags in known[1].items()}
 
 
 def clean_tags(words: list[str]) -> list[str]:
@@ -134,10 +162,6 @@ def clean_tags(words: list[str]) -> list[str]:
         if tag and tag not in tags:
             tags.append(tag)
     return tags
-
-
-def read_links() -> list[str]:
-    return list(read_entries())
 
 
 def fetch_metadata(url: str) -> dict:
@@ -198,6 +222,38 @@ def load_json(path: Path) -> dict:
         return {}
 
 
+def save_state(*, affects_feed: bool = True):
+    """Save what you did with each item to state.json, as
+    {"version": 1, "items": {url: {"added": time, "viewed": time, "skipped": time, "color": color}}},
+    each field only when it has a value."""
+    with lock:
+        items: dict[str, dict] = {}
+        for field, values in (("added", added), ("viewed", viewed), ("skipped", skipped), ("color", colors)):
+            for url, value in values.items():
+                items.setdefault(url, {})[field] = value
+    save_json(STATE_FILE, {"version": 1, "items": items}, affects_feed=affects_feed)
+
+
+def load_state():
+    """Read state.json, or the files it replaced, which are kept as .bak once it's written."""
+    maps = {"added": added, "viewed": viewed, "skipped": skipped, "color": colors}
+    if STATE_FILE.exists():
+        for url, fields in load_json(STATE_FILE).get("items", {}).items():
+            for field, value in fields.items():
+                if field in maps:
+                    maps[field][url] = value
+        return
+    old = {field: STATE_FILE.parent / name for field, name in OLD_STATE_FILES.items()}
+    for field, path in old.items():
+        maps[field].update(load_json(path))
+    if any(path.exists() for path in old.values()):
+        save_state(affects_feed=False)
+        for path in old.values():
+            if path.exists():
+                path.replace(path.with_name(path.name + ".bak"))
+        print(f"Moved added.json, viewed.json, skipped.json and colors.json into {STATE_FILE}.")
+
+
 def migrate_caldav_url_credentials() -> int:
     """Move legacy credentials out of feeds.txt and cached subscription keys into caldav.json."""
     if not FEEDS_FILE.exists():
@@ -238,23 +294,52 @@ def migrate_caldav_url_credentials() -> int:
     return migrated
 
 
+# Background jobs. Each job has a pending key, its prefix and argument, such as "feed:<url>": while
+# it's queued or running the key is in pending, so it isn't started twice, and the page can say how
+# many fetches are under way.
+def job(prefix: str):
+    """Make fn a job whose pending key is prefix + its first argument, released however it ends."""
+    def wrap(fn):
+        @functools.wraps(fn)
+        def run(arg, *args, **kwargs):
+            try:
+                return fn(arg, *args, **kwargs)
+            finally:
+                with lock:
+                    pending.discard(prefix + arg)
+        run.key = lambda arg: prefix + arg
+        return run
+    return wrap
+
+
+def submit_once(work, arg, *args, unless=None) -> bool:
+    """Queue a job unless it's already pending or unless() (called with lock held) is true."""
+    key = work.key(arg)
+    with lock:
+        if key in pending or (unless is not None and unless()):
+            return False
+        pending.add(key)
+    executor.submit(work, arg, *args)
+    return True
+
+
+def run_now(work, arg, *args):
+    """Run a job here and wait for it, marking it pending meanwhile."""
+    with lock:
+        pending.add(work.key(arg))
+    return work(arg, *args)
+
+
+@job("")
 def refresh(url: str):
-    try:
-        item = fetch_metadata(url)
-        with lock:
-            cache[url] = item
-        save_json(CACHE_FILE, cache)
-    finally:
-        with lock:
-            pending.discard(url)
+    item = fetch_metadata(url)
+    with lock:
+        cache[url] = item
+    save_json(CACHE_FILE, cache)
 
 
 def schedule(url: str, force: bool = False):
-    with lock:
-        if url in pending or (url in cache and not force):
-            return
-        pending.add(url)
-    executor.submit(refresh, url)
+    submit_once(refresh, url, unless=lambda: url in cache and not force)
 
 
 def post_key(post: dict) -> str:
@@ -279,136 +364,174 @@ def merge_posts(old: list[dict], new: list[dict], now: float) -> list[dict]:
     return posts[:MAX_POSTS_KEPT]
 
 
+# Where a subscription's posts come from, saved as its "source" once found. Subscriptions saved before
+# sources were recorded get theirs from what was saved about them (see known_source).
+SOURCES = ("nrk", "jellyfin", "caldav", "feed", "page")
+
+
+def known_source(url: str, old: dict) -> str | None:
+    """The subscription's source, if it has been found before."""
+    if old.get("source") in SOURCES:
+        return old["source"]
+    if nrk.series_id(url):
+        return "nrk"
+    if any(p.get("jellyfin") for p in old.get("items", [])):
+        return "jellyfin"
+    if old.get("page"):
+        return "page"
+    if old.get("feed_url"):
+        return "feed"
+    if old.get("events") or any(p.get("calendar_kind") for p in old.get("items", [])):
+        return "caldav"
+    return None
+
+
+def fetch_calendar(url: str) -> dict:
+    """A CalDAV calendar or .ics file, with its login from caldav.json. A missing login is a FeedError."""
+    logins, problem = caldav.read_logins(CALDAV_FILE)
+    try:
+        return caldav.fetch(url, caldav.login_for(url, logins))
+    except caldav.CredentialsInURL as e:
+        raise feeds.FeedError(str(e)) from e
+    except caldav.CalDAVError as e:
+        if "HTTP 401" in str(e):
+            detail = problem or f"add a username and password for this calendar to {CALDAV_FILE}"
+            raise feeds.FeedError(f"CalDAV requires a login: {detail}") from e
+        raise
+
+
+def jellyfin_login(url: str) -> dict:
+    logins, problem = jellyfin.read_logins(JELLYFIN_FILE)
+    login = jellyfin.login_for(url, logins)
+    if login is None:
+        raise feeds.FeedError(jellyfin.missing_login(url, logins, problem, JELLYFIN_FILE))
+    return login
+
+
+def fetch_source(source: str, url: str, old: dict, force: bool) -> tuple[str, dict | None]:
+    """(source, posts) from a known source; posts are None when a feed is unchanged since last time."""
+    known = {p["url"] for p in old.get("items", [])}
+    if source == "nrk":
+        return source, nrk.fetch(url, known)
+    if source == "jellyfin":
+        return source, jellyfin.fetch(url, jellyfin_login(url))
+    if source == "page":
+        return source, pages.fetch(url, known)
+    if source == "caldav":
+        return source, fetch_calendar(url)
+    try:
+        return source, feeds.fetch(old["feed_url"], *(() if force else (old.get("etag"), old.get("modified"))))
+    except feeds.NoFeed:
+        return "page", pages.fetch(url)  # the feed is gone, so read the posts from the page
+
+
+def detect_source(url: str) -> tuple[str, dict]:
+    """(source, posts) for a new subscription, trying each kind of source in turn."""
+    if nrk.series_id(url):
+        return "nrk", nrk.fetch(url)
+    logins, problem = jellyfin.read_logins(JELLYFIN_FILE)
+    login = jellyfin.login_for(url, logins)
+    if login is not None:
+        return "jellyfin", jellyfin.fetch(url, login)
+    try:
+        try:
+            return "caldav", fetch_calendar(url)
+        except caldav.CalDAVError:
+            pass  # not a calendar
+        return "feed", feeds.fetch(feeds.discover(url))
+    except feeds.FeedError as e:
+        if jellyfin.is_jellyfin(url):
+            raise feeds.FeedError(jellyfin.missing_login(url, logins, problem, JELLYFIN_FILE)) from e
+        if not isinstance(e, feeds.NoFeed):
+            raise
+        return "page", pages.fetch(url)  # no feed, so read the posts from the page
+
+
+@job("feed:")
 def refresh_subscription(url: str, force: bool = False):
     """Check one subscription and merge its posts, keeping posts that have left the feed."""
+    with lock:
+        old = dict(subscriptions.get(url, {}))
     try:
+        source = known_source(url, old)
+        source, fresh = fetch_source(source, url, old, force) if source else detect_source(url)
+    except Exception as e:  # keep the old posts; show the error in the subscriptions list
         with lock:
-            old = dict(subscriptions.get(url, {}))
-        try:
-            logins, problem = jellyfin.read_logins(JELLYFIN_FILE)
-            login = jellyfin.login_for(url, logins)
-            if nrk.series_id(url):
-                fresh = nrk.fetch(url, {p["url"] for p in old.get("items", [])})
-            elif login is not None:
-                fresh = jellyfin.fetch(url, login)
-            elif old.get("page"):  # a page without a feed, read before
-                fresh = pages.fetch(url, {p["url"] for p in old.get("items", [])})
-            else:
-                try:
-                    if old.get("feed_url"):
-                        feed_url = old["feed_url"]
-                        fresh = feeds.fetch(feed_url, *(() if force else (old.get("etag"), old.get("modified"))))
-                    else:
-                        try:
-                            caldav_logins, caldav_problem = caldav.read_logins(CALDAV_FILE)
-                            login = caldav.login_for(url, caldav_logins)
-                            fresh = caldav.fetch(url, login)
-                        except caldav.CredentialsInURL as e:
-                            raise feeds.FeedError(str(e)) from e
-                        except caldav.CalDAVError as e:
-                            if "HTTP 401" in str(e):
-                                detail = caldav_problem or f"add a username and password for this calendar to {CALDAV_FILE}"
-                                raise feeds.FeedError(f"CalDAV requires a login: {detail}") from e
-                            feed_url = feeds.discover(url)
-                            fresh = feeds.fetch(feed_url, *(() if force else (old.get("etag"), old.get("modified"))))
-                except feeds.FeedError as e:
-                    if jellyfin.is_jellyfin(url):
-                        raise feeds.FeedError(jellyfin.missing_login(url, logins, problem, JELLYFIN_FILE)) from e
-                    if not isinstance(e, feeds.NoFeed):
-                        raise
-                    fresh = pages.fetch(url)  # no feed, so read the posts from the page
-        except Exception as e:  # keep the old posts; show the error in the subscriptions list
-            with lock:
-                subscriptions[url] = {**old, "error": str(e)[:600], "fetched": time.time()}
-            save_json(FEED_CACHE_FILE, subscriptions, affects_feed=False)
-            return
-        now = time.time()
-        if fresh is None:  # not modified since last check
-            entry = {**old, "fetched": now}
-        else:
-            kept = old.get("items", [])
-            if fresh.get("complete"):  # the source lists everything it has, so posts missing from it are gone
-                current = {post_key(p) for p in fresh["items"]}
-                kept = [p for p in kept if post_key(p) in current]
-            entry = {**old, **fresh, "items": merge_posts(kept, fresh["items"], now), "fetched": now}
-        entry.pop("error", None)
-        with lock:
-            affects_feed = any(old.get(field) != entry.get(field) for field in ("items", "title", "icon"))
-            subscriptions[url] = entry
-        save_json(FEED_CACHE_FILE, subscriptions, affects_feed=affects_feed)
-    finally:
-        with lock:
-            pending.discard("feed:" + url)
+            subscriptions[url] = {**old, "error": str(e)[:600], "fetched": time.time()}
+        save_json(FEED_CACHE_FILE, subscriptions, affects_feed=False)
+        return
+    now = time.time()
+    if fresh is None:  # not modified since last check
+        entry = {**old, "fetched": now, "source": source}
+    else:
+        kept = old.get("items", [])
+        if fresh.get("complete"):  # the source lists everything it has, so posts missing from it are gone
+            current = {post_key(p) for p in fresh["items"]}
+            kept = [p for p in kept if post_key(p) in current]
+        entry = {**old, **fresh, "items": merge_posts(kept, fresh["items"], now), "fetched": now, "source": source}
+    entry.pop("error", None)
+    with lock:
+        affects_feed = any(old.get(field) != entry.get(field) for field in ("items", "events", "title", "icon"))
+        subscriptions[url] = entry
+    save_json(FEED_CACHE_FILE, subscriptions, affects_feed=affects_feed)
 
 
 def schedule_subscription(url: str, force: bool = False):
-    key = "feed:" + url
-    with lock:
-        last = subscriptions.get(url, {}).get("fetched", 0)
-        if key in pending or (not force and time.time() - last < feed_interval):
-            return
-        pending.add(key)
-    executor.submit(refresh_subscription, url, force)
+    submit_once(refresh_subscription, url, force, unless=lambda: not force and
+                time.time() - subscriptions.get(url, {}).get("fetched", 0) < feed_interval)
 
 
+@job("older:")
 def load_older(url: str):
     """Import video history and playlists independently, retaining completed work on retry."""
-    try:
-        with lock:
-            original = subscriptions.get(url, {})
-            feed_url = original.get("feed_url")
-            older_loaded = original.get("older_loaded")
-            playlists_loaded = original.get("playlists_loaded")
-        if not feed_url:
-            return
-        for kind, loaded, fetch in (("older", older_loaded, feeds.older_videos),
-                                    ("playlists", playlists_loaded, feeds.channel_playlists)):
-            if loaded:
-                continue
-            try:
-                result = fetch(feed_url)
-            except feeds.FeedError as e:
-                with lock:
-                    s = subscriptions.get(url)
-                    if s is None or s.get("feed_url") != feed_url:
-                        return
-                    s["older_error"] = {"error": str(e)[:300], "time": time.time()}
-                save_json(FEED_CACHE_FILE, subscriptions, affects_feed=False)
-                return
-            now = time.time()
+    with lock:
+        original = subscriptions.get(url, {})
+        feed_url = original.get("feed_url")
+        older_loaded = original.get("older_loaded")
+        playlists_loaded = original.get("playlists_loaded")
+    if not feed_url:
+        return
+    for kind, loaded, fetch in (("older", older_loaded, feeds.older_videos),
+                                ("playlists", playlists_loaded, feeds.channel_playlists)):
+        if loaded:
+            continue
+        try:
+            result = fetch(feed_url)
+        except feeds.FeedError as e:
             with lock:
                 s = subscriptions.get(url)
                 if s is None or s.get("feed_url") != feed_url:
                     return
-                if kind == "older":
-                    known = {post_key(p) for p in s.get("items", [])}
-                    durations = {post_key(p): p.get("estimated_minutes") for p in result}
-                    for post in s.get("items", []):
-                        if not post.get("estimated_minutes") and durations.get(post_key(post)):
-                            post["estimated_minutes"] = durations[post_key(post)]
-                    s["items"] = merge_posts(s.get("items", []),
-                                             [p for p in result if post_key(p) not in known], now)
-                else:
-                    s["youtube_playlists"] = result
-                s[kind + "_loaded"] = now
-                s.pop("older_error", None)
-            save_json(FEED_CACHE_FILE, subscriptions)
-    finally:
+                s["older_error"] = {"error": str(e)[:300], "time": time.time()}
+            save_json(FEED_CACHE_FILE, subscriptions, affects_feed=False)
+            return
+        now = time.time()
         with lock:
-            pending.discard("older:" + url)
+            s = subscriptions.get(url)
+            if s is None or s.get("feed_url") != feed_url:
+                return
+            if kind == "older":
+                known = {post_key(p) for p in s.get("items", [])}
+                durations = {post_key(p): p.get("estimated_minutes") for p in result}
+                for post in s.get("items", []):
+                    if not post.get("estimated_minutes") and durations.get(post_key(post)):
+                        post["estimated_minutes"] = durations[post_key(post)]
+                s["items"] = merge_posts(s.get("items", []),
+                                         [p for p in result if post_key(p) not in known], now)
+            else:
+                s["youtube_playlists"] = result
+            s[kind + "_loaded"] = now
+            s.pop("older_error", None)
+        save_json(FEED_CACHE_FILE, subscriptions)
 
 
 def schedule_older(url: str):
     """Load a YouTube subscription's older videos once, after its feed has been read."""
-    key = "older:" + url
-    with lock:
+    def done_or_failed_lately():
         s = subscriptions.get(url, {})
-        failed = s.get("older_error", {}).get("time", 0)
-        if (key in pending or (s.get("older_loaded") and s.get("playlists_loaded")) or not feeds.youtube_playlist_id(s.get("feed_url") or "")
-                or time.time() - failed < OLDER_RETRY):
-            return
-        pending.add(key)
-    executor.submit(load_older, url)
+        return ((s.get("older_loaded") and s.get("playlists_loaded")) or not feeds.youtube_playlist_id(s.get("feed_url") or "")
+                or time.time() - s.get("older_error", {}).get("time", 0) < OLDER_RETRY)
+    submit_once(load_older, url, unless=done_or_failed_lately)
 
 
 def subscribe(line: str) -> str | None:
@@ -420,9 +543,7 @@ def subscribe(line: str) -> str | None:
         return "Don't put credentials in a subscription URL. For CalDAV, store them in caldav.json."
     if url in read_entries(FEEDS_FILE):
         return "Already subscribed."
-    with lock:
-        pending.add("feed:" + url)
-    refresh_subscription(url, force=True)
+    run_now(refresh_subscription, url, True)
     with lock:
         error = subscriptions.get(url, {}).get("error")
         if error:
@@ -442,9 +563,9 @@ def subscription_status() -> list[dict]:
         next_up_map, _ = series_state(subs)
         for url, tags in subs.items():
             s = subscriptions.get(url, {})
-            dates = [it["published"] or it["first_seen"] for it in s.get("items", [])]
+            dates = [post_date(it) for it in s.get("items", [])]
             states = [view_state(u) for u in {p["url"] for p in s.get("items", [])}]
-            next_up_count = sum(1 for p in s.get("items", []) if p["url"] in next_up_map and "latest" not in tags)
+            next_up_count = sum(1 for p in s.get("items", []) if p["url"] in next_up_map)
             status.append({
                 "url": url,
                 "tags": tags,
@@ -452,7 +573,8 @@ def subscription_status() -> list[dict]:
                 "site": s.get("site"),
                 "icon": s.get("icon"),
                 "feed_url": s.get("feed_url"),
-                "page": bool(s.get("page")),
+                "page": s.get("source") == "page" or bool(s.get("page")),
+                "source": s.get("source"),
                 "posts": len(s.get("items", [])),
                 "opened": sum(state["last_viewed"] is not None and not state["skipped"] for state in states),
                 "skipped": sum(state["skipped"] for state in states),
@@ -502,9 +624,7 @@ def unsubscribe(url: str) -> bool:
             skipped.pop(post, None)
             colors.pop(post, None)
     save_json(FEED_CACHE_FILE, subscriptions)
-    save_json(VIEWED_FILE, viewed)
-    save_json(SKIPPED_FILE, skipped)
-    save_json(COLORS_FILE, colors)
+    save_state()
     return True
 
 
@@ -512,9 +632,7 @@ def check_subscription(url: str) -> bool:
     """Check one subscription now and wait for the result."""
     if url not in read_entries(FEEDS_FILE):
         return False
-    with lock:
-        pending.add("feed:" + url)
-    refresh_subscription(url, force=True)
+    run_now(refresh_subscription, url, True)
     return True
 
 
@@ -565,75 +683,68 @@ def known_urls() -> set[str]:
     return urls
 
 
+def is_known(url: str) -> bool:
+    """Whether url is a link or a subscription's post: an item in the feed."""
+    if url in read_entries():
+        return True
+    subs = read_entries(FEEDS_FILE)
+    with lock:
+        return any(post["url"] == url for sub_url in subs for post in subscriptions.get(sub_url, {}).get("items", []))
+
+
 def set_viewed(url: str) -> bool:
     """Record that you opened url now. Only for items in the feed."""
-    if url not in known_urls():
+    if not is_known(url):
         return False
     with lock:
         viewed[url] = time.time()
         video = next((p["youtube"] for s in subscriptions.values() for p in s.get("items", [])
                       if p["url"] == url and p.get("youtube")
                       and (p.get("date_approx") or not p.get("estimated_minutes"))), None)
-    save_json(VIEWED_FILE, viewed)
+    save_state()
     if video:
         schedule_video_metadata(video)
     return True
 
 
+@job("video:")
 def update_video_metadata(video: str):
     """Enrich every copy of a video with its exact date and runtime in one fetch."""
-    try:
-        metadata = feeds.video_metadata(video)
-        now = time.time()
-        with lock:
-            for subscription in subscriptions.values():
-                changed_date = False
-                for post in subscription.get("items", []):
-                    if post.get("youtube") != video:
-                        continue
-                    post["video_metadata_checked"] = now
-                    if metadata.get("estimated_minutes"):
-                        post["estimated_minutes"] = metadata["estimated_minutes"]
-                    if post.get("date_approx") and metadata.get("published"):
-                        post["published"] = metadata["published"]
-                        post.pop("date_approx", None)
-                        changed_date = True
-                if changed_date:
-                    subscription["items"].sort(key=post_date, reverse=True)
-        save_json(FEED_CACHE_FILE, subscriptions)
-    finally:
-        with lock:
-            pending.discard("video:" + video)
+    metadata = feeds.video_metadata(video)
+    now = time.time()
+    with lock:
+        for subscription in subscriptions.values():
+            changed_date = False
+            for post in subscription.get("items", []):
+                if post.get("youtube") != video:
+                    continue
+                post["video_metadata_checked"] = now
+                if metadata.get("estimated_minutes"):
+                    post["estimated_minutes"] = metadata["estimated_minutes"]
+                if post.get("date_approx") and metadata.get("published"):
+                    post["published"] = metadata["published"]
+                    post.pop("date_approx", None)
+                    changed_date = True
+            if changed_date:
+                subscription["items"].sort(key=post_date, reverse=True)
+    save_json(FEED_CACHE_FILE, subscriptions)
 
 
 def schedule_video_metadata(video: str):
-    key = "video:" + video
-    with lock:
-        if key in pending:
-            return
-        pending.add(key)
-    executor.submit(update_video_metadata, video)
-
-
-def set_skipped(url: str) -> bool:
-    """Record that you skipped url now. Only for items in the feed."""
-    if url not in known_urls():
-        return False
-    with lock:
-        skipped[url] = time.time()
-    save_json(SKIPPED_FILE, skipped)
-    return True
+    submit_once(update_video_metadata, video)
 
 
 def set_color(url: str, color: str) -> bool:
-    if color not in COLORS or url not in known_urls():
+    """Give an item a color. White, the default, also skips it (see seen_at). Only for items in the feed."""
+    if color not in COLORS or not is_known(url):
         return False
     with lock:
         if color == "white":
             colors.pop(url, None)
+            skipped[url] = time.time()
         else:
             colors[url] = color
-    save_json(COLORS_FILE, colors)
+    save_state()
     return True
 
 
@@ -648,12 +759,13 @@ def mark_older_red(url: str, age: float) -> int | None:
                  if p["published"] and p["published"] < cutoff and p["url"] not in colors]
         for post in posts:
             colors[post] = "red"
-    save_json(COLORS_FILE, colors)
+    save_state()
     return len(posts)
 
 
 def settings() -> dict:
-    return {"terms": ranking.TERMS, "defaults": ranking.DEFAULT_TERMS, "stop_at": stop.get("stop_at")}
+    return {"terms": ranking.TERMS, "defaults": ranking.DEFAULT_TERMS, "limits": ranking.TERM_LIMITS,
+            "stop_at": stop.get("stop_at")}
 
 
 def set_stop(value) -> str | None:
@@ -685,26 +797,39 @@ def save_settings(terms) -> str | None:
         return str(e)
     with lock:
         ranking.TERMS.update(checked)
-    save_json(SETTINGS_FILE, {"terms": checked})
+    save_json(SETTINGS_FILE, {"version": SETTINGS_VERSION, "terms": checked})
     return None
 
 
-def load_settings():
-    data = load_json(SETTINGS_FILE)
+# settings.json's format. Files without a version were saved before it had one; when a term is renamed
+# or changes meaning, bump the version and move saved values in migrate_terms.
+SETTINGS_VERSION = 1
+
+
+def migrate_terms(data: dict) -> dict | None:
+    """The saved terms in the current format, or None if there are none."""
     terms = data.get("terms")
     if terms is None:
         terms = data.get("weights")  # settings saved before the terms were called terms
     if not isinstance(terms, dict):
+        return None
+    if data.get("version", 0) < 1:
+        # The old repeat setting is the per-100%-similarity amount for posts above.
+        if "above_similarity_penalty" not in terms and "repeat_per_post" in terms:
+            terms["above_similarity_penalty"] = terms["repeat_per_post"]
+        # The oldest calendar field, task_bonus, controlled the deadline ramp; task_bonus now means
+        # fixed per-item points, so move a saved ramp setting to its explicit name.
+        if "task_bonus" in terms and "task_deadline_bonus" not in terms:
+            terms["task_deadline_bonus"] = terms.pop("task_bonus")
+    return terms
+
+
+def load_settings():
+    terms = migrate_terms(load_json(SETTINGS_FILE))
+    if terms is None:
         return
     # Settings saved by another version may lack newer terms, which keep their defaults, or have
     # ones that no longer exist, which are dropped.
-    # Preserve the old repeat setting as the new per-100%-similarity amount.
-    if "above_similarity_penalty" not in terms and "repeat_per_post" in terms:
-        terms["above_similarity_penalty"] = terms["repeat_per_post"]
-    # The oldest calendar field, task_bonus, controlled the deadline ramp; task_bonus now means
-    # fixed per-item points, so move a saved ramp setting to its explicit name.
-    if "task_bonus" in terms and "task_deadline_bonus" not in terms:
-        terms["task_deadline_bonus"] = terms.pop("task_bonus")
     terms = {k: v for k, v in terms.items() if k in ranking.DEFAULT_TERMS}
     try:
         ranking.TERMS.update(ranking.check_terms({**ranking.DEFAULT_TERMS, **terms}))
@@ -712,44 +837,22 @@ def load_settings():
         print(f"Ignoring {SETTINGS_FILE}: {e}")
 
 
-def series_state(subs) -> tuple[dict[str, str], dict[str, str]]:
-    """Call with lock held. Returns:
+def series_state(subs: dict[str, list[str]]) -> tuple[dict[str, str], dict[str, str]]:
+    """For the subscriptions (url -> tags), except those tagged "latest". Call with lock held. Returns:
     - next up, as {its url: the opened post's title}: for each subscription, the post after the one
       you opened most recently: the next part of its series, or else the next published. Skipped posts
       don't count as opened here, and a post you skipped isn't next up. A subscription
       whose posts belong to series of their own, such as a Jellyfin server's TV shows, has a next post
       in each series, in episode order.
     - later parts of a series none of whose earlier parts you've opened, as {url: the first part's title}.
-    YouTube series use imported playlist order; other series use titles (see ranking.title_series),
-    or for Jellyfin and NRK TV, episode order.
-    Posts marked no_series, such as NRK TV's news, have no series."""
+    See series.py for what makes a series."""
     next_up, unstarted = {}, {}
     started = set()
-    for sub_url in subs:
-        groups = {}
-        subscription = subscriptions.get(sub_url, {})
-        items = subscription.get("items", [])
-        by_video = {p["youtube"]: p for p in items if p.get("youtube")}
-        assigned = set()
-        for playlist in subscription.get("youtube_playlists", []):
-            ordered = [by_video[v] for v in playlist["videos"] if v in by_video]
-            if ordered:
-                groups[("playlist", playlist["id"])] = list(reversed(ordered))
-                assigned.update(p["youtube"] for p in ordered)
-        for p in items:
-            if p.get("youtube"):
-                if p["youtube"] not in assigned:
-                    groups.setdefault(("youtube",), []).append(p)
-            else:
-                groups.setdefault(p.get("series"), []).append(p)
-        for key, posts in groups.items():
-            if key is None:
-                prev = {} if posts[0].get("no_series") else ranking.title_series(posts)
-            elif key == ("youtube",):
-                prev = {}
-            else:
-                posts.sort(key=lambda p: p.get("episode", []), reverse=True)  # last episode first; stable otherwise
-                prev = {p["url"]: posts[i + 1] for i, p in enumerate(posts[:-1])}
+    for sub_url, tags in subs.items():
+        if "latest" in tags:  # you only want the latest posts from it, so neither applies
+            continue
+        for group in series.groups(subscriptions.get(sub_url, {})):
+            posts, prev = group["posts"], group["prev"]
             opened = [(t, i) for i, p in enumerate(posts) if (t := opened_at(p["url"]))]
             if opened:
                 i = max(opened)[1]
@@ -792,7 +895,18 @@ def domain(url: str) -> str:
 # Recently ranked feeds, so checking for changes or moving a slider back doesn't rank everything again.
 # Each is kept for a minute at most, as points change with the time since things were published or opened.
 RANKED_TTL = 60
-ranked_cache: dict[tuple, tuple[float, ranking.RankedItems]] = {}
+RANKED_KEPT = 20
+
+
+@dataclass
+class CachedRanking:
+    built: float  # unix time
+    ranked: ranking.RankedItems
+    stop: tuple  # (stop_at, stopped) it was filtered for; see ranking_for
+    state_version: int
+
+
+ranked_cache: dict[tuple, CachedRanking] = {}
 
 
 def enrichment_key(post: dict, cached: dict, pending_keys: set, now: float) -> str | None:
@@ -828,23 +942,100 @@ def enrich_posts(ranked: list[dict], count: int):
             schedule(post["url"], force=True)
 
 
-def feed(ranker: str, limit: int = MAX_ITEMS_SHOWN, terms: dict | None = None, enrich: bool = False, search: str = "") -> dict:
-    return ranked_feed(ranker, limit, terms, enrich=enrich, search=search)
-
-
-def stop_fields(source: list[dict], now: float, terms: dict, stop_at: float | None) -> dict:
+def stop_state(events: list[dict], now: float, terms: dict, stop_at: float | None) -> dict:
     """The stop-watching state for a feed response: the effective stop time, whether it has run out
-    (stopped; then content is gone and stop_event is the event that caused it, if any)."""
-    effective, event = ranking.effective_stop(source, now, terms, stop_at)
+    (stopped), and stop_event, the event that causes it, if it isn't the timer."""
+    effective, event = ranking.effective_stop(events, now, terms, stop_at)
     return {"stop_at": effective,
             "stopped": effective is not None and now >= effective,
             "stop_event": ({k: event.get(k) for k in ("url", "title", "calendar_kind", "calendar_start", "deadline")}
                            if event is not None else None)}
 
 
-def ranked_feed(ranker: str, limit: int, terms: dict | None = None, *, enrich: bool = False, post_url: str | None = None, subscription_url: str | None = None, search: str = "") -> dict:
+def build_items(entries: dict[str, list[str]], subs: dict[str, list[str]], now: float) -> tuple[list[dict], list[str]]:
+    """The links and subscriptions' posts as feed items (see ranking.py for their fields), each url once,
+    and the links seen for the first time. Call with lock held."""
+    new = [url for url in entries if url not in added]
+    added.update({url: now for url in new})
+    items = [
+        {**cache.get(url, {"url": url, "loading": True}), "kind": "link", "tags": tags,
+         "added": added[url], "date": added[url], "position": i, "sub": None}
+        for i, (url, tags) in enumerate(entries.items())
+    ]
+    seen = set(entries)
+    next_after, series_first = series_state(subs)
+    sub_opened = last_opened(subs)
+    for sub_url, tags in subs.items():
+        s = subscriptions.get(sub_url, {})
+        playlists_by_video = {}
+        for playlist in s.get("youtube_playlists", []):
+            for video in playlist["videos"]:
+                playlists_by_video.setdefault(video, []).append(playlist["id"])
+        for post in s.get("items", []):
+            if post["url"] in seen:
+                continue
+            seen.add(post["url"])
+            items.append({
+                **post, "youtube_playlists": playlists_by_video.get(post.get("youtube"), []),
+                "estimated_minutes": post.get("estimated_minutes") or cache.get(post["url"], {}).get("estimated_minutes"),
+                "kind": "subscription", "tags": tags, "feed": s["title"], "icon": s.get("icon"),
+                "domain": domain(post["url"]),
+                "added": post["first_seen"], "date": post_date(post), "position": -1,
+                "sub_last_viewed": sub_opened.get(sub_url), "sub": sub_url,
+            })
+    for item in items:
+        item.update(view_state(item["url"]), next_after=next_after.get(item["url"]),
+                    series_first=series_first.get(item["url"]))
+    return items, new
+
+
+def fitting_before_stop(items: list[dict], stopping: dict, now: float, post_url: str | None) -> list[dict]:
+    """While the stop is ahead, leave out posts that would run past it, so each one shown can be
+    finished before it. The post whose page is open stays, and so does the one you're viewing, even
+    when it no longer fits. Once the stop has fired the feed itself is left alone: the response's
+    stopped flag tells the page to switch to stop mode in JS, so switching back is seamless."""
+    if stopping["stop_at"] is None or stopping["stopped"]:
+        return items
+    watching = being_viewed(items)
+    return [it for it in items if it is watching or it["url"] == post_url
+            or ranking.fits_before_stop(it, now, stopping["stop_at"])]
+
+
+def ranking_for(ranker: str, terms: dict, entries: dict, subs: dict, search: str, post_url: str | None,
+                stopping: dict, now: float) -> ranking.RankedItems:
+    """The ranked feed, from the cache when it's recent and was filtered for the same stop state. The
+    stop state changes with time alone, so a cached ranking is reused only while it's unchanged, and a
+    response never mixes items filtered at one moment with stop fields computed at another."""
+    stop_key = (stopping["stop_at"], stopping["stopped"])
+    with lock:
+        key = (ranker, json.dumps(terms, sort_keys=True), json.dumps([entries, subs, search, post_url]))
+        hit = ranked_cache.get(key)
+        if hit and now - hit.built < RANKED_TTL and hit.stop == stop_key and hit.state_version == state_version:
+            return hit.ranked
+        version = state_version
+        items, new = build_items(entries, subs, now)
+    if new:
+        save_state(affects_feed=False)
+    if post_url is None and search.strip():
+        items = [p for p in items if matches_search(p, search)]
+    ranked = ranking.rank(ranker, fitting_before_stop(items, stopping, now, post_url), now, terms, lazy=True)
+    with lock:
+        for k in [k for k, c in ranked_cache.items() if now - c.built >= RANKED_TTL or c.state_version != state_version]:
+            del ranked_cache[k]
+        if len(ranked_cache) >= RANKED_KEPT:
+            ranked_cache.pop(next(iter(ranked_cache)))
+        if version == state_version:
+            ranked_cache[key] = CachedRanking(now, ranked, stop_key, version)
+    return ranked
+
+
+def feed(ranker: str, limit: int = MAX_ITEMS_SHOWN, terms: dict | None = None, *, enrich: bool = False,
+         search: str = "", post_url: str | None = None, subscription_url: str | None = None) -> dict:
+    """The ranked feed: everything, or a subscription's posts (with its next up), or a post's page
+    (see post_details). terms other than the saved ones preview them, such as while you move a slider."""
+    terms = terms or ranking.TERMS
     entries = read_entries()
-    subs = read_entries(FEEDS_FILE)
+    subs = all_subs = read_entries(FEEDS_FILE)
     if subscription_url is not None:
         if subscription_url not in subs:
             return {"error": "Subscription not found"}
@@ -854,112 +1045,35 @@ def ranked_feed(ranker: str, limit: int, terms: dict | None = None, *, enrich: b
         schedule(url)
     for url in subs:
         schedule_subscription(url)
+    sync_calendars(all_subs)
     now = time.time()
-    stop_at = stop.get("stop_at")  # a passed timer has fired: it stops the feed until cleared
     with lock:
-        key = (ranker, json.dumps(terms or ranking.TERMS, sort_keys=True), json.dumps([entries, subs, search, post_url is not None]),
-               state_version)
-        hit = ranked_cache.get(key)
-        if hit and now - hit[0] < RANKED_TTL:
-            # The cached ranking was filtered for the stop state at build time, and that state is
-            # time-dependent: reuse the cache only while the whole stop state (effective stop and
-            # whether it has fired) is unchanged, so a response never mixes items filtered at one
-            # moment with stop fields computed at another.
-            eff, _ = ranking.effective_stop(hit[2], now, terms or ranking.TERMS, stop_at)
-            if (eff, eff is not None and now >= eff) != (hit[3], hit[4]):
-                hit = None
-        if hit and now - hit[0] < RANKED_TTL:
-            ranked, source = hit[1], hit[2]  # source keeps the events, for stop_fields
-            items = None
-            new = []
-        else:
-            new = [url for url in entries if url not in added]
-            added.update({url: now for url in new})
-            items = [
-                {**cache.get(url, {"url": url, "loading": True}), "kind": "link", "tags": tags,
-                 "added": added[url], "date": added[url], "position": i, "sub": None}
-                for i, (url, tags) in enumerate(entries.items())
-            ]
-            seen = set(entries)
-            next_after, series_first = series_state(subs)
-            sub_opened = last_opened(subs)
-            for sub_url, tags in subs.items():
-                s = subscriptions.get(sub_url, {})
-                playlists_by_video = {}
-                for playlist in s.get("youtube_playlists", []):
-                    for video in playlist["videos"]:
-                        playlists_by_video.setdefault(video, []).append(playlist["id"])
-                for post in s.get("items", []):
-                    if post["url"] in seen:
-                        continue
-                    seen.add(post["url"])
-                    items.append({
-                        **post, "youtube_playlists": playlists_by_video.get(post.get("youtube"), []),
-                        "estimated_minutes": post.get("estimated_minutes") or cache.get(post["url"], {}).get("estimated_minutes"),
-                        "kind": "subscription", "tags": tags, "feed": s["title"], "icon": s.get("icon"),
-                        "domain": domain(post["url"]),
-                        "added": post["first_seen"], "date": post["published"] or post["first_seen"], "position": -1,
-                        "sub_last_viewed": sub_opened.get(sub_url), "sub": sub_url,
-                    })
-            for item in items:
-                item.update(view_state(item["url"]), next_after=next_after.get(item["url"]),
-                            series_first=series_first.get(item["url"]))
-            n_pending = len(pending)
-    if new:
-        save_json(ADDED_FILE, added, affects_feed=False)
-    if items is not None:
-        if post_url is None and search.strip():
-            items = [p for p in items if matches_search(p, search)]
-        source = items  # stop computation sees events too; events aren't feed items themselves
-        effective, _ = ranking.effective_stop(source, now, terms or ranking.TERMS, stop_at)
-        # Events take place when scheduled, so they aren't feed items: only their stop times reach
-        # the feed, never the events as cards.
-        feed_items = [it for it in source if it.get("calendar_kind") != "event"]
-        if effective is not None and now < effective:
-            # While the stop is ahead, leave out posts that would run past it, so each one shown can
-            # be finished before it. The post whose page is open stays, and so does the one you're
-            # viewing, even when it no longer fits. Once the stop has fired the feed itself is left
-            # alone: the response's stopped flag tells the page to switch to stop mode in JS
-            # (notice, playback force-stopped, alert), so switching back is seamless.
-            watching = being_viewed(feed_items)
-            feed_items = [it for it in feed_items if it is watching
-                          or (post_url is not None and it["url"] == post_url)
-                          or ranking.fits_before_stop(it, now, effective)]
-        ranked = ranking.rank(ranker, feed_items, now, terms, lazy=True)
-        with lock:
-            for k in [k for k, (t, *_rest) in ranked_cache.items() if now - t >= RANKED_TTL or k[3] != state_version]:
-                del ranked_cache[k]
-            if len(ranked_cache) >= 20:
-                ranked_cache.pop(next(iter(ranked_cache)))
-            if key[3] == state_version:
-                ranked_cache[key] = (now, ranked, source, effective, effective is not None and now >= effective)
+        # Every subscribed calendar's events stop watching, on every page, not only their own subscription's.
+        events = calendar_events(all_subs)
+    stopping = {**stop_state(events, now, terms, stop.get("stop_at")),
+                "calendars_unreachable": unreachable_calendars(all_subs)}
+    ranked = ranking_for(ranker, terms, entries, subs, search, post_url, stopping, now)
     if post_url is not None:
-        result = post_details(ranked.source, post_url, ranker, limit, terms or ranking.TERMS, now,
-                              enrich=enrich, search=search)
-        result.update(stop_fields(source, now, terms or ranking.TERMS, stop_at))
-        return result
-    extra_count = (terms or ranking.TERMS)["enrich_count"] if enrich else 0
+        return {**post_details(ranked.source, post_url, ranker, limit, terms, now, enrich=enrich, search=search), **stopping}
+    extra_count = terms["enrich_count"] if enrich else 0
     with lock:
         cached, pending_keys = dict(cache), set(pending)
-    match_key = lambda post: enrichment_key(post, cached, pending_keys, now)
-    visible, extra = ranked.read(limit, extra_count, match_key)
-    with lock:
-        n_pending = len(pending)
-    result = {"items": ranking.explain_similarities(visible, ranked.source, terms or ranking.TERMS, now),
-            "total": ranked.total, "pending": n_pending, "ranker": ranker,
-            **stop_fields(source, now, terms or ranking.TERMS, stop_at)}
+    visible, extra = ranked.read(limit, extra_count, lambda post: enrichment_key(post, cached, pending_keys, now))
+    result = {"items": ranking.explain_similarities(visible, ranked.source, terms, now),
+              "total": ranked.total, "pending": pending_count(), "ranker": ranker, **stopping}
     if subscription_url is not None:
-        order = lambda it: (it["score"], it["last_viewed"] is None, it["date"], it["position"])
-        next_up_items = sorted(
-            [p for p in ranked.source if p.get("next_after") and "latest" not in p.get("tags", [])],
-            key=order, reverse=True
-        )
+        next_up = sorted((p for p in ranked.source if p.get("next_after")), key=ranking.order, reverse=True)
         if enrich:
-            enrich_posts([*next_up_items, *extra], extra_count)
-        result["next_up"] = ranking.explain_similarities(next_up_items, ranked.source, terms or ranking.TERMS, now)
+            enrich_posts([*next_up, *extra], extra_count)
+        result["next_up"] = ranking.explain_similarities(next_up, ranked.source, terms, now)
     elif enrich:
         enrich_posts(extra, extra_count)
     return result
+
+
+def pending_count() -> int:
+    with lock:
+        return len(pending)
 
 
 def matches_search(post: dict, search: str) -> bool:
@@ -982,44 +1096,15 @@ def post_details(source: list[dict], url: str, ranker: str, limit: int, terms: d
             scored.append({**p, "reasons": reasons, "score": ranking.points(sum(r["points"] for r in reasons))})
         return ranking.explain_similarities(scored, source, terms, now)
 
-    series = []
+    feeds_of_series = []
     with lock:
         memberships = [(sub, dict(subscriptions.get(sub, {}))) for sub in read_entries(FEEDS_FILE)]
     for sub, subscription in memberships:
-        posts = subscription.get("items", [])
-        own = next((p for p in posts if p["url"] == url), None)
-        if own is None:
-            continue
-        groups = []
-        for playlist in subscription.get("youtube_playlists", []):
-            if own.get("youtube") in playlist["videos"]:
-                videos = {p.get("youtube"): p for p in posts if p.get("youtube")}
-                ordered = [videos[v] for v in playlist["videos"] if v in videos]
-                groups.append(("playlist:" + playlist["id"], playlist.get("title") or f"YouTube playlist · {playlist['id']}",
-                               "https://www.youtube.com/playlist?list=" + playlist["id"], ordered))
-        if own.get("series") and not own.get("no_series"):
-            ordered = sorted((p for p in posts if p.get("series") == own["series"] and not p.get("no_series")),
-                             key=lambda p: p.get("episode", []))
-            groups.append(("series:" + str(own["series"]), subscription.get("title") or "Series", None, ordered))
-        elif not own.get("youtube") and not own.get("no_series"):
-            candidates = [p for p in posts if not p.get("series") and not p.get("no_series") and not p.get("youtube")]
-            previous = ranking.title_series(candidates)
-            members = {url}
-            while True:
-                expanded = members | {p for p, before in previous.items() if before["url"] in members} | {
-                    before["url"] for p, before in previous.items() if p in members}
-                if expanded == members:
-                    break
-                members = expanded
-            if len(members) > 1:
-                ordered = sorted((p for p in candidates if p["url"] in members),
-                                 key=lambda p: (ranking.title_numbers(p.get("title") or ""), p.get("published") or 0))
-                groups.append(("titles:" + min(members), ordered[0].get("title") or "Series", None, ordered))
-        for key, title, external, ordered in groups:
-            ordered = list({p["url"]: by_url[p["url"]] for p in ordered if p["url"] in by_url}.values())
+        for group in series.of_post(subscription, url):
+            ordered = list({p["url"]: by_url[p["url"]] for p in group["posts"] if p["url"] in by_url}.values())
             ordered = [p for p in ordered if matches_search(p, search)]
-            series.append({"id": sub + ":" + key, "title": title, "url": external,
-                           "items": cards(ordered[:limit]), "total": len(ordered)})
+            feeds_of_series.append({"id": sub + ":" + group["id"], "title": group["title"], "url": group["url"],
+                                    "items": cards(ordered[:limit]), "total": len(ordered)})
     matches = []
     for p in source:
         if matches_search(p, search) and p["url"] != url and target.get("sub") and p.get("sub") == target["sub"]:
@@ -1032,11 +1117,9 @@ def post_details(source: list[dict], url: str, ranker: str, limit: int, terms: d
         p["related_percent"] = percent
     item = cards([target])[0]
     if enrich:
-        enrich_posts([item, *(p for group in series for p in group["items"]), *similar], terms["enrich_count"])
-    with lock:
-        n_pending = len(pending)
-    return {"item": item, "series": series, "similar": {"items": similar, "total": len(matches)},
-            "pending": n_pending, "ranker": ranker}
+        enrich_posts([item, *(p for group in feeds_of_series for p in group["items"]), *similar], terms["enrich_count"])
+    return {"item": item, "series": feeds_of_series, "similar": {"items": similar, "total": len(matches)},
+            "pending": pending_count(), "ranker": ranker}
 
 
 def append_line(path: Path, url: str, tags: list[str]):
@@ -1050,7 +1133,7 @@ def append_line(path: Path, url: str, tags: list[str]):
 def add_link(line: str) -> bool:
     """Append a links.txt line: a URL optionally followed by tags."""
     url, *tags = line.split() or [""]
-    if urlparse(url).scheme not in ("http", "https") or url in read_links():
+    if urlparse(url).scheme not in ("http", "https") or url in read_entries():
         return False
     append_line(LINKS_FILE, url, clean_tags(tags))
     schedule(url)
@@ -1076,35 +1159,116 @@ def jellyfin_post(url: str) -> tuple[str, dict] | None:
     return (jellyfin.server_of(url), login) if login is not None else None
 
 
-def jellyfin_relay_target(key: str, item: str) -> tuple[str, dict] | None:
-    """(server, login) for a relay request, if item is a post in the feed on the server with that key."""
+def jellyfin_posts(key: str, item: str) -> list[tuple[dict, str, dict]]:
+    """(post, server, login) for each post in the feed of the Jellyfin item on the server with that relay key."""
     item = jellyfin.normal_id(item)
     with lock:
-        urls = [p["url"] for s in subscriptions.values() for p in s.get("items", [])
-                if p.get("jellyfin") and jellyfin.normal_id(jellyfin.item_id(p["url"]) or "") == item]
-    for url in urls:
-        target = jellyfin_post(url)
-        if target and relay_key(target[0]) == key.lower():
-            return target
-    return None
+        posts = [p for s in subscriptions.values() for p in s.get("items", [])
+                 if p.get("jellyfin") and jellyfin.normal_id(jellyfin.item_id(p["url"]) or "") == item]
+    if not posts:
+        return []
+    logins = jellyfin.read_logins(JELLYFIN_FILE)[0]
+    found = []
+    for post in posts:
+        server, login = jellyfin.server_of(post["url"]), jellyfin.login_for(post["url"], logins)
+        if login is not None and relay_key(server) == key.lower():
+            found.append((post, server, login))
+    return found
+
+
+def jellyfin_relay_target(key: str, item: str) -> tuple[str, dict] | None:
+    """(server, login) for a relay request, if item is a post in the feed on the server with that key."""
+    return next(((server, login) for _, server, login in jellyfin_posts(key, item)), None)
 
 
 def jellyfin_image_target(key: str, item: str) -> tuple[tuple[str, dict], str] | None:
     """The authenticated Jellyfin image URL for a pictured post in the feed."""
-    item = jellyfin.normal_id(item)
-    with lock:
-        posts = [p for s in subscriptions.values() for p in s.get("items", [])
-                 if p.get("jellyfin") and jellyfin.normal_id(jellyfin.item_id(p["url"]) or "") == item
-                 and p.get("image")]
-    for post in posts:
-        target = jellyfin_post(post["url"])
-        if not target or relay_key(target[0]) != key.lower():
-            continue
+    for post, server, login in jellyfin_posts(key, item):
         # The source address came from Jellyfin metadata; relay only its path and query.
         image = urlparse(post.get("_jellyfin_image", ""))
-        if image.scheme in ("http", "https") and image.netloc == urlparse(target[0]).netloc and image.path.startswith("/Items/"):
-            return target, image.path + (f"?{image.query}" if image.query else "")
+        if image.scheme in ("http", "https") and image.netloc == urlparse(server).netloc and image.path.startswith("/Items/"):
+            return (server, login), image.path + (f"?{image.query}" if image.query else "")
     return None
+
+
+def migrate_calendar_events() -> bool:
+    """Move calendar events saved among a subscription's posts, before they were kept apart, to its events."""
+    changed = False
+    with lock:
+        for subscription in subscriptions.values():
+            items = subscription.get("items", [])
+            events = [p for p in items if p.get("calendar_kind") == "event"]
+            if events:
+                subscription["items"] = [p for p in items if p.get("calendar_kind") != "event"]
+                subscription["events"] = [*subscription.get("events", []), *events]
+                changed = True
+    return changed
+
+
+def calendar_events(subs) -> list[dict]:
+    """The subscriptions' calendar events. Call with lock held."""
+    return [event for url in subs for event in subscriptions.get(url, {}).get("events", [])]
+
+
+# CalDAV calendars are kept in step on every feed request, not only on the subscription timer: each
+# request asks for the calendar's version (see caldav.version), which changes with every change in it,
+# and reads the calendar again only when it has. So events are at most a page update behind the
+# calendar. When the server doesn't answer, the events from the last read stay in use, and the feed
+# response names the calendar as unreachable. Shared .ics links are read on the timer as before.
+CALENDAR_CHECK_GAP = 2  # seconds: requests within this long of a check reuse it
+CALENDAR_RETRY = 30  # seconds between checks while a calendar doesn't answer
+CALENDAR_UNVERSIONED = 60  # seconds between reads of a calendar whose server reports no version
+calendar_checks: dict[str, dict] = {}  # url -> {"lock", "checked" (monotonic time), "unreachable" (unix time or None)}
+calendar_checker = ThreadPoolExecutor(max_workers=4)  # apart from executor, so fetches don't delay checks
+
+
+def checked_calendars(subs) -> list[str]:
+    """The CalDAV collections among the subscriptions: those whose last read reported a version (or None)."""
+    with lock:
+        return [url for url in subs if subscriptions.get(url, {}).get("source") == "caldav"
+                and "version" in subscriptions[url]]
+
+
+def check_calendar(url: str):
+    """Read the calendar again if it has changed since it was last read."""
+    state = calendar_checks.setdefault(url, {"lock": threading.Lock(), "checked": float("-inf"), "unreachable": None})
+    with state["lock"]:  # requests arriving during a check wait for it, and then use it
+        gap = CALENDAR_RETRY if state["unreachable"] else CALENDAR_CHECK_GAP
+        if time.monotonic() - state["checked"] < gap:
+            return
+        with lock:
+            saved = dict(subscriptions.get(url, {}))
+        try:
+            current = caldav.version(url, caldav.login_for(url, caldav.read_logins(CALDAV_FILE)[0]))
+            if (current != saved.get("version") or saved.get("error")
+                    or (current is None and time.time() - saved.get("fetched", 0) >= CALENDAR_UNVERSIONED)):
+                run_now(refresh_subscription, url, True)
+                with lock:
+                    failed = bool(subscriptions.get(url, {}).get("error"))
+            else:
+                failed = False
+        except (caldav.CalDAVError, OSError):
+            failed = True
+        state["unreachable"] = (state["unreachable"] or time.time()) if failed else None
+        state["checked"] = time.monotonic()
+
+
+def sync_calendars(subs):
+    """Bring every CalDAV calendar among the subscriptions up to date, checking them side by side."""
+    for future in [calendar_checker.submit(check_calendar, url) for url in checked_calendars(subs)]:
+        future.result()
+
+
+def unreachable_calendars(subs) -> list[dict]:
+    """The calendars whose server didn't answer the last check, with when their events were last read."""
+    out = []
+    with lock:
+        for url in subs:
+            state = calendar_checks.get(url)
+            if state and state["unreachable"]:
+                s = subscriptions.get(url, {})
+                out.append({"url": url, "title": s.get("title") or url, "fetched": s.get("fetched")})
+    return out
 
 
 def migrate_jellyfin_images() -> bool:
@@ -1142,6 +1306,11 @@ def jellyfin_play(url: str) -> dict:
     return {"src": f"/jellyfin/{relay_key(server)}{path}", "hls": hls}
 
 
+def query_limit(query: dict) -> int:
+    limit = query.get("limit", [""])[0]
+    return max(int(limit), 1) if limit.isdigit() else MAX_ITEMS_SHOWN
+
+
 class Handler(BaseHTTPRequestHandler):
     def _send(self, code: int, body: bytes, ctype: str):
         self.send_response(code)
@@ -1153,6 +1322,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def _json(self, obj, code=200):
         self._send(code, json.dumps(obj).encode(), "application/json")
+
+    def _not_found(self):
+        self._send(404, b"Not found", "text/plain")
 
     def _feed_json(self, obj):
         """Send the feed compressed, and with an ETag, so the page's checks for changes get a short
@@ -1179,183 +1351,195 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         parsed = urlparse(self.path)
-        path = parsed.path
+        path, query = parsed.path, parse_qs(parsed.query)
         if path in PAGES:
-            name, ctype = PAGES[path]
-            body = (ROOT / name).read_bytes()
-            if ctype.startswith("text/html"):
-                body = body.replace(b"{{VERSION}}", VERSION.encode("ascii"))
-                commit = f" ({COMMIT})" if COMMIT else ""
-                body = body.replace(b"{{COMMIT}}", commit.encode("ascii"))
-            self._send(200, body, ctype)
-        elif path == "/settings":  # the old Settings page is now the feed's score panel
-            self.send_response(302)
-            self.send_header("Location", "/#settings")
-            self.send_header("Content-Length", "0")
-            self.end_headers()
-        elif path in ("/api/feed", "/api/post", "/api/subscription", "/api/subscription/next-up"):
-            query = parse_qs(parsed.query)
-            name = query.get("ranker", [self.server.ranker])[0]
-            if name not in ranking.RANKERS:
-                return self._json({"error": f"unknown ranker; available: {sorted(ranking.RANKERS)}"}, 400)
-            limit = query.get("limit", [""])[0]
-            terms = None
-            if "terms" in query:  # unsaved terms, to preview them while you move a slider
-                try:
-                    terms = ranking.check_terms(json.loads(query["terms"][0]))
-                except (ValueError, TypeError) as e:
-                    return self._json({"error": f"terms: {e}"}, 400)
-            if path in ("/api/subscription", "/api/subscription/next-up"):
-                url = query.get("url", [""])[0]
-                if not url:
-                    return self._json({"error": "url is required"}, 400)
-                result = ranked_feed(name, max(int(limit), 1) if limit.isdigit() else MAX_ITEMS_SHOWN,
-                                     terms, enrich=query.get("enrich") == ["1"], subscription_url=url, search=query.get("q", [""])[0])
-                if "error" in result:
-                    return self._json(result, 404)
-                result["subscription"] = next((s for s in subscription_status() if s["url"] == url), None)
-                if path == "/api/subscription/next-up" or query.get("view") in (["next_up"], ["next-up"]):
-                    result["items"] = result.get("next_up", [])
-                    result["total"] = len(result["items"])
-                return self._feed_json(result)
-            if path == "/api/post":
-                url = query.get("url", [""])[0]
-                if not url:
-                    return self._json({"error": "url is required"}, 400)
-                result = ranked_feed(name, max(int(limit), 1) if limit.isdigit() else MAX_ITEMS_SHOWN,
-                                     terms, enrich=query.get("enrich") == ["1"], post_url=url, search=query.get("q", [""])[0])
-                if "error" in result:
-                    return self._json(result, 404)
-                return self._feed_json(result)
-            self._feed_json(feed(name, max(int(limit), 1) if limit.isdigit() else MAX_ITEMS_SHOWN, terms,
-                                 enrich=query.get("enrich") == ["1"], search=query.get("q", [""])[0]))
-        elif path == "/api/subscriptions":
-            self._json({"subscriptions": subscription_status(), "interval_minutes": feed_interval / 60})
-        elif path == "/api/settings":
-            self._json(settings())
-        elif path == "/api/jellyfin/play":
-            result = jellyfin_play(parse_qs(parsed.query).get("url", [""])[0])
-            self._json(result, 400 if "error" in result else 200)
-        elif IMAGE_RELAY.fullmatch(path):
-            self._relay_image(IMAGE_RELAY.fullmatch(path))
-        elif RELAY.match(path):
-            self._relay(RELAY.match(path), parsed.query)
-        else:
-            self._send(404, b"Not found", "text/plain")
+            return self._page(PAGES[path])
+        if path in FEED_APIS:
+            return self._feed(path, query)
+        if path in GET_APIS:
+            return self._json(*GET_APIS[path](query))
+        if m := IMAGE_RELAY.fullmatch(path):
+            return self._relay_image(m)
+        if m := RELAY.fullmatch(path):
+            return self._relay(m, parsed.query)
+        self._not_found()
+
+    def _page(self, name: str):
+        body = (ROOT / name).read_bytes()
+        if name.endswith(".html"):
+            body = body.replace(b"{{VERSION}}", version_label().encode("ascii"))
+        self._send(200, body, CONTENT_TYPES[Path(name).suffix])
+
+    def _feed(self, path: str, query: dict):
+        """/api/feed, or with url, /api/post (a post's page) or /api/subscription (one subscription;
+        view=next-up for its next up only)."""
+        ranker = query.get("ranker", [self.server.ranker])[0]
+        if ranker not in ranking.RANKERS:
+            return self._json({"error": f"unknown ranker; available: {sorted(ranking.RANKERS)}"}, 400)
+        terms = None
+        if "terms" in query:  # unsaved terms, to preview them while you move a slider
+            try:
+                terms = ranking.check_terms(json.loads(query["terms"][0]))
+            except (ValueError, TypeError) as e:
+                return self._json({"error": f"terms: {e}"}, 400)
+        options = {"enrich": query.get("enrich") == ["1"], "search": query.get("q", [""])[0]}
+        if path != "/api/feed":
+            url = query.get("url", [""])[0]
+            if not url:
+                return self._json({"error": "url is required"}, 400)
+            options["post_url" if path == "/api/post" else "subscription_url"] = url
+        result = feed(ranker, query_limit(query), terms, **options)
+        if "error" in result:
+            return self._json(result, 404)
+        if path == "/api/subscription":
+            result["subscription"] = next((s for s in subscription_status() if s["url"] == url), None)
+            if query.get("view") == ["next-up"]:
+                result["items"] = result.get("next_up", [])
+                result["total"] = len(result["items"])
+        self._feed_json(result)
+
+    def _stream(self, r, headers: tuple[str, ...], extra: dict | None = None):
+        """Pass on an upstream response's status, the named headers and its body."""
+        self.send_response(r.status)
+        for name in headers:
+            if r.headers.get(name):
+                self.send_header(name, r.headers[name])
+        for name, value in (extra or {}).items():
+            self.send_header(name, value)
+        self.end_headers()
+        try:
+            while chunk := r.read(256 * 1024):
+                self.wfile.write(chunk)
+        except (BrokenPipeError, ConnectionResetError):  # the player stopped or seeked elsewhere
+            pass
+
+    def _open_jellyfin(self, server: str, login: dict, path: str, headers: dict):
+        """The Jellyfin response, or None after sending the error."""
+        try:
+            return jellyfin.stream(server, login, path, headers)
+        except urllib.error.HTTPError as e:
+            self._send(e.code, f"HTTP {e.code} from Jellyfin".encode(), "text/plain")
+        except (OSError, feeds.FeedError) as e:
+            self._send(502, f"couldn't reach Jellyfin: {e}".encode(), "text/plain")
+        return None
 
     def _relay(self, m, query: str):
         """Pass on a Jellyfin video, playlist or segment, with byte ranges so the player can seek."""
         target = jellyfin_relay_target(m.group(1), m.group(3))
         if target is None:
-            return self._send(404, b"Not found", "text/plain")
+            return self._not_found()
         server, login = target
         headers = {"Range": self.headers["Range"]} if self.headers.get("Range") else {}
-        try:
-            r = jellyfin.stream(server, login, m.group(2) + (f"?{jellyfin.without_token(query)}" if query else ""), headers)
-        except urllib.error.HTTPError as e:
-            return self._send(e.code, f"HTTP {e.code} from Jellyfin".encode(), "text/plain")
-        except (OSError, feeds.FeedError) as e:
-            return self._send(502, f"couldn't reach Jellyfin: {e}".encode(), "text/plain")
+        r = self._open_jellyfin(server, login, m.group(2) + (f"?{jellyfin.without_token(query)}" if query else ""), headers)
+        if r is None:
+            return
         with r:
-            ctype = r.headers.get("Content-Type", "application/octet-stream")
             if m.group(2).endswith(".m3u8"):  # playlists name the next files with the token in them
+                ctype = r.headers.get("Content-Type", "application/octet-stream")
                 return self._send(200, jellyfin.without_token(r.read(jellyfin.MAX_BYTES).decode()).encode(), ctype)
-            self.send_response(r.status)
-            for name in ("Content-Type", "Content-Length", "Content-Range", "Accept-Ranges"):
-                if r.headers.get(name):
-                    self.send_header(name, r.headers[name])
-            self.end_headers()
-            try:
-                while chunk := r.read(256 * 1024):
-                    self.wfile.write(chunk)
-            except (BrokenPipeError, ConnectionResetError):  # the player stopped or seeked elsewhere
-                pass
+            self._stream(r, ("Content-Type", "Content-Length", "Content-Range", "Accept-Ranges"))
 
     def _relay_image(self, m):
         """Serve a Jellyfin preview through this origin to avoid browser mixed content blocking."""
         result = jellyfin_image_target(m.group(1), m.group(2))
         if result is None:
-            return self._send(404, b"Not found", "text/plain")
+            return self._not_found()
         (server, login), path = result
-        try:
-            r = jellyfin.stream(server, login, path, {})
-        except urllib.error.HTTPError as e:
-            return self._send(e.code, f"HTTP {e.code} from Jellyfin".encode(), "text/plain")
-        except (OSError, feeds.FeedError) as e:
-            return self._send(502, f"couldn't reach Jellyfin: {e}".encode(), "text/plain")
+        r = self._open_jellyfin(server, login, path, {})
+        if r is None:
+            return
         with r:
-            self.send_response(r.status)
-            self.send_header("Content-Type", r.headers.get("Content-Type", "application/octet-stream"))
-            if r.headers.get("Content-Length"):
-                self.send_header("Content-Length", r.headers["Content-Length"])
-            self.send_header("Cache-Control", "no-store")
-            self.end_headers()
-            try:
-                while chunk := r.read(256 * 1024):
-                    self.wfile.write(chunk)
-            except (BrokenPipeError, ConnectionResetError):
-                pass
+            self._stream(r, ("Content-Length",), {"Content-Type": r.headers.get("Content-Type", "application/octet-stream"),
+                                                  "Cache-Control": "no-store"})
 
     def do_POST(self):
-        path = urlparse(self.path).path
         length = min(int(self.headers.get("Content-Length") or 0), 10_000)
         try:
             body = json.loads(self.rfile.read(length) or b"{}")
         except json.JSONDecodeError:
             return self._json({"error": "invalid json"}, 400)
-        if path == "/api/links":
-            ok = add_link(str(body.get("url", "")))
-            self._json({"ok": ok}, 200 if ok else 400)
-        elif path == "/api/subscriptions":
-            error = subscribe(str(body.get("url", "")))
-            self._json({"ok": not error, "error": error}, 400 if error else 200)
-        elif path in ("/api/subscriptions/tags", "/api/subscriptions/remove", "/api/subscriptions/check"):
-            url = str(body.get("url", ""))
-            if path.endswith("/tags"):
-                tags = body.get("tags", [])
-                ok = set_subscription_tags(url, [str(t) for t in tags] if isinstance(tags, list) else [str(tags)])
-            elif path.endswith("/remove"):
-                ok = unsubscribe(url)
-            else:
-                ok = check_subscription(url)
-            self._json({"ok": ok, "subscriptions": subscription_status()}, 200 if ok else 404)
-        elif path == "/api/subscriptions/red":
-            try:
-                age = float(body.get("age"))
-            except (TypeError, ValueError):
-                age = -1
-            if not 0 <= age < float("inf"):
-                return self._json({"error": "age must be a number of seconds"}, 400)
-            marked = mark_older_red(str(body.get("url", "")), age)
-            self._json({"ok": marked is not None, "marked": marked, "subscriptions": subscription_status()},
-                       200 if marked is not None else 404)
-        elif path == "/api/viewed":
-            ok = set_viewed(str(body.get("url", "")))
-            self._json({"ok": ok}, 200 if ok else 404)
-        elif path == "/api/skipped":
-            ok = set_skipped(str(body.get("url", "")))
-            self._json({"ok": ok}, 200 if ok else 404)
-        elif path == "/api/color":
-            ok = set_color(str(body.get("url", "")), str(body.get("color", "")))
-            self._json({"ok": ok}, 200 if ok else 404)
-        elif path == "/api/settings":
-            error = save_settings(body.get("terms"))
-            self._json({"ok": not error, "error": error, **settings()}, 400 if error else 200)
-        elif path == "/api/stop":
-            error = set_stop(body.get("stop_at"))
-            self._json({"ok": not error, "error": error, "stop_at": stop.get("stop_at")},
-                       400 if error else 200)
-        elif path == "/api/refresh":
-            for u in read_links():
-                schedule(u, force=True)
-            for u in read_entries(FEEDS_FILE):
-                schedule_subscription(u, force=True)
-            self._json({"ok": True})
-        else:
-            self._json({"error": "not found"}, 404)
+        action = POST_APIS.get(urlparse(self.path).path)
+        if action is None or not isinstance(body, dict):
+            return self._json({"error": "not found" if action is None else "expected a json object"},
+                              404 if action is None else 400)
+        self._json(*action(body))
 
     def log_message(self, fmt, *args):
         print(f"{self.address_string()} - {fmt % args}")
+
+
+# The JSON API: each takes the query (GET) or body (POST) and returns (response, status code).
+def ok(done: bool, failed: int = 404, **extra) -> tuple[dict, int]:
+    return {"ok": done, **extra}, 200 if done else failed
+
+
+def with_status(done: bool) -> tuple[dict, int]:
+    return ok(done, subscriptions=subscription_status())
+
+
+def subscribe_api(body):
+    error = subscribe(str(body.get("url", "")))
+    return ok(not error, 400, error=error)
+
+
+def subscription_tags_api(body):
+    tags = body.get("tags", [])
+    return with_status(set_subscription_tags(str(body.get("url", "")), [str(t) for t in tags] if isinstance(tags, list) else [str(tags)]))
+
+
+def mark_red_api(body):
+    try:
+        age = float(body.get("age"))
+    except (TypeError, ValueError):
+        age = -1
+    if not 0 <= age < float("inf"):
+        return {"error": "age must be a number of seconds"}, 400
+    marked = mark_older_red(str(body.get("url", "")), age)
+    return ok(marked is not None, marked=marked, subscriptions=subscription_status())
+
+
+def settings_api(body):
+    error = save_settings(body.get("terms"))
+    return {"ok": not error, "error": error, **settings()}, 400 if error else 200
+
+
+def stop_api(body):
+    error = set_stop(body.get("stop_at"))
+    return {"ok": not error, "error": error, "stop_at": stop.get("stop_at")}, 400 if error else 200
+
+
+def refresh_api(body):
+    for u in read_entries():
+        schedule(u, force=True)
+    for u in read_entries(FEEDS_FILE):
+        schedule_subscription(u, force=True)
+    return {"ok": True}, 200
+
+
+def jellyfin_play_api(query):
+    result = jellyfin_play(query.get("url", [""])[0])
+    return result, 400 if "error" in result else 200
+
+
+FEED_APIS = ("/api/feed", "/api/post", "/api/subscription")
+GET_APIS = {
+    "/api/subscriptions": lambda query: ({"subscriptions": subscription_status(), "interval_minutes": feed_interval / 60}, 200),
+    "/api/settings": lambda query: (settings(), 200),
+    "/api/jellyfin/play": jellyfin_play_api,
+}
+POST_APIS = {
+    "/api/links": lambda body: ok(add_link(str(body.get("url", ""))), 400),
+    "/api/subscriptions": subscribe_api,
+    "/api/subscriptions/tags": subscription_tags_api,
+    "/api/subscriptions/remove": lambda body: with_status(unsubscribe(str(body.get("url", "")))),
+    "/api/subscriptions/check": lambda body: with_status(check_subscription(str(body.get("url", "")))),
+    "/api/subscriptions/red": mark_red_api,
+    "/api/viewed": lambda body: ok(set_viewed(str(body.get("url", "")))),
+    "/api/color": lambda body: ok(set_color(str(body.get("url", "")), str(body.get("color", "")))),
+    "/api/settings": settings_api,
+    "/api/stop": stop_api,
+    "/api/refresh": refresh_api,
+}
 
 
 def lan_addresses() -> list[str]:
@@ -1378,30 +1562,21 @@ def main():
     ap.add_argument("--port", type=int, default=80, help="default 80; ports below 1024 need extra permission")
     ap.add_argument("--ranker", default=ranking.DEFAULT, choices=sorted(ranking.RANKERS))
     ap.add_argument("--feed-interval", type=float, default=30, help="minutes between subscription checks")
-    # Items used to be hidden after you opened them; now ranking.py scores them down instead.
-    for old in ("--hide-viewed", "--hide-green"):
-        ap.add_argument(old, help=argparse.SUPPRESS)
     ap.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR,
                     help="where links.txt, feeds.txt and the caches are kept (default: ./data)")
     args = ap.parse_args()
 
-    if args.hide_viewed or args.hide_green:
-        print("Note: --hide-viewed and --hide-green no longer do anything; nothing is hidden now. "
-              "Viewed and colored items are scored instead (see ranking.py).")
     global feed_interval
     feed_interval = max(args.feed_interval, 1) * 60
     set_data_dir(args.data_dir.resolve())
     cache.update(load_json(CACHE_FILE))
-    added.update(load_json(ADDED_FILE))
     subscriptions.update(load_json(FEED_CACHE_FILE))
     migrated_credentials = migrate_caldav_url_credentials()
     if migrated_credentials:
         print(f"Moved credentials out of {FEEDS_FILE} for {migrated_credentials} CalDAV subscription(s).")
-    if migrate_jellyfin_images():
+    if migrate_calendar_events() | migrate_jellyfin_images():
         save_json(FEED_CACHE_FILE, subscriptions, affects_feed=False)
-    viewed.update(load_json(VIEWED_FILE))
-    skipped.update(load_json(SKIPPED_FILE))
-    colors.update(load_json(COLORS_FILE))
+    load_state()
     load_settings()
     load_stop()
     try:
