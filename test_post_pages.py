@@ -251,6 +251,8 @@ class PostPageTests(unittest.TestCase):
             self.assertEqual(error.exception.code, code)
         with urllib.request.urlopen(base + '/post?' + urllib.parse.urlencode({'url': self.url})) as response:
             self.assertEqual(response.status, 200)
+            self.assertIn('<script src="/feed.js"></script>', response.read().decode())
+        with urllib.request.urlopen(base + '/feed.js') as response:
             self.assertIn('Post & related', response.read().decode())
         sub_query = '/api/subscription?' + urllib.parse.urlencode({'url': self.sub, 'view': 'next-up'})
         with urllib.request.urlopen(base + sub_query) as response:
@@ -259,4 +261,4 @@ class PostPageTests(unittest.TestCase):
         self.assertEqual(page['items'], page['next_up'])
         with urllib.request.urlopen(base + '/subscription/next-up?' + urllib.parse.urlencode({'url': self.sub})) as response:
             self.assertEqual(response.status, 200)
-            self.assertIn('Next up', response.read().decode())
+            self.assertIn('<script src="/feed.js"></script>', response.read().decode())

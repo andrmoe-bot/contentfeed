@@ -152,6 +152,10 @@ class SimilaritySettingsTests(unittest.TestCase):
                 if server.COMMIT:
                     self.assertIn(f'v{server.VERSION} ({server.COMMIT})', html)
                     self.assertRegex(server.VERSION, r'^\d+\.\d+\.\d+$')  # major.minor.commits
+                self.assertIn('<script src="/settings.js"></script>', html)
+                with urllib.request.urlopen(base + '/settings.js', timeout=5) as response:
+                    self.assertEqual(response.headers['Content-Type'], 'text/javascript; charset=utf-8')
+                    html = response.read().decode()  # the score panel's settings
                 self.assertIn('label: "Publish time similarity"', html)
                 self.assertIn('label: "Content length similarity"', html)
                 self.assertIn('label: "Title similarity"', html)

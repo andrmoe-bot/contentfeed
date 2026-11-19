@@ -93,14 +93,13 @@ TEMPLATES = {
 # https://xkcd.com comics
 """,
 }
-PAGES = {  # request path -> (file, content type)
-    "/": ("index.html", "text/html; charset=utf-8"),
-    "/subscription": ("index.html", "text/html; charset=utf-8"),
-    "/subscription/next-up": ("index.html", "text/html; charset=utf-8"),
-    "/post": ("index.html", "text/html; charset=utf-8"),
-    "/subscriptions": ("subscriptions.html", "text/html; charset=utf-8"),
-    "/style.css": ("style.css", "text/css; charset=utf-8"),
-    "/common.js": ("common.js", "text/javascript; charset=utf-8"),
+CONTENT_TYPES = {".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8",
+                 ".js": "text/javascript; charset=utf-8"}
+PAGES = {  # request path -> file
+    "/": "index.html", "/subscription": "index.html", "/subscription/next-up": "index.html", "/post": "index.html",
+    "/subscriptions": "subscriptions.html",
+    **{"/" + name: name for name in ("style.css", "common.js", "feed.css", "feed.js", "stop.js", "settings.js",
+                                     "subscriptions.css", "subscriptions.js")},
 }
 MAX_BYTES = 1_000_000
 MAX_ITEMS_SHOWN = 300  # per page of the feed; "Show more" asks for the next page
@@ -1291,7 +1290,7 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path, query = parsed.path, parse_qs(parsed.query)
         if path in PAGES:
-            return self._page(*PAGES[path])
+            return self._page(PAGES[path])
         if path in FEED_APIS:
             return self._feed(path, query)
         if path in GET_APIS:
@@ -1302,11 +1301,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._relay(m, parsed.query)
         self._not_found()
 
-    def _page(self, name: str, ctype: str):
+    def _page(self, name: str):
         body = (ROOT / name).read_bytes()
-        if ctype.startswith("text/html"):
+        if name.endswith(".html"):
             body = body.replace(b"{{VERSION}}", version_label().encode("ascii"))
-        self._send(200, body, ctype)
+        self._send(200, body, CONTENT_TYPES[Path(name).suffix])
 
     def _feed(self, path: str, query: dict):
         """/api/feed, or with url, /api/post (a post's page) or /api/subscription (one subscription;
