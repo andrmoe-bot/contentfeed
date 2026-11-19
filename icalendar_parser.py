@@ -62,6 +62,9 @@ def _unescape(value):
     return value.replace("\\n", "\n").replace("\\N", "\n").replace("\\,", ",").replace("\\;", ";").replace("\\\\", "\\").strip()
 
 
+PROPERTY_LINE = re.compile(r'((?:[^":]|"[^"]*")*):(.*)', re.S)
+
+
 def _components(text):
     """Yield unfolded VEVENT and VTODO property maps from an iCalendar resource."""
     lines = []
@@ -73,9 +76,12 @@ def _components(text):
     stack = []
     current = None
     for line in lines:
-        if ":" not in line:
+        # The value starts after the first colon outside quotes: quoted parameter values can hold
+        # colons, such as Thunderbird's DESCRIPTION;ALTREP="data:text/html,…":plain text.
+        match = PROPERTY_LINE.match(line)
+        if not match:
             continue
-        key, value = line.split(":", 1)
+        key, value = match.groups()
         name = key.split(";", 1)[0].upper()
         if name == "BEGIN":
             stack.append(value.upper())

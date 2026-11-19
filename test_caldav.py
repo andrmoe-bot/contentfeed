@@ -35,6 +35,14 @@ class CalendarParserTests(unittest.TestCase):
         item = icalendar_parser.parse_calendar_resource(body.decode(), "https://calendar.test/cal/")[0]
         self.assertEqual(item["title"], "Folded title continued, with\nnewline")
 
+    def test_quoted_parameter_values_can_hold_colons(self):
+        """Thunderbird puts an HTML copy of the description in a quoted data: URL parameter."""
+        body = calendar_data("BEGIN:VEVENT\r\nUID:x\r\nDTSTART:20261117T120000Z\r\nSUMMARY:Middag\r\n"
+                             'DESCRIPTION;ALTREP="data:text/html,Lag%20mat%3Cbr%3EPuss%20tenner":Lag mat\\nPuss tenner\r\n'
+                             "END:VEVENT")
+        item = icalendar_parser.parse_calendar_resource(body.decode(), "https://calendar.test/cal/")[0]
+        self.assertEqual(item["description"], "Lag mat\nPuss tenner")
+
     def test_parses_utc_all_day_and_named_timezone_dates(self):
         self.assertEqual(icalendar_parser._date("20261117T120000Z"), NOW + 86400)
         self.assertEqual(icalendar_parser._date("20261117"), datetime(2026, 11, 17, tzinfo=timezone.utc).timestamp())
