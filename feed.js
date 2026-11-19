@@ -407,7 +407,7 @@ function matchBreakdown(match) {
   const totalWeight = available.reduce((sum, c) => sum + c.weight, 0);
   const base = match.base_percent || 0;
   const components = base ? [
-    { label: "Same subscription", percent: 100, weight: base },
+    { label: match.same_series ? "Same series" : "Same subscription", percent: 100, weight: base },
     ...match.components.map((c) => ({ ...c,
       weight: c.percent == null || !totalWeight ? 0 : (100 - base) * c.weight / totalWeight })),
   ] : match.components;

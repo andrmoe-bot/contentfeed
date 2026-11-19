@@ -180,7 +180,7 @@ class PostPageTests(unittest.TestCase):
         server.FEEDS_FILE.write_text(self.sub + '\n' + other_sub)
         server.subscriptions[other_sub] = {'title': 'Other', 'items': [dict(self.posts[0], url='https://other.example/post')]}
         self.posts[0]['estimated_minutes'] = 20
-        terms = dict(ranking.TERMS, similar_base_percent=0, similar_publish_weight=0, similar_length_weight=1)
+        terms = dict(ranking.TERMS, similar_base_percent=0, similar_series_percent=0, similar_publish_weight=0, similar_length_weight=1)
         page = self.page(terms=terms)
         self.assertEqual(self.urls(page['similar']['items']), [self.posts[2]['url'], self.posts[0]['url']])
         self.assertEqual([p['related_percent'] for p in page['similar']['items']], [100, 50])

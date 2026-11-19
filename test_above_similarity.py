@@ -38,6 +38,8 @@ def reference_similarity(first, second, terms):
         total += title_weight * Fraction(2 * len(first_words & second_words), len(first_words) + len(second_words))
         normalizer += title_weight
     base = Fraction(str(terms['similar_base_percent']))
+    if set(first.get('series_ids') or ()) & set(second.get('series_ids') or ()):
+        base = max(base, Fraction(str(terms['similar_series_percent'])))
     return round(base + (100 - base) * total / normalizer) if normalizer else round(base)
 
 
@@ -47,7 +49,7 @@ def greedy_reference(items, terms):
     positions = {it['url']: i for i, it in enumerate(items)}
     remaining, out = copy.deepcopy(base), []
     amount = terms['above_similarity_penalty']
-    if not (terms['similar_base_percent'] or terms['similar_publish_weight'] or terms['similar_length_weight'] or terms['similar_title_weight']):
+    if not (terms['similar_base_percent'] or terms['similar_series_percent'] or terms['similar_publish_weight'] or terms['similar_length_weight'] or terms['similar_title_weight']):
         amount = 0
     while remaining:
         candidates = []
@@ -70,7 +72,7 @@ def greedy_reference(items, terms):
 
 class AboveSimilarityTests(unittest.TestCase):
     def terms(self, **kwargs):
-        return dict(ranking.DEFAULT_TERMS, similar_base_percent=0, **kwargs)
+        return dict(ranking.DEFAULT_TERMS, similar_base_percent=0, similar_series_percent=0, **kwargs)
 
     def test_partial_matches_add_up_instead_of_fixed_repeat_counts(self):
         posts = [item('first', 'feed'), item('second', 'feed', date=NOW - 15 * 86400),

@@ -378,6 +378,10 @@ How alike two items are, from 0 to 100%:
   60% match therefore becomes 80%. The flat **Subscription base similarity** setting accepts
   0–100%; 0 restores the component-only calculation, and 100 makes all same-subscription posts
   fully alike. Cards show Subscription alongside the other weighted contributions.
+- **Series base:** 75% by default for posts in the same series of a subscription (see above for
+  what makes a series), used instead of the subscription base when it's higher. A measured 60%
+  match between two episodes of a show becomes `75% + 25% × 60% = 90%`. Set it at or below the
+  subscription base to ignore series.
 
 - **Publish time:** 100% for posts published together, falling evenly to 0% at the configured
   window (30 days by default). A week apart is 77%, two weeks 53%.
@@ -400,7 +404,7 @@ How alike two items are, from 0 to 100%:
   distinct same-subscription posts retain the subscription base.
 - Only posts from the same subscription match. Tags don't affect similarity. When length or title is
   enabled, posts can still gain similarity beyond the subscription base outside the publish-time window.
-- Every item is 100% like itself, even without a known length or title. Set the subscription base and all three weights to 0 to disable the
+- Every item is 100% like itself, even without a known length or title. Set both bases and all three weights to 0 to disable the
   similarity penalties entirely, including for opened items.
 
 The similarity penalty fades linearly to zero over 24 hours, updated in whole hours. Every
