@@ -91,10 +91,10 @@ function renderStopNotice() {
     const hhmm = clock(lastStop.stop_at);
     const clear = el("button", { type: "button" }, "Clear timer");
     clear.addEventListener("click", () => stopClear.click());
-    notice.replaceChildren(
-      // The ongoing event shown below is the cause: it says enough on its own.
-      upcoming ? leadNote(upcoming) : lastStop.stop_event ? "" : `Stop time reached at ${hhmm}.`,
-      stopClear.hidden ? null : clear);  // clearing a timer doesn't end an event's stop
+    // The ongoing event shown below is the cause: it says enough on its own. The Clear button only
+    // shows with a timer: clearing it doesn't end an event's stop. (replaceChildren would show a null.)
+    const message = upcoming ? leadNote(upcoming) : lastStop.stop_event ? null : `Stop time reached at ${hhmm}.`;
+    notice.replaceChildren(...[message, stopClear.hidden ? null : clear].filter(Boolean));
   } else {
     const back = el("button", { type: "button" }, "Back to feed");
     back.addEventListener("click", () => { modeOverride = false; render(); });
