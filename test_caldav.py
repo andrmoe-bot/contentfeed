@@ -254,7 +254,7 @@ class CalendarFetchTests(unittest.TestCase):
         collection = "https://example.test/user/calendar/"
         propfind = f'''<D:multistatus xmlns:D="{caldav.DAV}" xmlns:C="{caldav.CAL}">
           <D:response><D:href>/user/calendar/</D:href><D:propstat><D:prop>
-            <D:displayname>Work</D:displayname><D:resourcetype><D:collection/><C:calendar/></D:resourcetype>
+            <D:displayname>Work</D:displayname><D:sync-token>http://radicale.org/ns/sync/1</D:sync-token><D:resourcetype><D:collection/><C:calendar/></D:resourcetype>
           </D:prop></D:propstat></D:response></D:multistatus>'''.encode()
         event_text = calendar_data(event()).decode()
         task_text = calendar_data(todo("task", "Task", "DUE:20261118T120000Z\r\n")).decode()
@@ -274,6 +274,7 @@ class CalendarFetchTests(unittest.TestCase):
         with patch.object(caldav, "_request", side_effect=responses) as request:
             result = caldav.fetch(collection, login)
         self.assertEqual(result["title"], "Work")
+        self.assertEqual(result["version"], "http://radicale.org/ns/sync/1")
         self.assertEqual([it["calendar_kind"] for it in result["items"]], ["task"])
         self.assertEqual([it["calendar_kind"] for it in result["events"]], ["event"])
         self.assertEqual([call.args[1] for call in request.call_args_list], ["PROPFIND", "REPORT", "REPORT"])

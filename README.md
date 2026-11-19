@@ -110,6 +110,14 @@ put the login in `caldav.json` in the data directory and keep credentials out of
 to a parent collection URL applies to calendars beneath that path. Use a dedicated account with
 read-only access if the server supports it; ContentFeed only sends calendar-reading requests.
 
+CalDAV calendars (such as Radicale's) stay in step with the feed: every time the page updates, the
+server asks the calendar for its version, a small request that changes whenever anything in the
+calendar does, and reads the calendar again only if it has changed. So a change in your calendar
+reaches the feed within seconds. If the calendar server doesn't answer within 2 seconds, the feed
+keeps using the events it read last, says so in the status line, and tries again every 30 seconds.
+A server that reports no version is read again at most once a minute. Shared `.ics` links are
+checked on the subscription timer like feeds.
+
 For example, `caldav.json` can map the Radicale user collection to a login used by selected child calendars:
 
     {"https://radicale.example/andreas/": {"username": "contentfeed", "password": "…"}}

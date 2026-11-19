@@ -1045,11 +1045,13 @@ def feed(ranker: str, limit: int = MAX_ITEMS_SHOWN, terms: dict | None = None, *
         schedule(url)
     for url in subs:
         schedule_subscription(url)
+    sync_calendars(all_subs)
     now = time.time()
     with lock:
         # Every subscribed calendar's events stop watching, on every page, not only their own subscription's.
         events = calendar_events(all_subs)
-    stopping = stop_state(events, now, terms, stop.get("stop_at"))
+    stopping = {**stop_state(events, now, terms, stop.get("stop_at")),
+                "calendars_unreachable": unreachable_calendars(all_subs)}
     ranked = ranking_for(ranker, terms, entries, subs, search, post_url, stopping, now)
     if post_url is not None:
         return {**post_details(ranked.source, post_url, ranker, limit, terms, now, enrich=enrich, search=search), **stopping}
@@ -1206,6 +1208,67 @@ def migrate_calendar_events() -> bool:
 def calendar_events(subs) -> list[dict]:
     """The subscriptions' calendar events. Call with lock held."""
     return [event for url in subs for event in subscriptions.get(url, {}).get("events", [])]
+
+
+# CalDAV calendars are kept in step on every feed request, not only on the subscription timer: each
+# request asks for the calendar's version (see caldav.version), which changes with every change in it,
+# and reads the calendar again only when it has. So events are at most a page update behind the
+# calendar. When the server doesn't answer, the events from the last read stay in use, and the feed
+# response names the calendar as unreachable. Shared .ics links are read on the timer as before.
+CALENDAR_CHECK_GAP = 2  # seconds: requests within this long of a check reuse it
+CALENDAR_RETRY = 30  # seconds between checks while a calendar doesn't answer
+CALENDAR_UNVERSIONED = 60  # seconds between reads of a calendar whose server reports no version
+calendar_checks: dict[str, dict] = {}  # url -> {"lock", "checked" (monotonic time), "unreachable" (unix time or None)}
+calendar_checker = ThreadPoolExecutor(max_workers=4)  # apart from executor, so fetches don't delay checks
+
+
+def checked_calendars(subs) -> list[str]:
+    """The CalDAV collections among the subscriptions: those whose last read reported a version (or None)."""
+    with lock:
+        return [url for url in subs if subscriptions.get(url, {}).get("source") == "caldav"
+                and "version" in subscriptions[url]]
+
+
+def check_calendar(url: str):
+    """Read the calendar again if it has changed since it was last read."""
+    state = calendar_checks.setdefault(url, {"lock": threading.Lock(), "checked": float("-inf"), "unreachable": None})
+    with state["lock"]:  # requests arriving during a check wait for it, and then use it
+        gap = CALENDAR_RETRY if state["unreachable"] else CALENDAR_CHECK_GAP
+        if time.monotonic() - state["checked"] < gap:
+            return
+        with lock:
+            saved = dict(subscriptions.get(url, {}))
+        try:
+            current = caldav.version(url, caldav.login_for(url, caldav.read_logins(CALDAV_FILE)[0]))
+            if (current != saved.get("version") or saved.get("error")
+                    or (current is None and time.time() - saved.get("fetched", 0) >= CALENDAR_UNVERSIONED)):
+                run_now(refresh_subscription, url, True)
+                with lock:
+                    failed = bool(subscriptions.get(url, {}).get("error"))
+            else:
+                failed = False
+        except (caldav.CalDAVError, OSError):
+            failed = True
+        state["unreachable"] = (state["unreachable"] or time.time()) if failed else None
+        state["checked"] = time.monotonic()
+
+
+def sync_calendars(subs):
+    """Bring every CalDAV calendar among the subscriptions up to date, checking them side by side."""
+    for future in [calendar_checker.submit(check_calendar, url) for url in checked_calendars(subs)]:
+        future.result()
+
+
+def unreachable_calendars(subs) -> list[dict]:
+    """The calendars whose server didn't answer the last check, with when their events were last read."""
+    out = []
+    with lock:
+        for url in subs:
+            state = calendar_checks.get(url)
+            if state and state["unreachable"]:
+                s = subscriptions.get(url, {})
+                out.append({"url": url, "title": s.get("title") or url, "fetched": s.get("fetched")})
+    return out
 
 
 def migrate_jellyfin_images() -> bool:
