@@ -19,9 +19,9 @@ Each item has its page metadata (url, title, description, domain, ...) plus thes
     color        "green", "white" (the default) or "red", as you marked it on the page
     next_after   for a post: the title of the post you opened (not skipped) most recently in its subscription,
                  if this post comes right after that one ("what's next"): the next part of its series
-                 (see title_series) or else the next published; otherwise None
+                 (see series.py) or else the next published; otherwise None
     series_first for a later part of a series of which you haven't opened anything before it: the
-                 first part's title; otherwise None
+                 first part's title; otherwise None. Both are None for subscriptions tagged "latest".
     sub          for a post: its subscription's address; None for links
     sub_last_viewed  for a post: unix time you last opened or skipped any post in its subscription,
                  or None if you've done neither
@@ -628,16 +628,15 @@ def score(item: dict, now: float, terms: dict) -> Reasons:
     reasons = []
     if item.get("calendar_kind"):
         return _task_score(item, now, w)
-    if item.get("next_after") and "latest" not in item["tags"]:
-        if w["next_up_bonus"]:
-            reasons.append((f"next up after “{short(item['next_after'])}”", w["next_up_bonus"]))
+    if item.get("next_after") and w["next_up_bonus"]:
+        reasons.append((f"next up after “{short(item['next_after'])}”", w["next_up_bonus"]))
     if item["last_viewed"] is not None and w["seen_bonus"]:
         away = hours_since(now, item["last_viewed"])
         verb = "skipped" if item.get("skipped") else "opened"
         reasons.append((f"{verb} {hours_label(away)} ago" if away else f"{verb} in the last hour", w["seen_bonus"]))
     if item["kind"] == "subscription" and item.get("sub_last_viewed") is None and w["new_sub_bonus"]:
         reasons.append((f"nothing opened from “{short(item['feed'])}” yet", w["new_sub_bonus"]))
-    if item.get("series_first") and "latest" not in item["tags"] and w["series_penalty"]:
+    if item.get("series_first") and w["series_penalty"]:
         reasons.append((f"in a series starting “{short(item['series_first'])}”, nothing before it opened", w["series_penalty"]))
     reasons.extend(_similarity_reasons(item, w))
     kind = media_type(item)

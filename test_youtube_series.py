@@ -37,11 +37,11 @@ class PlaylistTests(unittest.TestCase):
         with patch.object(server, "subscriptions", {"channel": subscription}), \
              patch.object(server, "opened_at", return_value=None), \
              patch.object(server, "seen_at", return_value=None):
-            nxt, unstarted = server.series_state(["channel"])
+            nxt, unstarted = server.series_state({"channel": []})
             self.assertEqual(unstarted, {"a": "Unrelated title"})
             with patch.object(server, "opened_at", side_effect=lambda url: 10 if url == "b" else None), \
                  patch.object(server, "view_state", return_value={"skipped": False}):
-                nxt, _ = server.series_state(["channel"])
+                nxt, _ = server.series_state({"channel": []})
                 self.assertEqual(nxt, {"a": "Unrelated title"})
 
     def test_existing_channels_are_backfilled(self):
@@ -59,7 +59,7 @@ class SeriesStateTests(unittest.TestCase):
                 'items': posts, 'youtube_playlists': [dict(id=str(i), videos=p) for i, p in enumerate(playlists)]}}), \
              patch.object(server, 'viewed', viewed or {}), \
              patch.object(server, 'skipped', skipped or {}), patch.object(server, 'colors', {}):
-            return server.series_state(['channel'])
+            return server.series_state({'channel': []})
 
     def test_overlapping_playlists_offer_both_successors(self):
         self.assertEqual(self.state([['a', 'b'], ['a', 'c']], viewed={'a': 1})[0], {'b': 'a', 'c': 'a'})
@@ -95,7 +95,7 @@ class SeriesStateTests(unittest.TestCase):
         posts = [{'url': v, 'title': 'Part ' + str(i)} for i, v in enumerate(('a', 'b'), 1)]
         with patch.object(server, 'subscriptions', {'feed': {'items': posts}}), \
              patch.object(server, 'viewed', {}), patch.object(server, 'skipped', {}):
-            self.assertEqual(server.series_state(['feed'])[1], {'b': 'Part 1'})
+            self.assertEqual(server.series_state({'feed': []})[1], {'b': 'Part 1'})
 
 
 class ImportLifecycleTests(unittest.TestCase):

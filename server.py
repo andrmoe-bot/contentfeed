@@ -36,6 +36,7 @@ import pages
 from content_length import page_minutes, youtube_minutes
 
 import ranking
+import series
 
 ROOT = Path(__file__).resolve().parent  # code and pages; the server never writes here
 VERSION = (ROOT / "VERSION").read_text(encoding="ascii").strip()
@@ -509,7 +510,7 @@ def subscription_status() -> list[dict]:
             s = subscriptions.get(url, {})
             dates = [it["published"] or it["first_seen"] for it in s.get("items", [])]
             states = [view_state(u) for u in {p["url"] for p in s.get("items", [])}]
-            next_up_count = sum(1 for p in s.get("items", []) if p["url"] in next_up_map and "latest" not in tags)
+            next_up_count = sum(1 for p in s.get("items", []) if p["url"] in next_up_map)
             status.append({
                 "url": url,
                 "tags": tags,
@@ -768,44 +769,22 @@ def load_settings():
         print(f"Ignoring {SETTINGS_FILE}: {e}")
 
 
-def series_state(subs) -> tuple[dict[str, str], dict[str, str]]:
-    """Call with lock held. Returns:
+def series_state(subs: dict[str, list[str]]) -> tuple[dict[str, str], dict[str, str]]:
+    """For the subscriptions (url -> tags), except those tagged "latest". Call with lock held. Returns:
     - next up, as {its url: the opened post's title}: for each subscription, the post after the one
       you opened most recently: the next part of its series, or else the next published. Skipped posts
       don't count as opened here, and a post you skipped isn't next up. A subscription
       whose posts belong to series of their own, such as a Jellyfin server's TV shows, has a next post
       in each series, in episode order.
     - later parts of a series none of whose earlier parts you've opened, as {url: the first part's title}.
-    YouTube series use imported playlist order; other series use titles (see ranking.title_series),
-    or for Jellyfin and NRK TV, episode order.
-    Posts marked no_series, such as NRK TV's news, have no series."""
+    See series.py for what makes a series."""
     next_up, unstarted = {}, {}
     started = set()
-    for sub_url in subs:
-        groups = {}
-        subscription = subscriptions.get(sub_url, {})
-        items = subscription.get("items", [])
-        by_video = {p["youtube"]: p for p in items if p.get("youtube")}
-        assigned = set()
-        for playlist in subscription.get("youtube_playlists", []):
-            ordered = [by_video[v] for v in playlist["videos"] if v in by_video]
-            if ordered:
-                groups[("playlist", playlist["id"])] = list(reversed(ordered))
-                assigned.update(p["youtube"] for p in ordered)
-        for p in items:
-            if p.get("youtube"):
-                if p["youtube"] not in assigned:
-                    groups.setdefault(("youtube",), []).append(p)
-            else:
-                groups.setdefault(p.get("series"), []).append(p)
-        for key, posts in groups.items():
-            if key is None:
-                prev = {} if posts[0].get("no_series") else ranking.title_series(posts)
-            elif key == ("youtube",):
-                prev = {}
-            else:
-                posts.sort(key=lambda p: p.get("episode", []), reverse=True)  # last episode first; stable otherwise
-                prev = {p["url"]: posts[i + 1] for i, p in enumerate(posts[:-1])}
+    for sub_url, tags in subs.items():
+        if "latest" in tags:  # you only want the latest posts from it, so neither applies
+            continue
+        for group in series.groups(subscriptions.get(sub_url, {})):
+            posts, prev = group["posts"], group["prev"]
             opened = [(t, i) for i, p in enumerate(posts) if (t := opened_at(p["url"]))]
             if opened:
                 i = max(opened)[1]
@@ -1006,7 +985,7 @@ def ranked_feed(ranker: str, limit: int, terms: dict | None = None, *, enrich: b
     if subscription_url is not None:
         order = lambda it: (it["score"], it["last_viewed"] is None, it["date"], it["position"])
         next_up_items = sorted(
-            [p for p in ranked.source if p.get("next_after") and "latest" not in p.get("tags", [])],
+            [p for p in ranked.source if p.get("next_after")],
             key=order, reverse=True
         )
         if enrich:
@@ -1037,44 +1016,15 @@ def post_details(source: list[dict], url: str, ranker: str, limit: int, terms: d
             scored.append({**p, "reasons": reasons, "score": ranking.points(sum(r["points"] for r in reasons))})
         return ranking.explain_similarities(scored, source, terms, now)
 
-    series = []
+    feeds_of_series = []
     with lock:
         memberships = [(sub, dict(subscriptions.get(sub, {}))) for sub in read_entries(FEEDS_FILE)]
     for sub, subscription in memberships:
-        posts = subscription.get("items", [])
-        own = next((p for p in posts if p["url"] == url), None)
-        if own is None:
-            continue
-        groups = []
-        for playlist in subscription.get("youtube_playlists", []):
-            if own.get("youtube") in playlist["videos"]:
-                videos = {p.get("youtube"): p for p in posts if p.get("youtube")}
-                ordered = [videos[v] for v in playlist["videos"] if v in videos]
-                groups.append(("playlist:" + playlist["id"], playlist.get("title") or f"YouTube playlist · {playlist['id']}",
-                               "https://www.youtube.com/playlist?list=" + playlist["id"], ordered))
-        if own.get("series") and not own.get("no_series"):
-            ordered = sorted((p for p in posts if p.get("series") == own["series"] and not p.get("no_series")),
-                             key=lambda p: p.get("episode", []))
-            groups.append(("series:" + str(own["series"]), subscription.get("title") or "Series", None, ordered))
-        elif not own.get("youtube") and not own.get("no_series"):
-            candidates = [p for p in posts if not p.get("series") and not p.get("no_series") and not p.get("youtube")]
-            previous = ranking.title_series(candidates)
-            members = {url}
-            while True:
-                expanded = members | {p for p, before in previous.items() if before["url"] in members} | {
-                    before["url"] for p, before in previous.items() if p in members}
-                if expanded == members:
-                    break
-                members = expanded
-            if len(members) > 1:
-                ordered = sorted((p for p in candidates if p["url"] in members),
-                                 key=lambda p: (ranking.title_numbers(p.get("title") or ""), p.get("published") or 0))
-                groups.append(("titles:" + min(members), ordered[0].get("title") or "Series", None, ordered))
-        for key, title, external, ordered in groups:
-            ordered = list({p["url"]: by_url[p["url"]] for p in ordered if p["url"] in by_url}.values())
+        for group in series.of_post(subscription, url):
+            ordered = list({p["url"]: by_url[p["url"]] for p in group["posts"] if p["url"] in by_url}.values())
             ordered = [p for p in ordered if matches_search(p, search)]
-            series.append({"id": sub + ":" + key, "title": title, "url": external,
-                           "items": cards(ordered[:limit]), "total": len(ordered)})
+            feeds_of_series.append({"id": sub + ":" + group["id"], "title": group["title"], "url": group["url"],
+                                    "items": cards(ordered[:limit]), "total": len(ordered)})
     matches = []
     for p in source:
         if matches_search(p, search) and p["url"] != url and target.get("sub") and p.get("sub") == target["sub"]:
@@ -1087,10 +1037,10 @@ def post_details(source: list[dict], url: str, ranker: str, limit: int, terms: d
         p["related_percent"] = percent
     item = cards([target])[0]
     if enrich:
-        enrich_posts([item, *(p for group in series for p in group["items"]), *similar], terms["enrich_count"])
+        enrich_posts([item, *(p for group in feeds_of_series for p in group["items"]), *similar], terms["enrich_count"])
     with lock:
         n_pending = len(pending)
-    return {"item": item, "series": series, "similar": {"items": similar, "total": len(matches)},
+    return {"item": item, "series": feeds_of_series, "similar": {"items": similar, "total": len(matches)},
             "pending": n_pending, "ranker": ranker}
 
 
