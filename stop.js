@@ -2,8 +2,8 @@
 // so every post shown can be finished before the stop time; the post you're viewing stays even when
 // it no longer fits. When the stop time runs out (the timer, or an event's lead time), the page
 // switches to stop mode in JS: the feed is hidden behind a notice naming the event that caused the
-// stop (or a generic timer message) and the event taking place now, if any, with a countdown to its
-// end; playback is force-stopped and an audio alert sounds (see forceStop) — and since the feed
+// stop (or a generic timer message) — in an event's lead time, "stop watching now and get ready",
+// with the event in full and a countdown to its start — and the event taking place now, if any, with a countdown to its end; playback is force-stopped and an audio alert sounds (see forceStop) — and since the feed
 // itself is still served, switching back to the normal feed is seamless once the stop is over. The "Stop mode" button next to the timer switches between stop
 // mode and the normal feed manually at any time. A time earlier today means tomorrow.
 const stopForm = document.getElementById("stop-form");
@@ -84,60 +84,75 @@ function renderStopNotice() {
     feedEl.before(notice);
   }
   const ongoing = lastStop && lastStop.ongoing_event;
+  // An event that caused the stop but hasn't started yet: its lead time, to get ready for it.
+  const upcoming = lastStop && lastStop.stopped && lastStop.stop_event
+    && !(ongoing && lastStop.stop_event.url === ongoing.url) ? lastStop.stop_event : null;
   if (lastStop && lastStop.stopped) {
     const hhmm = clock(lastStop.stop_at);
     const clear = el("button", { type: "button" }, "Clear timer");
     clear.addEventListener("click", () => stopClear.click());
-    const event = lastStop.stop_event;
     notice.replaceChildren(
-      // The ongoing event shown below is the cause: no need to say it starts.
-      event && ongoing && event.url === ongoing.url ? "" : event
-        ? `Time to go: “${event.title}” starts at ${hhmm}.`
-        : `Stop time reached at ${hhmm}.`, clear);
+      // The ongoing event shown below is the cause: it says enough on its own.
+      upcoming ? leadNote(upcoming) : lastStop.stop_event ? "" : `Stop time reached at ${hhmm}.`,
+      stopClear.hidden ? null : clear);  // clearing a timer doesn't end an event's stop
   } else {
     const back = el("button", { type: "button" }, "Back to feed");
     back.addEventListener("click", () => { modeOverride = false; render(); });
     notice.replaceChildren("Stop mode is on — the feed is hidden and playback is stopped. ", back);
   }
-  if (ongoing) notice.append(ongoingEvent(ongoing));
+  if (ongoing) notice.append(eventDetails(ongoing, false));
+  if (upcoming) notice.append(eventDetails(upcoming, true));
   tickCountdown();
 }
 
-// The event taking place now, in full, with a countdown to its end.
-function ongoingEvent(event) {
+// The lead time before an event: stop watching now and get ready for it.
+function leadNote(event) {
+  return `Stop watching now and get ready: “${event.title}” starts at ${clock(event.calendar_start)}.`;
+}
+
+// An event in full: the one taking place now, with a countdown to its end, or the upcoming one
+// to get ready for, with a countdown to its start.
+function eventDetails(event, upcoming) {
   const day = (unix) => new Date(unix * 1000).toDateString();
   const when = (unix) => day(unix) === new Date().toDateString() ? clock(unix)
     : `${new Date(unix * 1000).toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" })} ${clock(unix)}`;
   const link = /^https?:/.test(event.url || "")
     ? el("a", { href: event.url, target: "_blank", rel: "noopener noreferrer" }, "Open event ↗") : null;
-  return el("section", { class: "ongoing", "aria-label": "Ongoing event" },
-    el("div", { class: "source" }, ["Now", event.calendar].filter(Boolean).join(" · ")),
+  const end = upcoming ? event.calendar_start : event.deadline;
+  const label = upcoming ? "starts in" : "left";
+  return el("section", { class: "ongoing", "aria-label": upcoming ? "Upcoming event" : "Ongoing event" },
+    el("div", { class: "source" }, [upcoming ? "Up next" : "Now", event.calendar].filter(Boolean).join(" · ")),
     el("h2", {}, event.title || "Untitled event"),
-    el("div", { class: "when" }, `${when(event.calendar_start)} – ${when(event.deadline)} · `,
-      el("span", { class: "countdown", "data-end": String(event.deadline) }, countdown(event.deadline))),
+    el("div", { class: "when" }, event.deadline ? `${when(event.calendar_start)} – ${when(event.deadline)} · ` : `${when(event.calendar_start)} · `,
+      el("span", { class: "countdown", "data-end": String(end), "data-label": label }, countdown(end, label))),
     event.description ? el("p", { class: "description" }, event.description) : null,
     link);
 }
 
-// Such as "1:02:03 left" or "4:05 left", until a unix time.
-function countdown(end) {
+// Such as "1:02:03 left" or "starts in 4:05", until a unix time.
+function countdown(end, label) {
   const s = Math.max(0, Math.ceil(end - Date.now() / 1000));
   const h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60, sec = String(s % 60).padStart(2, "0");
-  return `${h ? `${h}:${String(m).padStart(2, "0")}` : m}:${sec} left`;
+  const time = `${h ? `${h}:${String(m).padStart(2, "0")}` : m}:${sec}`;
+  return label === "left" ? `${time} left` : `${label} ${time}`;
 }
 
-// Updates the countdown every second while it's shown; once the event is over, reloads the feed so
-// stop mode shows what comes next (or the feed returns) without waiting for the next poll.
-let countdownTimer = null, reloadedFor = null;
+// Updates the countdowns every second while they're shown; once one runs out (an event starts or
+// ends), reloads the feed so stop mode shows what comes next (or the feed returns) without waiting
+// for the next poll.
+let countdownTimer = null;
+const reloadedFor = new Set();
 function tickCountdown() {
   clearTimeout(countdownTimer);
-  const span = document.querySelector("#stop-notice .countdown");
-  if (!span) return;
-  const end = Number(span.dataset.end);
-  span.textContent = countdown(end);
-  if (Date.now() / 1000 >= end) {
-    if (reloadedFor !== end) { reloadedFor = end; load(); }  // once: the server's clock may lag behind
-    return;
+  const spans = [...document.querySelectorAll("#stop-notice .countdown")];
+  if (!spans.length) return;
+  for (const span of spans) {
+    const end = Number(span.dataset.end);
+    span.textContent = countdown(end, span.dataset.label);
+    if (Date.now() / 1000 >= end && !reloadedFor.has(end)) {
+      reloadedFor.add(end);  // once: the server's clock may lag behind
+      load();
+    }
   }
   countdownTimer = setTimeout(tickCountdown, 1000 - Date.now() % 1000);
 }

@@ -950,16 +950,16 @@ def stop_state(events: list[dict], now: float, terms: dict, stop_at: float | Non
                calendar_of=lambda event: None) -> dict:
     """The stop-watching state for a feed response: the effective stop time, whether it has run out
     (stopped), stop_event, the event that causes it, if it isn't the timer, and ongoing_event, the
-    event taking place now, if any, with all its details and calendar_of(event), its calendar's name,
-    for stop mode to show with a countdown to its end."""
+    event taking place now, if any. Both come with all their details and calendar_of(event), their
+    calendar's name, for stop mode to show with a countdown to the start or the end."""
     effective, event = ranking.effective_stop(events, now, terms, stop_at)
     ongoing = ranking.ongoing_event(events, now)
+    details = lambda e: ({**{k: e.get(k) for k in ("url", "title", "description", "calendar_kind", "calendar_start", "deadline")},
+                          "calendar": calendar_of(e)} if e is not None else None)
     return {"stop_at": effective,
             "stopped": effective is not None and now >= effective,
-            "stop_event": ({k: event.get(k) for k in ("url", "title", "calendar_kind", "calendar_start", "deadline")}
-                           if event is not None else None),
-            "ongoing_event": ({**{k: ongoing.get(k) for k in ("url", "title", "description", "calendar_start", "deadline")},
-                               "calendar": calendar_of(ongoing)} if ongoing is not None else None)}
+            "stop_event": details(event),
+            "ongoing_event": details(ongoing)}
 
 
 def build_items(entries: dict[str, list[str]], subs: dict[str, list[str]], now: float) -> tuple[list[dict], list[str]]:
