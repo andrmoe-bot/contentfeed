@@ -1,6 +1,6 @@
 // The stop-watching timer. While it's ahead, the server leaves out posts that would run past it,
-// so every post shown can be finished before the stop time; the post you're viewing stays even when
-// it no longer fits. When the stop time runs out (the timer, or an event's lead time), the page
+// so every post shown can be finished before the stop time (as of when the feed was shown: the page
+// doesn't reorder as time passes). When the stop time runs out (the timer, or an event's lead time), the page
 // switches to stop mode in JS: the feed is hidden behind a notice naming the event that caused the
 // stop (or a generic timer message) — in an event's lead time, "stop watching now and get ready",
 // with the event in full and a countdown to its start — and the event taking place now, if any, with a countdown to its end; playback is force-stopped and an audio alert sounds (see forceStop) — and since the feed
@@ -20,13 +20,13 @@ stopForm.addEventListener("submit", async (e) => {
   if (!ok) return say(data.error || "Couldn't set the timer.", true);
   stopClear.hidden = false;
   say(`Stopping at ${stopTime.value}: the feed now shows only posts you can finish before then.`);
-  load();
+  load({ reorder: true });
 });
 stopClear.addEventListener("click", async () => {
   await api("/api/stop", { stop_at: null });
   showStopTimer(null);
   say("Stop timer cleared.");
-  load();
+  load({ reorder: true });
 });
 
 // The timer as saved on the server, in the box (or empty).
@@ -138,7 +138,7 @@ function countdown(end, label) {
 }
 
 // Updates the countdowns every second while they're shown; once one runs out (an event starts or
-// ends), reloads the feed so stop mode shows what comes next (or the feed returns) without waiting
+// ends), checks the server again so stop mode shows what comes next (or the feed returns) without waiting
 // for the next poll.
 let countdownTimer = null;
 const reloadedFor = new Set();
@@ -157,7 +157,7 @@ function tickCountdown() {
   countdownTimer = setTimeout(tickCountdown, 1000 - Date.now() % 1000);
 }
 
-// In stop mode cards you opened no longer keep their place, playback is stopped, and the alert
+// In stop mode playback is stopped, and the alert
 // sounds once for each stop the server reports (not for the Stop mode button).
 let alertedStop = null;
 function alertSound() {
@@ -182,7 +182,6 @@ function alertSound() {
 
 function forceStop(data, manual = false) {
   if (!stopModeActive()) { alertedStop = null; return; }
-  stay.clear();  // the stay behavior no longer applies while stop mode is on
   if (playingCard) {
     // Rebuilding the playing card replaces its player with the play button, which stops playback.
     for (const c of cards.values()) if (c.el === playingCard) {
