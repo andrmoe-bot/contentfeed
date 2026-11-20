@@ -174,6 +174,14 @@ function pageVideo(item) {
   return btn;
 }
 
+// Why a paper is in the feed: written by an author you follow, or citing a paper you follow, or both.
+function paperReasons(item) {
+  if (!item.via?.length) return null;
+  return el("div", { class: "via" }, ...item.via.map((reason) => reason.kind === "author"
+    ? el("span", { class: "via-author", title: "A paper by an author you follow" }, "✍ Paper by ", el("strong", {}, reason.name))
+    : el("span", { class: "via-cites", title: "A paper citing a paper you follow" }, "❝ Cites ", el("strong", {}, `“${reason.name}”`))));
+}
+
 function card(item) {
   const title = item.loading ? "Loading…" : item.title || item.url;
   const domain = item.domain || new URL(item.url).hostname;
@@ -205,6 +213,7 @@ function card(item) {
 
   const body = el("div", { class: "body" },
     el("div", { class: "source" }, icon, `${source} · ${when}`),
+    paperReasons(item),
     el("h2", {}, title),
     item.description ? el("p", {}, item.description) : null,
     item.tags.length ? el("div", { class: "tags" }, ...item.tags.map((t) => el("span", {}, t))) : null,

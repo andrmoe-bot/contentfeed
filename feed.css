@@ -30,6 +30,14 @@ p { margin: 0; color: var(--muted); display: -webkit-box; -webkit-line-clamp: 3;
 .post-section .section-note { display: block; overflow: visible; }
 .post-link { color: var(--accent); font-size: 13px; }
 #more:not([hidden]) { display: block; margin: 0 auto 48px; }
+.via { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.via span { font-size: 13px; padding: 2px 8px; border-radius: 6px; border: 1px solid; }
+.via-author { color: #1d6b3a; border-color: #8cc9a0; background: #eef8f1; }
+.via-cites { color: #5b3a94; border-color: #b9a3e0; background: #f4effc; }
+@media (prefers-color-scheme: dark) {
+  .via-author { color: #9fdcb3; border-color: #2f6b45; background: #13261a; }
+  .via-cites { color: #cdb8f2; border-color: #574181; background: #1e1630; }
+}
 .tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .tags span { font-size: 12px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); }
 .playlists { display: flex; flex-wrap: wrap; gap: 6px 12px; padding: 0 16px 12px; font-size: 13px; }

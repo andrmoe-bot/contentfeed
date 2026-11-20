@@ -40,7 +40,10 @@ def user_id(url: str) -> str | None:
     host = p.netloc.lower()
     if not re.fullmatch(r"scholar\.google(\.com?)?(\.[a-z]{2})?", host) or p.path.rstrip("/") != "/citations":
         return None
-    user = parse_qs(p.query).get("user", [""])[0]
+    q = parse_qs(p.query)
+    if q.get("view_op", [""])[0] not in ("", "list_works"):
+        return None  # a single paper on the profile, which is a subscription to the papers citing it
+    user = q.get("user", [""])[0]
     return user if re.fullmatch(r"[\w-]+", user) else None
 
 

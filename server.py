@@ -31,6 +31,7 @@ from urllib.parse import parse_qs, urljoin, urlparse
 
 import feeds
 import caldav
+import citations
 import icalendar_parser
 import jellyfin
 import nrk
@@ -95,6 +96,8 @@ TEMPLATES = {
 # A series on NRK TV is its address, such as https://tv.nrk.no/serie/skam.
 # An author on arXiv is their author page (https://arxiv.org/a/lecun_y_1) or an author search on arXiv,
 # and an author on Google Scholar is their profile (https://scholar.google.com/citations?user=…).
+# The papers citing a paper are its address on arXiv (https://arxiv.org/abs/1706.03762) or on Google
+# Scholar: a paper on a profile, its "Cited by" list (…/scholar?cites=…) or its versions (…/scholar?cluster=…).
 #
 # https://www.youtube.com/@veritasium science video
 # https://www.reddit.com/r/python programming
@@ -386,7 +389,7 @@ def merge_posts(old: list[dict], new: list[dict], now: float) -> list[dict]:
 
 # Where a subscription's posts come from, saved as its "source" once found. Subscriptions saved before
 # sources were recorded get theirs from what was saved about them (see known_source).
-SOURCES = ("nrk", "scholar", "jellyfin", "caldav", "feed", "page")
+SOURCES = ("nrk", "citations", "scholar", "jellyfin", "caldav", "feed", "page")
 
 
 def known_source(url: str, old: dict) -> str | None:
@@ -395,6 +398,8 @@ def known_source(url: str, old: dict) -> str | None:
         return old["source"]
     if nrk.series_id(url):
         return "nrk"
+    if citations.is_paper(url):
+        return "citations"
     if scholar.user_id(url):
         return "scholar"
     if any(p.get("jellyfin") for p in old.get("items", [])):
@@ -430,6 +435,13 @@ def jellyfin_login(url: str) -> dict:
     return login
 
 
+def known_paper_titles() -> dict[str, str]:
+    """url -> title of the posts from Google Scholar profiles, so a paper on one needn't be read again."""
+    with lock:
+        return {p["url"]: p["title"] for s in subscriptions.values() if s.get("source") == "scholar"
+                for p in s.get("items", [])}
+
+
 def fetch_source(source: str, url: str, old: dict, force: bool) -> tuple[str, dict | None]:
     """(source, posts) from a known source; posts are None when a feed is unchanged since last time."""
     known = {p["url"] for p in old.get("items", [])}
@@ -439,6 +451,10 @@ def fetch_source(source: str, url: str, old: dict, force: bool) -> tuple[str, di
         if not force and time.time() - old.get("scholar_checked", 0) < scholar.CHECK_INTERVAL:
             return source, None  # Google Scholar turns away clients that ask often
         return source, scholar.fetch(url, {p["url"]: p.get("published") for p in old.get("items", [])})
+    if source == "citations":
+        if not force and time.time() - old.get("citations_checked", 0) < citations.CHECK_INTERVAL:
+            return source, None  # citing papers come slowly, and OpenAlex has a small free daily budget
+        return source, citations.fetch(url, old.get("cited"), None if old.get("cited") else known_paper_titles())
     if source == "jellyfin":
         return source, jellyfin.fetch(url, jellyfin_login(url))
     if source == "page":
@@ -455,6 +471,8 @@ def detect_source(url: str) -> tuple[str, dict]:
     """(source, posts) for a new subscription, trying each kind of source in turn."""
     if nrk.series_id(url):
         return "nrk", nrk.fetch(url)
+    if citations.is_paper(url):
+        return "citations", citations.fetch(url, None, known_paper_titles())
     if scholar.user_id(url):
         return "scholar", scholar.fetch(url)
     logins, problem = jellyfin.read_logins(JELLYFIN_FILE)
@@ -972,6 +990,23 @@ def stop_state(events: list[dict], now: float, terms: dict, stop_at: float | Non
             "ongoing_event": details(ongoing)}
 
 
+ARXIV_AUTHOR_TITLE = re.compile(r"^(.+?)(?:'s articles)? on arXiv$")
+
+
+def paper_reason(s: dict, sub_url: str) -> dict | None:
+    """Why a subscription's papers are in the feed: {"kind": "author", "name": <author>} for an author on
+    arXiv or Google Scholar, {"kind": "cites", "name": <cited paper's title>} for the papers citing one."""
+    source, title, feed_url = s.get("source"), s.get("title") or sub_url, s.get("feed_url") or ""
+    if source == "citations" and s.get("cited"):
+        return {"kind": "cites", "name": s["cited"]["title"], "sub": sub_url}
+    if source == "scholar":
+        return {"kind": "author", "name": title, "sub": sub_url}
+    if source == "feed" and (feed_url.startswith("https://arxiv.org/a/") or feed_url.startswith(feeds.ARXIV_API)):
+        m = ARXIV_AUTHOR_TITLE.match(title)  # "Yann LeCun's articles on arXiv", "LeCun, Yann on arXiv"
+        return {"kind": "author", "name": m.group(1) if m else title, "sub": sub_url}
+    return None
+
+
 def build_items(entries: dict[str, list[str]], subs: dict[str, list[str]], now: float) -> tuple[list[dict], list[str]]:
     """The links and subscriptions' posts as feed items (see ranking.py for their fields), each url once,
     and the links seen for the first time. Call with lock held."""
@@ -985,6 +1020,15 @@ def build_items(entries: dict[str, list[str]], subs: dict[str, list[str]], now: 
     seen = set(entries)
     next_after, series_first = series_state(subs)
     sub_opened = last_opened(subs)
+    # A paper can be in several subscriptions, such as by an author you follow and citing a paper you follow;
+    # its card says each reason, though it is one post, in the first subscription that has it.
+    reasons = {}
+    for sub_url in subs:
+        s = subscriptions.get(sub_url, {})
+        if reason := paper_reason(s, sub_url):
+            for post in s.get("items", []):
+                if reason not in reasons.setdefault(post["url"], []):
+                    reasons[post["url"]].append(reason)
     for sub_url, tags in subs.items():
         s = subscriptions.get(sub_url, {})
         playlists_by_video = {}
@@ -1003,7 +1047,7 @@ def build_items(entries: dict[str, list[str]], subs: dict[str, list[str]], now: 
                 "domain": domain(post["url"]),
                 "added": post["first_seen"], "date": post_date(post), "position": -1,
                 "sub_last_viewed": sub_opened.get(sub_url), "sub": sub_url,
-                "series_ids": in_series.get(post["url"], []),
+                "series_ids": in_series.get(post["url"], []), "via": reasons.get(post["url"], []),
             })
     for item in items:
         item.update(view_state(item["url"]), next_after=next_after.get(item["url"]),
@@ -1100,7 +1144,8 @@ def pending_count() -> int:
 
 
 def matches_search(post: dict, search: str) -> bool:
-    text = " ".join(str(post.get(k) or "") for k in ("title", "description", "url", "feed", "site", "tags")).casefold()
+    text = " ".join([*(str(post.get(k) or "") for k in ("title", "description", "url", "feed", "site", "tags")),
+                     *(reason["name"] for reason in post.get("via") or [])]).casefold()
     return all(word in text for word in search.casefold().split())
 
 
