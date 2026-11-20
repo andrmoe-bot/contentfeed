@@ -200,14 +200,12 @@ function panelSay(text, isError = false) {
   status.className = isError ? "error" : "";
 }
 
-// A setting moved: reorder the feed with it right away. Cards you opened or colored normally keep
-// their place until you reload, but while you change the settings everything takes its new place.
+// A setting moved: show the feed in its new order right away, from the top.
 function change(key, value) {
   draft = { ...draft, [key]: value };
   showFormula();
   panelSay("");
-  stay.clear();
-  load();
+  load({ reorder: true });
 }
 
 // Saves run one after another, so the last change wins even when two start together, such as a
@@ -260,9 +258,8 @@ document.getElementById("reset").addEventListener("click", async () => {
   if (sameTerms(draft, defaults)) return panelSay("These are the defaults.");
   draft = { ...defaults };
   showSettings(draft);
-  stay.clear();
   await save();
-  load();
+  load({ reorder: true });
 });
 
 // The panel stays open or closed across reloads, in this browser.

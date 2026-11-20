@@ -131,7 +131,7 @@ put the login in `caldav.json` in the data directory and keep credentials out of
 to a parent collection URL applies to calendars beneath that path. Use a dedicated account with
 read-only access if the server supports it; ContentFeed only sends calendar-reading requests.
 
-CalDAV calendars (such as Radicale's) stay in step with the feed: every time the page updates, the
+CalDAV calendars (such as Radicale's) stay in step with the feed: every time the page checks for changes, the
 server asks the calendar for its version, a small request that changes whenever anything in the
 calendar does, and reads the calendar again only if it has changed. So a change in your calendar
 reaches the feed within seconds. If the calendar server doesn't answer within 2 seconds, the feed
@@ -322,14 +322,19 @@ Opening an item (clicking its link, middle-clicking it, or playing its video) re
 last viewed it. Scrolling past doesn't count. Nothing is hidden: an item you've opened scores lower (see Ranking). The card says when you
 viewed it.
 
-Cards you open or tag stay where they are until you reload the page, so nothing moves away
-while you're looking at it. Playing a video stops the one playing in another card.
+The feed's order changes only when you load the page, change a setting or the stop timer, or
+search, and then the page shows the top of the feed; "Show more" adds the next posts below the ones
+shown. Otherwise nothing moves while you're watching: the page checks the server in the background
+and updates each card's score, tag and viewed time (and the status line and stop state) in place.
+New posts and new scores take effect in the order the next time you reload. Playing a video stops
+the one playing in another card.
 
 ## Stop watching
 
 Set a stop time with the "Stop watching at" box at the top of the feed (a time earlier today counts
 as tomorrow). While it's ahead, the feed leaves out any post whose estimated length would run past
-it, so every post shown can be finished before the stop time. Posts without an estimated length
+it, so every post shown can be finished before the stop time. Like the rest of the order, this is
+worked out when the feed is shown: posts don't disappear as time passes. Posts without an estimated length
 stay, and tasks are never left out. The status line shows the stop time and how long is
 left. The timer is kept in `stop.json` in the data directory, so every device on the network shares
 it. When the time runs out, the page switches to stop mode: the feed is hidden behind a notice —
@@ -359,8 +364,7 @@ the feed filters by. So with dinner at 19:00 and the default lead, the feed show
 can finish by 18:30. Events themselves never appear as feed cards; the notice above the stopped
 feed names the event. Ended events don't stop watching anymore.
 
-When the stop time runs out — the timer, or an event's lead time — the stay behavior is
-overridden on the page (opened cards no longer keep their place), any video or other media playing
+When the stop time runs out — the timer, or an event's lead time — any video or other media playing
 is force-stopped, and the page sounds a short audio alert once per stop, next to the notice.
 
 ## Tags
@@ -494,7 +498,7 @@ Content length similarity and Title similarity (relative weights), and Update in
 sliders go in steps of 1, 1.5, 2, 3, 5 and 7 times a power of ten, so they cover both small and large
 numbers. Age defaults to 0 points per year since publication (or addition for links), counting fractional
 365-day years and updated in whole hours; negative values favor newer items and positive values favor older items. Future dates
-count as age 0. The feed reorders as
+count as age 0. The feed reorders, showing its top, as
 you move a slider, and the setting is saved when you let go (or when you press Enter in the box).
 Settings that are 0 when the page loads are hidden, along with their part of the formula, to keep the
 panel short; add one back with "Add a term" below the others. Similar's hours come and go with Similar. The publish window and component weights stay visible

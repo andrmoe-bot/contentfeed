@@ -10,14 +10,11 @@ let searchTimer;
 function searchChanged() {
   clearTimeout(searchTimer);
   limit = PAGE;
-  stay.clear();
-  shown = [];
-  feedTag = null;
   const url = new URL(location.href);
   if (searchEl.value.trim()) url.searchParams.set("q", searchEl.value.trim());
   else url.searchParams.delete("q");
   history.replaceState(null, "", url);
-  load();
+  load({ reorder: true });
 }
 searchEl.addEventListener("input", () => { clearTimeout(searchTimer); searchTimer = setTimeout(searchChanged, 250); });
 document.getElementById("search-form").addEventListener("submit", (e) => { e.preventDefault(); searchChanged(); });
@@ -30,12 +27,11 @@ const PAGE = 300;  // items per "Show more"
 let limit = PAGE;
 let pollTimer;
 const cards = new Map();  // section + URL -> cached card; one post can appear in several feeds
-// Cards you opened or colored on this page stay where they are until you reload it, even though
-// their score has changed, so nothing moves away under you.
-const stay = new Set();
+// The feed's order changes only when you load the page, change a setting or the stop timer, or search;
+// "Show more" adds the next posts below. The page still checks the server in the background, for
+// the stop time and each card's score, tag and viewed time, but nothing moves away while you watch.
 let shown = [];  // items as last shown
 let playingCard = null;
-// The playing card stays in place while its surrounding feed updates.
 
 // Fields that change when you open or color an item, or when its subscription gets a new post. They're
 // updated in place, not by rebuilding the card, so a video you just started keeps playing.
@@ -48,13 +44,12 @@ async function post(path, body) {
 }
 
 // A card keeps the item it was built with, which can be older than the one shown now. Changes go to
-// the one shown, which the card keeps showing while it stays in place below what the server sends.
+// the one shown.
 const latest = (item) => shown.find((it) => it.url === item.url) || item;
 
 // Opening an item (its link, or playing its video) records it as viewed.
 async function opened(item) {
   item = latest(item);
-  stay.add(item.url);
   item.last_viewed = Date.now() / 1000;
   for (const c of cards.values()) if (c.url === item.url) showViewState(c.el, item);
   await post("/api/viewed", { url: item.url }).catch(() => {});
@@ -85,7 +80,6 @@ function relabelDots() {
 async function setColor(item, color) {
   item = latest(item);
   item.color = item.color === color ? null : color;
-  stay.add(item.url);
   for (const c of cards.values()) if (c.url === item.url) showViewState(c.el, item);  // show the new tag right away
   await post("/api/color", { url: item.url, color: item.color || "none" }).catch(() => {});
   load();
@@ -257,23 +251,11 @@ function showViewState(art, item) {
   old.replaceWith(details);
 }
 
-// The server's order, except that cards in stay keep the place they had, even when their new
-// score puts them below the items the server sent, like a card you just tagged "don't show again".
-function arrange(list) {
-  const byUrl = new Map([...shown.map((it) => [it.url, it]), ...list.map((it) => [it.url, it])]);
-  const kept = shown.map((it, i) => [it.url, i]).filter(([url]) => stay.has(url));
-  const keptUrls = new Set(kept.map(([url]) => url));
-  const out = list.filter((it) => !keptUrls.has(it.url));
-  for (const [url, i] of kept) out.splice(i, 0, byUrl.get(url));
-  return out;
-}
-
 function render() {
   if (postPage) return renderPost();
   if (subscriptionPage) return renderSubscription();
-  const list = arrange(items);
-  shown = list;
-  renderList(feedEl, list, "feed");
+  shown = items;
+  renderList(feedEl, items, "feed");
   renderStopNotice();
 }
 
@@ -292,7 +274,7 @@ function renderSubscription() {
       }]
     : [
         ...(nextUp.length ? [{ id: "next-up", title: "Next up", note: "Next in each series or after what you opened", items: nextUp }] : []),
-        { id: "posts", title: nextUp.length ? "All posts" : "Posts", items: arrange(items), empty: search ? "No posts match your search." : "No posts in this subscription yet." },
+        { id: "posts", title: nextUp.length ? "All posts" : "Posts", items, empty: search ? "No posts match your search." : "No posts in this subscription yet." },
       ];
   shown = [...new Map(groups.flatMap((g) => g.items).map((it) => [it.url, it])).values()];
   const ids = new Set(groups.map((g) => g.id));
@@ -499,42 +481,50 @@ function why(item) {
 }
 
 // One request at a time: calls while one is running (such as from a slider being dragged) are
-// combined into a single request after it, with the newest settings.
+// combined into a single request after it, with the newest settings. load() on its own is a check:
+// it updates the status line, the stop state and each card's score, tag and viewed time, but keeps
+// the cards where they are. { reorder: true } shows the feed in its new order from the top, as after
+// changing a setting; { more: true } adds posts not shown yet below the ones that are.
 let loading = null;
-let loadAgain = false;
+let queued = null;
 
-function load() {
+function load(how = {}) {
   if (loading) {
-    loadAgain = true;
+    queued = { reorder: queued?.reorder || how.reorder, more: queued?.more || how.more };
     return loading;
   }
-  loading = fetchFeed().finally(() => {
+  loading = fetchFeed(how).finally(() => {
     loading = null;
-    if (loadAgain) {
-      loadAgain = false;
-      load();
+    if (queued) {
+      const next = queued;
+      queued = null;
+      load(next);
     }
   });
   return loading;
 }
 
 let enrichOnLoad = true;
-let feedTag = null;  // the ETag of the feed shown: the server answers "not modified" if it's still the same
+let shownTag = null;  // the ETag of the feed as shown: the server answers "not modified" if it's still the same
+let checkTag = null;  // the ETag of the last answer, for checks
 let lastPending = 0;
+let firstLoad = true;
 
-async function fetchFeed() {
+async function fetchFeed({ reorder = false, more = false } = {}) {
   clearTimeout(pollTimer);
+  const show = reorder || more || firstLoad;
   try {
     const params = new URLSearchParams({ limit, q: searchEl.value.trim() });
     if (postPage || subscriptionPage) params.set("url", postUrl);
     // Terms you haven't saved yet, such as while you drag a slider, are sent along to preview them.
     if (Object.keys(saved).length && !sameTerms(draft, saved)) params.set("terms", JSON.stringify(draft));
     if (enrichOnLoad) params.set("enrich", "1");
+    const tag = show ? shownTag : checkTag;
     const res = await fetch(`/api/${postPage ? "post" : subscriptionPage ? "subscription" : "feed"}?${params}`,
-      { cache: "no-store", headers: feedTag ? { "If-None-Match": feedTag } : {} });
+      { cache: "no-store", headers: tag ? { "If-None-Match": tag } : {} });
     if (res.ok || res.status === 304) enrichOnLoad = false;
     if (res.status === 304) {
-      render();  // same items, but cards kept in place may now take their place
+      if (reorder) window.scrollTo(0, 0);
       pollTimer = setTimeout(load, pollDelay(lastPending, lastStop?.stop_at));
       return;
     }
@@ -549,13 +539,24 @@ async function fetchFeed() {
       }
       throw new Error(data.error);
     }
-    feedTag = res.headers.get("ETag");
+    checkTag = res.headers.get("ETag");
     lastPending = data.pending;
     lastStop = data;
     forceStop(data);
-    if (postPage) showPost(data);
-    else if (subscriptionPage) showSubscription(data);
-    else showFeed(data);
+    if (show) {
+      shownTag = checkTag;
+      firstLoad = false;
+      if (postPage) showPost(data);
+      else if (subscriptionPage) showSubscription(data, more ? "more" : "all");
+      else showFeed(data, more);
+      if (reorder) window.scrollTo(0, 0);
+    } else {
+      refreshCards(postPage ? [data.item, ...data.series.flatMap((g) => g.items), ...data.similar.items]
+        : [...data.items, ...(data.next_up || [])]);
+      if (postPage) showStatus(data, "");
+      else if (subscriptionPage) showSubscription(data, "none");
+      else showRanked(data);
+    }
     pollTimer = setTimeout(load, pollDelay(data.pending, data.stop_at));
   } catch (error) {
     statusEl.textContent = error.message || "Server unreachable";
@@ -563,6 +564,23 @@ async function fetchFeed() {
     if (subscriptionPage && !subData) feedEl.replaceChildren(el("p", { role: "status", id: "post-loading" }, error.message || "Couldn't load this subscription."));
     pollTimer = setTimeout(load, 5000);
   }
+}
+
+// A check's answer: the cards shown take the newest score, tag and viewed time of their item, in
+// place. Cards the answer leaves out (such as posts past the stop time) keep what they had.
+function refreshCards(fresh) {
+  const byUrl = new Map(fresh.map((it) => [it.url, it]));
+  for (const item of shown) {
+    const now = byUrl.get(item.url);
+    if (now) for (const k of VIEW_FIELDS) item[k] = now[k];
+  }
+  for (const c of cards.values()) showViewState(c.el, latest(c.item));
+}
+
+// Posts not shown yet, added below the ones that are, for "Show more".
+function appendNew(list, fresh) {
+  const urls = new Set(list.map((it) => it.url));
+  return [...list, ...fresh.filter((it) => !urls.has(it.url))];
 }
 
 // The status line: calendars that didn't answer, the stop time, if any, then text, then how many
@@ -583,8 +601,8 @@ function showRanked(data) {
   rankerNote(data.ranker);
 }
 
-function showFeed(data) {
-  items = data.items;
+function showFeed(data, more = false) {
+  items = more ? appendNew(items, data.items) : data.items;
   render();
   if (!items.length) feedEl.replaceChildren(el("p", {}, searchEl.value.trim() ? "No posts match your search." : data.stopped ? "Stopped: the stop time has passed." : data.stop_at ? "Everything left would run past the stop time." : "No posts in your feed yet."));
   showRanked(data);
@@ -602,8 +620,10 @@ function showPost(data) {
   more.textContent = "Show more related posts";
 }
 
-function showSubscription(data) {
-  subData = data;
+// posts is "all" to show the subscription's posts in their new order, "more" to add the ones not
+// shown yet, or "none" to keep the posts shown and only update the header.
+function showSubscription(data, posts = "all") {
+  subData = posts === "none" ? { ...data, next_up: subData?.next_up || [] } : data;
   const sub = data.subscription;
   if (sub) {
     document.getElementById("subscription-title").textContent = sub.title;
@@ -627,14 +647,14 @@ function showSubscription(data) {
       return itemEl;
     }));
   }
-  items = data.items;
+  if (posts !== "none") items = posts === "more" ? appendNew(items, data.items) : data.items;
   showSubView();
 }
 
 document.getElementById("more").addEventListener("click", (e) => {
   limit += PAGE;
   e.target.disabled = true;
-  load().finally(() => { e.target.disabled = false; });
+  load({ more: true }).finally(() => { e.target.disabled = false; });
 });
 
 document.getElementById("add").addEventListener("submit", async (e) => {
