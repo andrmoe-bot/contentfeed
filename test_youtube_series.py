@@ -35,12 +35,10 @@ class PlaylistTests(unittest.TestCase):
                  (("a", "Part 1"), ("b", "Unrelated title"), ("c", "Part 2"))]
         subscription = {"items": posts, "youtube_playlists": [{"id": "PL", "videos": ["b", "a"]}]}
         with patch.object(server, "subscriptions", {"channel": subscription}), \
-             patch.object(server, "opened_at", return_value=None), \
-             patch.object(server, "seen_at", return_value=None):
+             patch.object(server, "viewed", {}):
             nxt, unstarted = server.series_state({"channel": []})
             self.assertEqual(unstarted, {"a": "Unrelated title"})
-            with patch.object(server, "opened_at", side_effect=lambda url: 10 if url == "b" else None), \
-                 patch.object(server, "view_state", return_value={"skipped": False}):
+            with patch.object(server, "viewed", {"b": 10}):
                 nxt, _ = server.series_state({"channel": []})
                 self.assertEqual(nxt, {"a": "Unrelated title"})
 
@@ -53,12 +51,12 @@ class PlaylistTests(unittest.TestCase):
 
 
 class SeriesStateTests(unittest.TestCase):
-    def state(self, playlists, *, viewed=None, skipped=None, ids=('a', 'b', 'c', 'd')):
+    def state(self, playlists, *, viewed=None, colors=None, ids=('a', 'b', 'c', 'd')):
         posts = [{"url": v, "youtube": v, "title": v} for v in ids]
         with patch.object(server, 'subscriptions', {'channel': {
                 'items': posts, 'youtube_playlists': [dict(id=str(i), videos=p) for i, p in enumerate(playlists)]}}), \
              patch.object(server, 'viewed', viewed or {}), \
-             patch.object(server, 'skipped', skipped or {}), patch.object(server, 'colors', {}):
+             patch.object(server, 'colors', colors or {}):
             return server.series_state({'channel': []})
 
     def test_overlapping_playlists_offer_both_successors(self):
@@ -70,11 +68,10 @@ class SeriesStateTests(unittest.TestCase):
             self.assertEqual(nxt, {'b': 'a'})
             self.assertNotIn('b', held)
 
-    def test_skips_release_penalty_without_creating_next_up(self):
-        self.assertEqual(self.state([['a', 'b', 'c']], skipped={'a': 1}), ({}, {}))
-
-    def test_skipped_successor_is_not_next_up(self):
-        self.assertEqual(self.state([['a', 'b', 'c']], viewed={'a': 1}, skipped={'b': 2})[0], {})
+    def test_tags_do_not_count_as_opening(self):
+        tags = {'a': 'white', 'b': 'red', 'c': 'green'}
+        self.assertEqual(self.state([['a', 'b', 'c']], colors=tags), self.state([['a', 'b', 'c']]))
+        self.assertEqual(self.state([['a', 'b', 'c']], viewed={'a': 1}, colors=tags)[0], {'b': 'a'})
 
     def test_last_episode_has_no_successor(self):
         self.assertEqual(self.state([['a', 'b']], viewed={'b': 2})[0], {})
@@ -94,7 +91,7 @@ class SeriesStateTests(unittest.TestCase):
     def test_non_youtube_title_detection_still_works(self):
         posts = [{'url': v, 'title': 'Part ' + str(i)} for i, v in enumerate(('a', 'b'), 1)]
         with patch.object(server, 'subscriptions', {'feed': {'items': posts}}), \
-             patch.object(server, 'viewed', {}), patch.object(server, 'skipped', {}):
+             patch.object(server, 'viewed', {}):
             self.assertEqual(server.series_state({'feed': []})[1], {'b': 'Part 1'})
 
 

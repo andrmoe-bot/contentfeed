@@ -14,17 +14,16 @@ Each item has its page metadata (url, title, description, domain, ...) plus thes
     tags         words written after the URL on its line in links.txt or feeds.txt, lowercased
     feed         the subscription's title (posts only)
     position     index in links.txt (0 = first line); -1 for posts
-    last_viewed  unix time you last opened or skipped it (the white dot), or None
-    skipped      True if the last of those was a skip
-    color        "green", "white" (the default) or "red", as you marked it on the page
-    next_after   for a post: the title of the post you opened (not skipped) most recently in its subscription,
+    last_viewed  unix time you last opened it, or None. Tags don't count as opening it.
+    color        the tag you gave it on the page, or None: "green" (show again soon), "white" (maybe
+                 later) or "red" (don't show again). Each only adds its configured points (see TAGS).
+    next_after   for a post: the title of the post you opened most recently in its subscription,
                  if this post comes right after that one ("what's next"): the next part of its series
                  (see series.py) or else the next published; otherwise None
     series_first for a later part of a series of which you haven't opened anything before it: the
                  first part's title; otherwise None. Both are None for subscriptions tagged "latest".
     sub          for a post: its subscription's address; None for links
-    sub_last_viewed  for a post: unix time you last opened or skipped any post in its subscription,
-                 or None if you've done neither
+    sub_last_viewed  for a post: unix time you last opened any post in its subscription, or None
     series_ids   for a post: the ids of the series it's part of within its subscription (see series.py),
                  empty if none
 
@@ -32,7 +31,7 @@ rank() adds one more, "similar": the item you opened recently that this one is m
 "total" and "matches", the summed strength and count of every recent match (see similarity), or
 None. The similar_penalty is based on the sum, not on the strongest match alone.
 
-Nothing is hidden: items you've opened or marked red are scored differently, not removed. The one
+Nothing is hidden: items you've opened or tagged are scored differently, not removed. The one
 exception is the stop-watching timer: while a stop time is in effect (see effective_stop), items whose
 estimated length would run past it are left out of the feed, so each post shown can be finished first.
 The post you're viewing (the one you opened most recently) is exempt, so it doesn't disappear as time
@@ -70,7 +69,7 @@ DEFAULT = "score"
 # values in settings.json. Not every term is a weight: bonuses are flat points, and windows, counts and the event lead time are durations.
 DEFAULT_TERMS = {
     "next_up_bonus": 30,  # the post after the one you opened most recently in a subscription
-    "seen_bonus": -30,  # items you've opened or skipped; below 0 puts them under unopened ones
+    "seen_bonus": -30,  # items you've opened; below 0 puts them under unopened ones
     "new_sub_bonus": 0,  # for posts from a subscription you've never opened anything from
     "similar_penalty": -40,  # added per 100% combined similarity to what you opened recently (see similarity):
     "similar_hours": 24,  # penalty fades linearly to zero this many hours after opening
@@ -86,7 +85,9 @@ DEFAULT_TERMS = {
     "task_deadline_bonus": 200,  # maximum points for a task due now
     "task_bonus": 0,  # fixed points added to every task
     "task_priority_bonus": 0,  # points for a priority-1 task, scaled down to 1/9 of them at priority 9
-    "green_bonus_points": 0,
+    "green_points": 10,  # the tags on each card (see TAGS)
+    "white_points": -50,
+    "red_points": -1000,
     "youtube_shorts_bonus": 0,
     "video_bonus": 0,  # for each media type (see media_type); below 0 is a penalty
     "image_bonus": 0,
@@ -100,12 +101,14 @@ TERMS = dict(DEFAULT_TERMS)
 # Every scoring coefficient is signed; windows, similarity parameters and counts are not.
 SIGNED = {
     "next_up_bonus", "seen_bonus", "new_sub_bonus", "series_penalty", "similar_penalty",
-    "above_similarity_penalty", "green_bonus_points", "video_bonus", "image_bonus",
+    "above_similarity_penalty", "green_points", "white_points", "red_points", "video_bonus", "image_bonus",
     "article_bonus", "youtube_shorts_bonus", "length_per_minute", "age_per_year",
     "task_deadline_bonus", "task_bonus", "task_priority_bonus",
 }
 LIMIT = 10_000_000
-RED = 10_000_000  # red items sink below everything else
+# The tags you can give an item with the dots on its card, and their names. None of them counts as
+# opening the item; each only adds its term's points, "<color>_points".
+TAGS = {"green": "show again soon", "white": "maybe later", "red": "don't show again"}
 # Each term's allowed values, which the score panel also gets, to check what you type.
 TERM_LIMITS = {key: {"min": -LIMIT if key in SIGNED else 0,
                      "max": 100 if key in ("similar_base_percent", "similar_series_percent", "enrich_count") else LIMIT,
@@ -546,7 +549,7 @@ def similar_to_recent(items: list[dict], now: float, terms: dict, title_words: d
                 if not best or strength > best["strength"] or (strength == best["strength"] and itself):
                     # Delay explanation strings until the strongest match is known.
                     best = {"title": other["title"], "hours": hours, "percent": percent, "strength": strength,
-                            "skipped": other.get("skipped", False), "other": other, "minutes": second}
+                            "other": other, "minutes": second}
         if best:
             other, second = best.pop("other"), best.pop("minutes")
             best["url"] = other["url"]
@@ -624,8 +627,7 @@ def _similarity_reasons(item: dict, terms: dict) -> Reasons:
     like = item.get("similar")
     if not like or not terms["similar_penalty"]:
         return []
-    verb = "skipped" if like.get("skipped") else "opened"
-    when = f"{verb} {hours_label(like['hours'])} ago" if like["hours"] else f"{verb} in the last hour"
+    when = f"opened {hours_label(like['hours'])} ago" if like["hours"] else "opened in the last hour"
     if like["why"] == "itself":
         label = f"100% like itself, {when}"
     else:
@@ -638,7 +640,7 @@ def _similarity_reasons(item: dict, terms: dict) -> Reasons:
 
 def _task_score(item: dict, now: float, terms: dict) -> Reasons:
     """Score calendar tasks under their own rules: deadline urgency, priority, similarity to recently
-    opened tasks, the fixed task term and red. (Events aren't feed items; see effective_stop.)"""
+    opened tasks, the fixed task term and its tag. (Events aren't feed items; see effective_stop.)"""
     due = item.get("deadline")
     reasons = []
     if due is not None:
@@ -654,15 +656,21 @@ def _task_score(item: dict, now: float, terms: dict) -> Reasons:
     reasons.extend(_similarity_reasons(item, terms))
     if terms["task_bonus"]:
         reasons.append(("task", terms["task_bonus"]))
-    if item["color"] == "red":
-        reasons.append(("red", -RED))
-    return reasons
+    return reasons + _tag_reasons(item, terms)
+
+
+def _tag_reasons(item: dict, terms: dict) -> Reasons:
+    """The points for the item's tag, if it has one."""
+    tag = item.get("color")
+    if tag in TAGS and terms[f"{tag}_points"]:
+        return [(f"tagged “{TAGS[tag]}”", terms[f"{tag}_points"])]
+    return []
 
 
 @ranker("score", spread=True)
 def score(item: dict, now: float, terms: dict) -> Reasons:
     """Points for next up, opened before, a new subscription, a later part of a series, being like
-    something opened recently, its media type, and green. rank() then penalizes similarity to posts above it."""
+    something opened recently, its media type, and its tag. rank() then penalizes similarity to posts above it."""
     w = terms
     reasons = []
     if item.get("calendar_kind"):
@@ -671,8 +679,7 @@ def score(item: dict, now: float, terms: dict) -> Reasons:
         reasons.append((f"next up after “{short(item['next_after'])}”", w["next_up_bonus"]))
     if item["last_viewed"] is not None and w["seen_bonus"]:
         away = hours_since(now, item["last_viewed"])
-        verb = "skipped" if item.get("skipped") else "opened"
-        reasons.append((f"{verb} {hours_label(away)} ago" if away else f"{verb} in the last hour", w["seen_bonus"]))
+        reasons.append((f"opened {hours_label(away)} ago" if away else "opened in the last hour", w["seen_bonus"]))
     if item["kind"] == "subscription" and item.get("sub_last_viewed") is None and w["new_sub_bonus"]:
         reasons.append((f"nothing opened from “{short(item['feed'])}” yet", w["new_sub_bonus"]))
     if item.get("series_first") and w["series_penalty"]:
@@ -693,11 +700,7 @@ def score(item: dict, now: float, terms: dict) -> Reasons:
     if w["age_per_year"]:
         hours = hours_since(now, item["date"])
         reasons.append((f"age {hours_label(hours)}", points(hours / (24 * 365) * w["age_per_year"])))
-    if item["color"] == "green" and w["green_bonus_points"]:
-        reasons.append(("green", w["green_bonus_points"]))
-    elif item["color"] == "red":
-        reasons.append(("red", -RED))
-    return reasons
+    return reasons + _tag_reasons(item, w)
 
 
 def order(item: dict) -> tuple:

@@ -39,7 +39,7 @@ let playingCard = null;
 
 // Fields that change when you open or color an item, or when its subscription gets a new post. They're
 // updated in place, not by rebuilding the card, so a video you just started keeps playing.
-const VIEW_FIELDS = ["color", "last_viewed", "skipped", "next_after", "series_first", "similar", "sub_last_viewed",
+const VIEW_FIELDS = ["color", "last_viewed", "next_after", "series_first", "similar", "sub_last_viewed",
   "score", "reasons", "score_terms", "recent_match", "recent_matches", "above_matches"];
 const contentKey = (item) => JSON.stringify(item, (k, v) => (VIEW_FIELDS.includes(k) ? undefined : v));
 
@@ -56,37 +56,46 @@ async function opened(item) {
   item = latest(item);
   stay.add(item.url);
   item.last_viewed = Date.now() / 1000;
-  item.skipped = false;
   for (const c of cards.values()) if (c.url === item.url) showViewState(c.el, item);
   await post("/api/viewed", { url: item.url }).catch(() => {});
   load();
 }
 
-// Colors don't have proper names yet. Green items rank higher, white is the default, and red
-// items sink to the bottom. The card's score details show the exact points.
-const COLORS = ["green", "white", "red"];
-const COLOR_TITLES = {
-  green: "Green: ranked higher",
-  white: "White (default): skip, like viewing it but without making what comes after it next up",
-  red: "Red: ranked at the bottom",
-};
+// The tags on each card's dots. None of them counts as opening the item: each only adds the points
+// set for it in the score panel. Clicking the dot of the item's tag again removes the tag.
+const TAGS = { green: "Show again soon", white: "Maybe later", red: "Don't show again" };
+// Each dot shows its points, such as "+10", and names its tag, from the points in the score panel.
+function tagPoints(color) {
+  const n = draft[`${color}_points`];
+  return n === undefined ? "" : `${n > 0 ? "+" : n < 0 ? "−" : ""}${fmt(Math.abs(n))}`;
+}
 
-// White also skips the item: it scores as if you'd viewed it, but neither it nor what comes after it is next up.
+function labelDot(dot) {
+  const color = dot.dataset.tag, label = `${TAGS[color]}: ${tagPoints(color) || "?"} points`;
+  dot.title = dot.getAttribute("aria-pressed") === "true" ? `${label}. Click again to remove the tag.` : label;
+  dot.setAttribute("aria-label", label);
+  dot.querySelector(".dot-points").textContent = tagPoints(color);
+}
+
+// The score panel calls this when the points change.
+function relabelDots() {
+  for (const dot of document.querySelectorAll(".dot")) labelDot(dot);
+}
+
 async function setColor(item, color) {
   item = latest(item);
-  const skip = color === "white";
-  if (item.color === color && !skip) return;
-  item.color = color;
+  item.color = item.color === color ? null : color;
   stay.add(item.url);
-  if (skip) Object.assign(item, { last_viewed: Date.now() / 1000, skipped: true });
-  for (const c of cards.values()) if (c.url === item.url) showViewState(c.el, item);  // show the new color right away
-  await post("/api/color", { url: item.url, color }).catch(() => {});  // white also skips it
+  for (const c of cards.values()) if (c.url === item.url) showViewState(c.el, item);  // show the new tag right away
+  await post("/api/color", { url: item.url, color: item.color || "none" }).catch(() => {});
   load();
 }
 
 function colorDots(item) {
-  return el("span", { class: "dots", role: "group", "aria-label": "Color" }, ...COLORS.map((color) => {
-    const dot = el("button", { type: "button", class: `dot ${color}`, title: COLOR_TITLES[color], "aria-label": color, "aria-pressed": String(item.color === color) });
+  return el("span", { class: "dots", role: "group", "aria-label": "Tag" }, ...Object.keys(TAGS).map((color) => {
+    const dot = el("button", { type: "button", class: `dot ${color}`, "data-tag": color, "aria-pressed": String(item.color === color) },
+      el("span", { class: "dot-points", "aria-hidden": "true" }));
+    labelDot(dot);
     dot.addEventListener("click", () => setColor(item, color));
     return dot;
   }));
@@ -226,7 +235,7 @@ function card(item) {
 
 // The score, color and last-viewed line change without rebuilding the card, so a playing video keeps playing.
 function showViewState(art, item) {
-  const text = item.last_viewed ? `${item.skipped ? "Skipped" : "Viewed"} ${ago(item.last_viewed)}` : "";
+  const text = item.last_viewed ? `Viewed ${ago(item.last_viewed)}` : "";
   art.querySelector(".viewed").replaceChildren(el("span", {}, text), colorDots(item));
   const old = art.querySelector(".why"), details = why(item);
   if (old.outerHTML === details.outerHTML) return;
@@ -240,7 +249,7 @@ function showViewState(art, item) {
 }
 
 // The server's order, except that cards in stay keep the place they had, even when their new
-// score puts them below the items the server sent, like a card you just made red.
+// score puts them below the items the server sent, like a card you just tagged "don't show again".
 function arrange(list) {
   const byUrl = new Map([...shown.map((it) => [it.url, it]), ...list.map((it) => [it.url, it])]);
   const kept = shown.map((it, i) => [it.url, i]).filter(([url]) => stay.has(url));
@@ -441,7 +450,7 @@ function similarityMatches(item, reason) {
     const matches = item.recent_matches;
     const n = (v) => Math.round(v * 100) / 100;
     return el("div", { class: "match-list" },
-      el("div", { class: "reason-detail" }, `${matches.length} recently ${item.similar.skipped ? "skipped" : "opened"} · ${n(item.similar.total)}% combined strength`),
+      el("div", { class: "reason-detail" }, `${matches.length} recently opened · ${n(item.similar.total)}% combined strength`),
       ...matches.slice(0, 3).map(matchBreakdown),
       matches.length > 3 ? lazyDetails({ class: "additional-matches" },
         `${matches.length - 3} more match${matches.length === 4 ? "" : "es"}`,
@@ -468,7 +477,7 @@ function scoreRows(item) {
     el("td", { class: "points" }, fmtPoints(r.points)),
     el("td", {}, el("div", { class: "reason-label" },
         r.label.startsWith("similarity to ") ? "Similar posts above"
-          : item.recent_match && r.label.includes("% like") ? `Similar to recently ${item.similar.skipped ? "skipped" : "opened"}`
+          : item.recent_match && r.label.includes("% like") ? "Similar to recently opened"
           : r.label.replace(/, [\d.]+% penalty remaining$/, "")),
       scoreDetail(item, r) ? el("div", { class: "reason-detail" }, scoreDetail(item, r)) : null,
       similarityMatches(item, r))));
@@ -596,10 +605,10 @@ function showSubscription(data) {
     const stats = [
       ["Posts", sub.posts, "all"],
       ["Next up", sub.next_up, "next-up"],
-      ["Opened", sub.opened], ["Skipped", sub.skipped], ["Unseen", sub.unseen],
-      ["Green", sub.color_counts.green], ["White", sub.color_counts.white], ["Red", sub.color_counts.red],
+      ["Opened", sub.opened], ["Unseen", sub.unseen],
+      ...Object.entries(TAGS).map(([tag, name]) => [name, sub.color_counts[tag]]),
       ["Latest post", sub.latest ? ago(sub.latest) : "None yet"],
-      ["Last viewed or skipped", sub.last_viewed ? ago(sub.last_viewed) : "Never"],
+      ["Last viewed", sub.last_viewed ? ago(sub.last_viewed) : "Never"],
       ["Last checked", sub.checking ? "Checking…" : sub.fetched ? ago(sub.fetched) : "Not yet"],
     ];
     document.getElementById("subscription-stats").replaceChildren(...stats.map(([label, value, view]) => {

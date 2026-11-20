@@ -35,7 +35,7 @@ class LiveCalendarTests(unittest.TestCase):
         root = Path(self.stack.enter_context(tempfile.TemporaryDirectory()))
         for name in server.DATA_FILES:
             self.stack.enter_context(patch.object(server, name, root / server.DATA_FILES[name]))
-        for name in ("subscriptions", "cache", "added", "viewed", "skipped", "colors", "ranked_cache", "stop",
+        for name in ("subscriptions", "cache", "added", "viewed", "colors", "ranked_cache", "stop",
                      "calendar_checks"):
             self.stack.enter_context(patch.object(server, name, {}))
         self.stack.enter_context(patch.object(server, "pending", set()))

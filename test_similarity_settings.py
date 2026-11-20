@@ -88,7 +88,7 @@ class SimilaritySettingsTests(unittest.TestCase):
             for name in ['LINKS_FILE', 'FEEDS_FILE', 'STATE_FILE']:
                 stack.enter_context(patch.object(server, name, root / name))
             server.FEEDS_FILE.write_text(sub)
-            for name in ['cache', 'added', 'viewed', 'skipped', 'colors', 'ranked_cache']:
+            for name in ['cache', 'added', 'viewed', 'colors', 'ranked_cache']:
                 stack.enter_context(patch.object(server, name, {}))
             server.viewed[posts[0]['url']] = now
             stack.enter_context(patch.object(server, 'subscriptions', {sub: {'title': 'Example', 'items': posts}}))

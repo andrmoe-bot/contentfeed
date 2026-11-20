@@ -14,7 +14,7 @@ def item(url, sub=None, age=None, date=NOW):
     return {"url": url, "title": url, "sub": sub, "date": date,
             "last_viewed": None if age is None else NOW - age * 3600,
             "tags": [], "kind": "subscription" if sub else "link",
-            "feed": sub, "position": -1, "color": "white"}
+            "feed": sub, "position": -1, "color": None}
 
 
 def brute_force(items, terms):
@@ -36,7 +36,7 @@ def brute_force(items, terms):
                     matches += 1
                     if not best or strength > best["strength"] or (strength == best["strength"] and why == "itself"):
                         best = {"title": other["title"], "url": other["url"], "hours": hours, "percent": percent,
-                                "strength": strength, "why": why, "skipped": other.get("skipped", False)}
+                                "strength": strength, "why": why}
         if best:
             best["total"] = total
             best["matches"] = matches
@@ -45,20 +45,39 @@ def brute_force(items, terms):
 
 class ViewedPenaltyTests(unittest.TestCase):
     def test_next_up_and_seen_points_apply_independently(self):
-        for skipped in (False, True):
-            for bonus in (0, 30, 50):
-                with self.subTest(skipped=skipped, bonus=bonus):
-                    post = item('episode', 'feed', age=48)
-                    post.update(next_after='previous episode', skipped=skipped)
-                    terms = dict(ranking.DEFAULT_TERMS, next_up_bonus=bonus)
-                    reasons = ranking.score(post, NOW, terms)
-                    seen = [(label, points) for label, points in reasons
-                            if label.startswith('skipped' if skipped else 'opened')]
-                    self.assertEqual(len(seen), 1)
-                    self.assertEqual(seen[0][1], -30)
-                    self.assertEqual(sum(points for _, points in reasons), bonus - 30)
-                    post['last_viewed'] = None
-                    self.assertEqual(sum(points for _, points in ranking.score(post, NOW, terms)), bonus)
+        for bonus in (0, 30, 50):
+            with self.subTest(bonus=bonus):
+                post = item('episode', 'feed', age=48)
+                post.update(next_after='previous episode')
+                terms = dict(ranking.DEFAULT_TERMS, next_up_bonus=bonus)
+                reasons = ranking.score(post, NOW, terms)
+                seen = [(label, points) for label, points in reasons if label.startswith('opened')]
+                self.assertEqual(len(seen), 1)
+                self.assertEqual(seen[0][1], -30)
+                self.assertEqual(sum(points for _, points in reasons), bonus - 30)
+                post['last_viewed'] = None
+                self.assertEqual(sum(points for _, points in ranking.score(post, NOW, terms)), bonus)
+
+
+class TagTests(unittest.TestCase):
+    def test_each_tag_only_adds_its_points(self):
+        defaults = {"green": 10, "white": -50, "red": -1000}
+        for tag, points in defaults.items():
+            for age in (None, 48):
+                with self.subTest(tag=tag, age=age):
+                    plain = item('post', 'feed', age=age)
+                    tagged = dict(plain, color=tag)
+                    reasons = ranking.score(tagged, NOW, ranking.DEFAULT_TERMS)
+                    self.assertEqual(reasons, ranking.score(plain, NOW, ranking.DEFAULT_TERMS)
+                                     + [(f"tagged “{ranking.TAGS[tag]}”", points)])
+                    terms = dict(ranking.DEFAULT_TERMS, **{f"{tag}_points": 7})
+                    self.assertEqual(ranking.score(tagged, NOW, terms)[-1][1], 7)
+                    terms[f"{tag}_points"] = 0
+                    self.assertEqual(ranking.score(tagged, NOW, terms), ranking.score(plain, NOW, terms))
+
+    def test_tasks_get_tag_points_too(self):
+        task = dict(item('task'), calendar_kind='task', color='red')
+        self.assertEqual(ranking.score(task, NOW, ranking.DEFAULT_TERMS)[-1], ("tagged “don't show again”", -1000))
 
 
 class AgeTests(unittest.TestCase):
@@ -121,7 +140,6 @@ class SimilarityTests(unittest.TestCase):
                       rng.choice([None, -1, 0, 1, 12, 23, 24, 48]),
                       NOW - rng.randrange(100) * 86400) for i in range(200)]
         for it in items:
-            it["skipped"] = rng.choice([False, True])
             it["estimated_minutes"] = rng.choice([None, 0.5, 10, 20, 120])
         cases = [(24, 30, 40, 1, 0), (24, 30, 40, 1, 1), (24, 30, 40, 0, 1),
                  (24, 30, 40, 0, 0), (1.5, 0.5, 40, 2, 3), (0, 30, 40, 1, 1),

@@ -108,7 +108,7 @@ class StopTimerServerTests(unittest.TestCase):
                      "STATE_FILE", "SETTINGS_FILE", "JELLYFIN_FILE",
                      "CALDAV_FILE", "STOP_FILE"):
             self.stack.enter_context(patch.object(server, name, root / name, create=True))
-        for name in ("subscriptions", "cache", "added", "viewed", "skipped", "colors", "ranked_cache", "stop"):
+        for name in ("subscriptions", "cache", "added", "viewed", "colors", "ranked_cache", "stop"):
             self.stack.enter_context(patch.object(server, name, {}))
         self.stack.enter_context(patch.object(server, "pending", set()))
         self.stack.enter_context(patch.object(server, "state_version", 0))
@@ -186,10 +186,10 @@ class StopTimerServerTests(unittest.TestCase):
         self.assertIn(self.long["url"], self.urls(result))
         self.assertNotIn(other_long["url"], self.urls(result))  # only the latest viewed is exempt
 
-    def test_skipped_post_is_not_kept(self):
-        """A skip is not viewing: a skipped post that no longer fits is still left out."""
+    def test_tagged_post_is_not_kept(self):
+        """A tag is not viewing: a tagged post that no longer fits is still left out."""
         server.set_stop(time.time() + 30 * 60)
-        server.skipped[self.long["url"]] = time.time()
+        server.colors[self.long["url"]] = "green"
         result = server.feed("score")
         self.assertNotIn(self.long["url"], self.urls(result))
         self.assertEqual(result["total"], 1)
