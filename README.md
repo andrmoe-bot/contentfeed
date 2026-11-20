@@ -114,7 +114,8 @@ starting with `#` are comments.
 A subscription can be an RSS or Atom feed, a CalDAV calendar collection or shared `.ics` link, or a page that has one: a YouTube channel
 (`youtube.com/@handle`, `/channel/…`) or playlist, a subreddit, a blog, a Mastodon profile and so on.
 It can also be a blog or news page without a feed (see Pages without a feed), a series on NRK TV
-(see NRK TV), an author on arXiv or Google Scholar (see Authors) or a Jellyfin server (see Jellyfin).
+(see NRK TV), an author on arXiv or Google Scholar (see Authors), the papers citing a paper (see Citations)
+or a Jellyfin server (see Jellyfin).
 Incomplete tasks appear as cards; events don't — they take place when scheduled, not whenever the
 feed happens to show them, so they work through the stop-watching timer only (see Stop watching):
 every event that hasn't ended acts as a stop time at its start minus the Event lead time setting,
@@ -289,6 +290,31 @@ To follow a researcher's papers, subscribe to one of these:
 
 arXiv papers link to their abstract page, without a version number, so a new version of a paper is
 the same post.
+
+## Citations
+
+To get the new papers that cite a paper, subscribe to the paper's link:
+
+- **On arXiv**: its abstract, PDF or HTML page, such as `https://arxiv.org/abs/1706.03762` (any version).
+- **On Google Scholar**: the paper on an author's profile (the link of a card from a profile you follow, or
+  `scholar.google.com/citations?view_op=view_citation&…`), its "Cited by" list (`scholar.google.com/scholar?cites=…`)
+  or its versions (`scholar.google.com/scholar?cluster=…`).
+
+The citing papers come from [OpenAlex](https://openalex.org), a free, open catalog of scholarly papers and what
+they cite, which needs no account: the 50 newest by publication date, leaving out papers dated in the future
+(such as a journal's next issue). An arXiv paper is found on OpenAlex by its arXiv DOI. A Google Scholar paper
+is found by its title and year, read once from Google Scholar, or not at all for a paper on a profile you follow;
+if Google asks for a CAPTCHA, the Subscriptions page shows the error and later checks try again. Once found, the
+paper is remembered and Google Scholar isn't asked again. A citation subscription is checked at most every 6 hours
+(Check now and Refresh all check it anyway). Without a key, OpenAlex gives each network address a small free
+daily budget, plenty for a few subscriptions; for many, get a free key at openalex.org and start the server
+with it in the `OPENALEX_API_KEY` environment variable.
+
+A citing paper links to its arXiv abstract when it is on arXiv, so a paper by an author you follow on arXiv
+that cites a paper you follow is one card. Cards of papers say why they are in the feed, under the source line:
+**✍ Paper by** the author, for an author on arXiv or Google Scholar, and **❝ Cites** “the cited paper”, for a
+citation subscription, with one label for each subscription the paper is in. Searching the feed finds the
+author's name and the cited paper's title too.
 
 ## Viewed items
 
