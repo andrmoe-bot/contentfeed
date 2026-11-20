@@ -96,9 +96,9 @@ class AboveSimilarityTests(unittest.TestCase):
         third = item('third', 'a', date=NOW - 60 * 86400)
         other = item('other', 'b', date=NOW - 90 * 86400)
         posts = [first, second, third, other]
-        result = ranking.rank('score', posts, NOW, self.terms(green_bonus_points=30))
+        result = ranking.rank('score', posts, NOW, self.terms(green_points=30))
         self.assertEqual([it['url'] for it in result], ['first', 'third', 'other', 'second'])
-        self.assertEqual(result, greedy_reference(posts, self.terms(green_bonus_points=30)))
+        self.assertEqual(result, greedy_reference(posts, self.terms(green_points=30)))
 
     def test_length_similarity_can_match_outside_publish_window(self):
         posts = [dict(item(str(i), 'feed', date=NOW - i * 60 * 86400), estimated_minutes=n)
@@ -171,7 +171,7 @@ class AboveSimilarityTests(unittest.TestCase):
                     it['next_after'] = 'previous'
                 posts.append(it)
             terms = self.terms(above_similarity_penalty=rng.choice([0, -0.05, -15, -100, 15]),
-                                   green_bonus_points=10, length_per_minute=-0.5,
+                                   green_points=10, length_per_minute=-0.5,
                                    similar_days=rng.choice([0, 0.5, 30]),
                                    similar_publish_weight=rng.choice([0, 1, 2]),
                                    similar_length_weight=rng.choice([0, 1, 3]))

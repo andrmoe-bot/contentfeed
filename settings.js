@@ -6,9 +6,9 @@ const SETTINGS = [
   { key: "enrich_count", label: "Update incomplete posts", before: "", after: "posts on page load",
     hint: "Fetch missing runtime or exact publication time for this many highest-ranked incomplete posts when you open the site. 0 turns this off. This does not add score points." },
   { key: "next_up_bonus", label: "Next up", before: "", after: "points",
-    hint: "Next up is the post after the one you opened most recently in a subscription: the next part of its series, or else the next published. Skipping (the white dot) doesn't make anything next up. Not for subscriptions tagged “latest”." },
+    hint: "Next up is the post after the one you opened most recently in a subscription: the next part of its series, or else the next published. Not for subscriptions tagged “latest”." },
   { key: "seen_bonus", label: "Seen", before: "", after: "points",
-    hint: "For items you've opened or skipped (the white dot). Below 0: they go under things you haven't opened." },
+    hint: "For items you've opened. Below 0: they go under things you haven't opened. Tagging an item doesn't count as opening it." },
   { key: "new_sub_bonus", label: "New subscription", before: "", after: "points",
     hint: "For posts from a subscription you've never opened anything from, such as one you just subscribed to." },
   { key: "series_penalty", label: "Series", before: "", after: "points",
@@ -36,7 +36,12 @@ const SETTINGS = [
     hint: "Weight × absolute distance from the target runtime or reading time at 200 words per minute. Negative favors content near the target; positive favors content farther away. Unknown lengths have no adjustment. Weight and target default to 0." },
   { key: "age_per_year", label: "Age", before: "", after: "points per year",
     hint: "Fractional 365-day years since publication for posts, or since addition for links, updated in whole hours. Negative favors newer items; positive favors older items. Future dates count as age 0. Default: 0." },
-  { key: "green_bonus_points", label: "Green", before: "", after: "points", hint: "For items you marked green." },
+  { key: "green_points", label: "Show again soon (green)", before: "", after: "points",
+    hint: "For items you tagged with the green dot. Only adds these points; it doesn't count as opening the item. Default: +10." },
+  { key: "white_points", label: "Maybe later (white)", before: "", after: "points",
+    hint: "For items you tagged with the white dot. Only adds these points; it doesn't count as opening the item. Default: −50." },
+  { key: "red_points", label: "Don't show again (red)", before: "", after: "points",
+    hint: "For items you tagged with the red dot. Only adds these points; it doesn't count as opening the item. Default: −1000." },
   { key: "similar_penalty", label: "Similar", before: "", after: "points at 100% alike, within",
     extra: { key: "similar_hours", type: "number", after: "hours" },
     hint: "Added to items alike to something you opened, in proportion: 50% alike adds half the configured points. Negative points penalize similarity. The adjustment fades linearly to zero over this many hours, updated in whole hours. Only the strongest remaining penalty counts. 0 points or 0 hours: off." },
@@ -175,7 +180,9 @@ function showFormula() {
     ["article_bonus", `${plus(w.article_bonus)} if article`],
     ["length_per_minute", `${plus(w.length_per_minute)} × |estimated minutes − ${fmt(w.length_target_minutes)} target minutes|`],
     ["age_per_year", `${plus(w.age_per_year)} × age in years`],
-    ["green_bonus_points", `${plus(w.green_bonus_points)} if green`],
+    ["green_points", `${plus(w.green_points)} if tagged “show again soon”`],
+    ["white_points", `${plus(w.white_points)} if tagged “maybe later”`],
+    ["red_points", `${plus(w.red_points)} if tagged “don't show again”`],
     ["above_similarity_penalty", `${plus(w.above_similarity_penalty)} × summed similarity to posts above`],
     ["task_deadline_bonus", `${plus(w.task_deadline_bonus)} × task urgency (ramps over the final 30 days)`],
     ["task_bonus", `${plus(w.task_bonus)} if task`],
@@ -183,7 +190,8 @@ function showFormula() {
   ].filter(([key]) => shownTerms.has(key)).map(([, text]) => text).join("");
   const next = shownTerms.has("next_up_bonus") ? `next up: ${fmt(w.next_up_bonus)} · ` : "";
   const opened = shownTerms.has("seen_bonus") ? `opened: ${fmt(w.seen_bonus)} · ` : "";
-  document.getElementById("formula").textContent = `${next}${opened}all:${terms || " 0"}; red at the bottom`;
+  if (typeof relabelDots === "function") relabelDots();  // the dots on the cards show these points
+  document.getElementById("formula").textContent = `${next}${opened}all:${terms || " 0"}`;
 }
 
 function panelSay(text, isError = false) {

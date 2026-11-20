@@ -21,7 +21,7 @@ class PostPageTests(unittest.TestCase):
         root = Path(stack.enter_context(tempfile.TemporaryDirectory()))
         for name in ('LINKS_FILE', 'FEEDS_FILE', 'STATE_FILE'):
             stack.enter_context(patch.object(server, name, root / name))
-        for name in ('subscriptions', 'cache', 'added', 'viewed', 'skipped', 'colors', 'ranked_cache'):
+        for name in ('subscriptions', 'cache', 'added', 'viewed', 'colors', 'ranked_cache'):
             stack.enter_context(patch.object(server, name, {}))
         stack.enter_context(patch.object(server, 'pending', set()))
         stack.enter_context(patch.object(server, 'state_version', 0))
@@ -83,19 +83,18 @@ class PostPageTests(unittest.TestCase):
 
     def test_subscription_stats_cover_all_posts_and_current_view_state(self):
         server.viewed[self.posts[0]['url']] = 200
-        server.viewed[self.posts[1]['url']] = 100
-        server.skipped[self.posts[1]['url']] = 300
         server.colors[self.posts[0]['url']] = 'green'
-        server.colors[self.posts[2]['url']] = 'red'
+        server.colors[self.posts[1]['url']] = 'white'
+        server.colors[self.posts[2]['url']] = 'white'
         stats = server.subscription_status()[0]
-        self.assertEqual((stats['opened'], stats['skipped'], stats['unseen']), (1, 1, 1))
-        self.assertEqual(stats['color_counts'], {'green': 1, 'white': 1, 'red': 1})
-        self.assertEqual(stats['last_viewed'], 300)
-        self.assertEqual(stats['next_up'], 0)
+        self.assertEqual((stats['opened'], stats['unseen']), (1, 2))
+        self.assertEqual(stats['color_counts'], {'green': 1, 'white': 2, 'red': 0})
+        self.assertEqual(stats['last_viewed'], 200)
+        self.assertNotIn('skipped', stats)
         server.viewed[self.posts[1]['url']] = 400
         stats = server.subscription_status()[0]
-        self.assertEqual((stats['opened'], stats['skipped']), (2, 0))
-        self.assertEqual(stats['next_up'], 1)
+        self.assertEqual((stats['opened'], stats['unseen']), (2, 1))
+        self.assertEqual(stats['last_viewed'], 400)
         server.subscriptions[self.sub]['items'] = []
         stats = server.subscription_status()[0]
         self.assertEqual(stats['unseen'], 0)
@@ -127,10 +126,10 @@ class PostPageTests(unittest.TestCase):
         searched = server.feed('score', 10, subscription_url=self.sub, search='Show 1')
         self.assertEqual(self.urls(searched['next_up']), [s1[1]['url']])
 
-        server.skipped[s1[1]['url']] = 200
+        server.colors[s1[1]['url']] = 'red'  # a tag only adds points; it's still next up
         server.ranked_cache.clear()
         page = server.feed('score', 300, subscription_url=self.sub)
-        self.assertEqual(self.urls(page['next_up']), [s2[0]['url']])
+        self.assertEqual(set(self.urls(page['next_up'])), {s1[1]['url'], s2[0]['url']})
 
         server.FEEDS_FILE.write_text(self.sub + ' latest')
         server.ranked_cache.clear()

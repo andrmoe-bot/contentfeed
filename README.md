@@ -55,10 +55,11 @@ how you run the feed:
 It holds:
 
 - `links.txt` and `feeds.txt`: your links and subscriptions (created with instructions on first run)
-- `state.json`: for each link or post, when it was first seen, when you last opened or skipped it
-  (the white dot), and the color you gave it. Older versions kept these in `added.json`,
-  `viewed.json`, `skipped.json` and `colors.json`; they're moved into `state.json` at startup and the
-  old files kept as `.bak`.
+- `state.json`: for each link or post, when it was first seen, when you last opened it, and the tag
+  you gave it (see Tags). Older versions kept these in `added.json`, `viewed.json`, `skipped.json`
+  and `colors.json`; they're moved into `state.json` at startup and the old files kept as `.bak`.
+  Older versions also recorded skips (the old white dot); at startup, an untagged item whose last
+  skip came after you last opened it is tagged "maybe later" instead.
 - `settings.json`: your score settings from the feed's score panel, if you changed them
 - `stop.json`: the stop-watching timer, if you set one (see Stop watching)
 - `jellyfin.json`: logins for Jellyfin servers you subscribe to (see Jellyfin), if any
@@ -163,14 +164,15 @@ with its post count, latest post, last check and any errors. Clicking a subscrip
 (`/subscription?url=...`), with its stats, a view of every "next up" post in it (or choose the Next up view),
 and all its posts. From there you can subscribe, edit
 tags, check a feed now and unsubscribe. Every change is written straight to `feeds.txt`, keeping
-your comments in it. Unsubscribing also forgets which of its posts you opened or colored (unless a post is
+your comments in it. Unsubscribing also forgets which of its posts you opened or tagged (unless a post is
 also in `links.txt` or another subscription), so subscribing again starts afresh. Removing a
 subscription by editing `feeds.txt` keeps that history.
 
-To catch up on a subscription without its back catalog, "Mark posts older than" marks every post
-published before that age red, so they sink to the bottom of the feed. Months count as 30 days and years
-as 365. Posts you made green stay green, and posts without a date are left alone. It can't be undone in
-one step: each post goes back to white from its dot in the feed.
+To catch up on a subscription without its back catalog, "Tag posts older than" tags every post
+published before that age "don't show again" (red), so they get its points (−1000 by default). Months
+count as 30 days and years as 365. Posts you've already tagged keep their tag, and posts without a
+date are left alone. It can't be undone in one step: click the red dot on a post in the feed to remove
+its tag.
 
 You can also add links and subscriptions (with tags) from the box at the top of the feed; they
 are appended to the files. To remove a link, edit `links.txt`. Changes to either file show up
@@ -294,7 +296,7 @@ Opening an item (clicking its link, middle-clicking it, or playing its video) re
 last viewed it. Scrolling past doesn't count. Nothing is hidden: an item you've opened scores lower (see Ranking). The card says when you
 viewed it.
 
-Cards you open or color stay where they are until you reload the page, so nothing moves away
+Cards you open or tag stay where they are until you reload the page, so nothing moves away
 while you're looking at it. Playing a video stops the one playing in another card.
 
 ## Stop watching
@@ -335,39 +337,40 @@ When the stop time runs out — the timer, or an event's lead time — the stay 
 overridden on the page (opened cards no longer keep their place), any video or other media playing
 is force-stopped, and the page sounds a short audio alert once per stop, next to the notice.
 
-## Colors
+## Tags
 
-Each card has three dots in its bottom corner: green, white and red. They don't have proper names
-yet; for now they change an item's score:
+Each card has three dots in its bottom corner, each showing the points it adds:
 
-- **green**: 0 by default; give it points in the score panel (see Ranking)
-- **white**: the default, no change. Clicking white also skips the item: it counts as viewed (the card
-  says "Skipped"), except that it doesn't make anything next up. Neither the item nor the post after it
-  gets the next-up bonus, so you can pass over an episode without the feed pushing the following one.
-- **red**: puts it at the bottom, below everything else
+- **green, "show again soon"**: +10 by default
+- **white, "maybe later"**: −50 by default
+- **red, "don't show again"**: −1000 by default
+
+A tag only adds its points to the item's score; change them in the score panel (see Ranking). Tagging
+an item doesn't count as opening it, so it neither gets the "seen" points nor makes the post after it
+next up. Items start untagged; click the dot of an item's tag again to remove the tag.
 
 ## Ranking
 
 Feed order comes from a ranker in `ranking.py`. Rankers never learn from how you use the
 feed; they only use what you wrote (tags, which file or subscription an item came from, the site,
-the colors you picked), the numbers in titles, dates (when a post was published, or when a link was added) and when you
+the tags you gave items), the numbers in titles, dates (when a post was published, or when a link was added) and when you
 last opened an item. A ranker returns reasons with points, such as
 `("tagged music", 2)`; the score is their sum. Click "Score" on any card to see its reasons.
 
 All scoring terms add their configured signed points; negative values subtract points. Similarity weights, time windows and counts remain nonnegative. The default, `score`, adds up these points. With the default settings:
 
-- +30 for **next up**: the post after the one you opened (not skipped) most recently in its subscription. That's
+- +30 for **next up**: the post after the one you opened most recently in its subscription. That's
   the next part of its series (see below) or, if it has none, the post published next. Jellyfin
   series go in episode order. Tag a subscription `latest` in feeds.txt to turn next up off for it,
   such as a news feed.
-- −30 for anything you've opened or skipped, including next up
+- −30 for anything you've opened, including next up
 - 0 if nothing from its subscription has been opened yet, such as one you just subscribed to
 - −30 for a later part of a series when you haven't opened anything before it (see below)
 - −40 × the **sum** over everything you opened recently of similarity × the fraction of the 24-hour window remaining since opening; each match contributes on its own, not just the strongest (see below)
 - 0 for its media type: video (YouTube, Jellyfin, NRK TV, pages with a video file), image (a link straight to a picture) or
   article (anything else). Each has its own setting, which may be negative, to favor or hold back that type.
 - 0 per **minute away from the target content length** by default. Content length adds `weight × |estimated minutes − target minutes|`. Set a negative weight to favor content near the target, or a positive weight to favor content farther away. The target defaults to 0 minutes, preserving existing scores; both the weight and target are configurable in Settings. Runtime metadata is used where available; text is estimated at 200 words per minute (at least one minute). Feed text may be only an excerpt, and page estimates can include surrounding text. Unknown lengths have no adjustment. When the site loads, the five highest-ranked posts with incomplete data are updated in the background, regardless of score weights. YouTube updates fetch runtime and exact publication time together. Change this count with “Update incomplete posts” in Settings (0–100; 0 disables it). Routine polling does not start additional batches; unavailable data stays unknown and recent attempts are skipped for six hours.
-- 0 if green; red items go to the bottom
+- +10 if tagged "show again soon" (green), −50 if "maybe later" (white), −1000 if "don't show again" (red)
 - −15 × the **sum of similarities to posts above it**. A 100% match contributes −15,
   a 50% match contributes −7.5; two 50% matches contribute −15 together. It uses the same
   publish-time, content-length and title weights as recent-view similarity, without a viewing-time fade.
@@ -459,7 +462,7 @@ Change the numbers in the score panel: click "Settings" at the top of the feed. 
 beside the feed on a wide screen, or along the bottom on a narrow one, and stays open across reloads
 until you close it. Each setting comes with a slider and a box for an exact number:
 Next up, Seen, New subscription, Series, Similar posts above, Video, Image, Article, Content length, Age, Event lead time (Seen, Video, Image, Article, Content length and Age may be
-negative), Green, Similar
+negative), Show again soon, Maybe later, Don't show again, Similar
 (which also has its number of hours), Publish time window (days), Publish time similarity and
 Content length similarity and Title similarity (relative weights), and Update incomplete posts (count). The
 sliders go in steps of 1, 1.5, 2, 3, 5 and 7 times a power of ten, so they cover both small and large

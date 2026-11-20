@@ -119,8 +119,7 @@ cache: dict[str, dict] = {}
 # What you did with each item, saved together in state.json (see save_state):
 added: dict[str, float] = {}  # url -> unix time the server first saw the link
 viewed: dict[str, float] = {}  # url -> unix time you last opened it
-skipped: dict[str, float] = {}  # url -> unix time you last skipped it (the white dot)
-colors: dict[str, str] = {}  # url -> color you gave it; items without one are white
+colors: dict[str, str] = {}  # url -> the tag you gave it (see ranking.TAGS); most items have none
 stop: dict = {}  # {"stop_at": unix time}: the stop-watching timer; empty when unset. Once passed,
 # it has fired: the feed stops showing content until the timer is cleared
 subscriptions: dict[str, dict] = {}  # feeds.txt url -> resolved feed, its posts and fetch status
@@ -232,11 +231,11 @@ def load_json(path: Path) -> dict:
 
 def save_state(*, affects_feed: bool = True):
     """Save what you did with each item to state.json, as
-    {"version": 1, "items": {url: {"added": time, "viewed": time, "skipped": time, "color": color}}},
+    {"version": 1, "items": {url: {"added": time, "viewed": time, "color": tag}}},
     each field only when it has a value."""
     with lock:
         items: dict[str, dict] = {}
-        for field, values in (("added", added), ("viewed", viewed), ("skipped", skipped), ("color", colors)):
+        for field, values in (("added", added), ("viewed", viewed), ("color", colors)):
             for url, value in values.items():
                 items.setdefault(url, {})[field] = value
     save_json(STATE_FILE, {"version": 1, "items": items}, affects_feed=affects_feed)
@@ -244,22 +243,35 @@ def save_state(*, affects_feed: bool = True):
 
 def load_state():
     """Read state.json, or the files it replaced, which are kept as .bak once it's written."""
+    skipped: dict[str, float] = {}
     maps = {"added": added, "viewed": viewed, "skipped": skipped, "color": colors}
     if STATE_FILE.exists():
         for url, fields in load_json(STATE_FILE).get("items", {}).items():
             for field, value in fields.items():
                 if field in maps:
                     maps[field][url] = value
+        if skipped:
+            tag_skipped(skipped)
+            save_state(affects_feed=False)
         return
     old = {field: STATE_FILE.parent / name for field, name in OLD_STATE_FILES.items()}
     for field, path in old.items():
         maps[field].update(load_json(path))
+    tag_skipped(skipped)
     if any(path.exists() for path in old.values()):
         save_state(affects_feed=False)
         for path in old.values():
             if path.exists():
                 path.replace(path.with_name(path.name + ".bak"))
         print(f"Moved added.json, viewed.json, skipped.json and colors.json into {STATE_FILE}.")
+
+
+def tag_skipped(skipped: dict[str, float]):
+    """Skipping (the old white dot) counted as viewing an item. Tags no longer do, so an untagged item
+    whose last skip came after you last opened it is tagged white ("maybe later") instead."""
+    for url, at in skipped.items():
+        if url not in colors and at > viewed.get(url, 0):
+            colors[url] = "white"
 
 
 def migrate_caldav_url_credentials() -> int:
@@ -592,11 +604,10 @@ def subscription_status() -> list[dict]:
                 "page": s.get("source") == "page" or bool(s.get("page")),
                 "source": s.get("source"),
                 "posts": len(s.get("items", [])),
-                "opened": sum(state["last_viewed"] is not None and not state["skipped"] for state in states),
-                "skipped": sum(state["skipped"] for state in states),
+                "opened": sum(state["last_viewed"] is not None for state in states),
                 "unseen": sum(state["last_viewed"] is None for state in states),
                 "next_up": next_up_count,
-                "color_counts": {color: sum(state["color"] == color for state in states) for color in COLORS},
+                "color_counts": {color: sum(state["color"] == color for state in states) for color in ranking.TAGS},
                 "last_viewed": max((state["last_viewed"] for state in states if state["last_viewed"] is not None), default=None),
                 "latest": max(dates, default=None),
                 "fetched": s.get("fetched"),
@@ -628,7 +639,7 @@ def set_subscription_tags(url: str, tags: list[str]) -> bool:
 
 
 def unsubscribe(url: str) -> bool:
-    """Remove the subscription, with its posts and when you opened, skipped or colored them, so subscribing
+    """Remove the subscription, with its posts and when you opened or tagged them, so subscribing
     again starts afresh. Posts that are also in links.txt or another subscription keep theirs."""
     if not replace_line(FEEDS_FILE, url, None):
         return False
@@ -637,7 +648,6 @@ def unsubscribe(url: str) -> bool:
         posts = {p["url"] for p in subscriptions.pop(url, {}).get("items", [])} - elsewhere
         for post in posts:
             viewed.pop(post, None)
-            skipped.pop(post, None)
             colors.pop(post, None)
     save_json(FEED_CACHE_FILE, subscriptions)
     save_state()
@@ -660,33 +670,16 @@ def poll_subscriptions():
         time.sleep(60)
 
 
-# Colors you can give an item; ranking.py decides what they do. They have no proper names yet.
-COLORS = ("green", "white", "red")
-
-
-# Skipping an item (the white dot) counts as viewing it, except for next up: what comes after a post you
-# skipped isn't next up, and nor is a post you skipped. Whichever you did last counts.
-def seen_at(url: str) -> float | None:
-    """When you last opened or skipped url. Call with lock held."""
-    return max(viewed.get(url, 0), skipped.get(url, 0)) or None
-
-
-def opened_at(url: str) -> float | None:
-    """When you last opened url, unless you skipped it after that. Call with lock held."""
-    return viewed[url] if url in viewed and viewed[url] > skipped.get(url, 0) else None
-
-
 def view_state(url: str) -> dict:
-    """The item's color, when you last opened or skipped it, and whether that was a skip. Call with lock held."""
-    last = seen_at(url)
-    return {"color": colors.get(url, "white"), "last_viewed": last,
-            "skipped": last is not None and opened_at(url) is None}
+    """The item's tag (None if it has none) and when you last opened it. Tags don't count as opening
+    it. Call with lock held."""
+    return {"color": colors.get(url), "last_viewed": viewed.get(url)}
 
 
 def being_viewed(items: list[dict]) -> dict | None:
-    """The item you opened most recently and didn't skip after: the one you're viewing now, if any.
-    Items carry last_viewed and skipped from view_state."""
-    opened = [it for it in items if it.get("last_viewed") and not it.get("skipped")]
+    """The item you opened most recently: the one you're viewing now, if any. Items carry last_viewed
+    from view_state."""
+    opened = [it for it in items if it.get("last_viewed")]
     return max(opened, key=lambda it: it["last_viewed"], default=None)
 
 
@@ -751,13 +744,13 @@ def schedule_video_metadata(video: str):
 
 
 def set_color(url: str, color: str) -> bool:
-    """Give an item a color. White, the default, also skips it (see seen_at). Only for items in the feed."""
-    if color not in COLORS or not is_known(url):
+    """Tag an item (see ranking.TAGS), or with "none" remove its tag. A tag only adds its points; it
+    doesn't count as opening the item. Only for items in the feed."""
+    if (color not in ranking.TAGS and color != "none") or not is_known(url):
         return False
     with lock:
-        if color == "white":
+        if color == "none":
             colors.pop(url, None)
-            skipped[url] = time.time()
         else:
             colors[url] = color
     save_state()
@@ -765,7 +758,7 @@ def set_color(url: str, color: str) -> bool:
 
 
 def mark_older_red(url: str, age: float) -> int | None:
-    """Mark the subscription's posts published more than age seconds ago red, except ones you made green.
+    """Tag the subscription's posts published more than age seconds ago red, except ones you've tagged.
     Posts without a date are left alone. Returns how many turned red, or None if it isn't subscribed."""
     if url not in read_entries(FEEDS_FILE):
         return None
@@ -819,7 +812,7 @@ def save_settings(terms) -> str | None:
 
 # settings.json's format. Files without a version were saved before it had one; when a term is renamed
 # or changes meaning, bump the version and move saved values in migrate_terms.
-SETTINGS_VERSION = 1
+SETTINGS_VERSION = 2
 
 
 def migrate_terms(data: dict) -> dict | None:
@@ -837,6 +830,12 @@ def migrate_terms(data: dict) -> dict | None:
         # fixed per-item points, so move a saved ramp setting to its explicit name.
         if "task_bonus" in terms and "task_deadline_bonus" not in terms:
             terms["task_deadline_bonus"] = terms.pop("task_bonus")
+    if data.get("version", 0) < 2:
+        # Green's points were green_bonus_points, 0 by default. Keep them only if you changed them, so
+        # the new tag defaults apply otherwise.
+        green = terms.pop("green_bonus_points", 0)
+        if green and "green_points" not in terms:
+            terms["green_points"] = green
     return terms
 
 
@@ -856,8 +855,7 @@ def load_settings():
 def series_state(subs: dict[str, list[str]]) -> tuple[dict[str, str], dict[str, str]]:
     """For the subscriptions (url -> tags), except those tagged "latest". Call with lock held. Returns:
     - next up, as {its url: the opened post's title}: for each subscription, the post after the one
-      you opened most recently: the next part of its series, or else the next published. Skipped posts
-      don't count as opened here, and a post you skipped isn't next up. A subscription
+      you opened most recently: the next part of its series, or else the next published. A subscription
       whose posts belong to series of their own, such as a Jellyfin server's TV shows, has a next post
       in each series, in episode order.
     - later parts of a series none of whose earlier parts you've opened, as {url: the first part's title}.
@@ -869,12 +867,12 @@ def series_state(subs: dict[str, list[str]]) -> tuple[dict[str, str], dict[str, 
             continue
         for group in series.groups(subscriptions.get(sub_url, {})):
             posts, prev = group["posts"], group["prev"]
-            opened = [(t, i) for i, p in enumerate(posts) if (t := opened_at(p["url"]))]
+            opened = [(t, i) for i, p in enumerate(posts) if (t := viewed.get(p["url"]))]
             if opened:
                 i = max(opened)[1]
                 after = [p for p in posts if prev.get(p["url"]) is posts[i]]
                 nxt = after[0] if after else posts[i - 1] if i > 0 else None
-                if nxt and not view_state(nxt["url"])["skipped"]:
+                if nxt:
                     next_up.setdefault(nxt["url"], posts[i]["title"] or posts[i]["url"])
             # For each part: (the series' first part, whether it or anything before it was opened)
             state = {}
@@ -885,7 +883,7 @@ def series_state(subs: dict[str, list[str]]) -> tuple[dict[str, str], dict[str, 
                 for q in reversed(chain):
                     before = prev.get(q["url"])
                     first, any_opened = state[before["url"]] if before else (q, False)
-                    state[q["url"]] = (first, any_opened or seen_at(q["url"]) is not None)
+                    state[q["url"]] = (first, any_opened or q["url"] in viewed)
                     if before and any_opened:
                         started.add(q["url"])
                     if before and not any_opened:
@@ -894,10 +892,10 @@ def series_state(subs: dict[str, list[str]]) -> tuple[dict[str, str], dict[str, 
 
 
 def last_opened(subs) -> dict[str, float]:
-    """For each subscription you've opened or skipped a post of, when you last did. Call with lock held."""
+    """For each subscription you've opened a post of, when you last did. Call with lock held."""
     out = {}
     for sub_url in subs:
-        times = [t for p in subscriptions.get(sub_url, {}).get("items", []) if (t := seen_at(p["url"]))]
+        times = [t for p in subscriptions.get(sub_url, {}).get("items", []) if (t := viewed.get(p["url"]))]
         if times:
             out[sub_url] = max(times)
     return out

@@ -18,7 +18,7 @@ class FeedCacheTests(unittest.TestCase):
         for name in ("LINKS_FILE", "FEEDS_FILE", "CACHE_FILE", "FEED_CACHE_FILE",
                      "STATE_FILE", "SETTINGS_FILE", "JELLYFIN_FILE", "CALDAV_FILE"):
             self.stack.enter_context(patch.object(server, name, root / name, create=True))
-        for name in ("subscriptions", "cache", "added", "viewed", "skipped", "colors", "ranked_cache"):
+        for name in ("subscriptions", "cache", "added", "viewed", "colors", "ranked_cache"):
             self.stack.enter_context(patch.object(server, name, {}))
         self.stack.enter_context(patch.object(server, "pending", set()))
         self.stack.enter_context(patch.object(server, "state_version", 0))
@@ -202,22 +202,48 @@ class FeedCacheTests(unittest.TestCase):
         (data / "colors.json").write_text('{"a": "green"}')
         server.load_state()
         self.assertEqual(server.load_json(server.STATE_FILE), {"version": 1, "items": {
-            "a": {"added": 1, "viewed": 2, "color": "green"}, "b": {"viewed": 3, "skipped": 4}}})
+            "a": {"added": 1, "viewed": 2, "color": "green"}, "b": {"viewed": 3, "color": "white"}}})
         self.assertFalse((data / "viewed.json").exists())
         self.assertTrue((data / "viewed.json.bak").exists())
-        for values in (server.added, server.viewed, server.skipped, server.colors):
+        for values in (server.added, server.viewed, server.colors):
             values.clear()
         server.load_state()  # now from state.json
-        self.assertEqual((server.added, server.viewed, server.skipped, server.colors),
-                         ({"a": 1}, {"a": 2, "b": 3}, {"b": 4}, {"a": "green"}))
+        self.assertEqual((server.added, server.viewed, server.colors),
+                         ({"a": 1}, {"a": 2, "b": 3}, {"a": "green", "b": "white"}))
 
-    def test_white_skips_in_one_request(self):
-        self.assertTrue(server.set_color(self.post["url"], "green"))
-        self.assertTrue(server.set_color(self.post["url"], "white"))
+    def test_skips_in_state_json_become_maybe_later(self):
+        """Only a skip still in effect, on an untagged item, becomes the white tag; the skip field goes."""
+        server.save_json(server.STATE_FILE, {"version": 1, "items": {
+            "skipped": {"skipped": 5}, "reopened": {"viewed": 6, "skipped": 5},
+            "red": {"skipped": 5, "color": "red"}, "opened": {"viewed": 1}}})
+        server.load_state()
+        self.assertEqual(server.colors, {"skipped": "white", "red": "red"})
+        self.assertEqual(server.viewed, {"reopened": 6, "opened": 1})
+        saved = server.load_json(server.STATE_FILE)["items"]
+        self.assertFalse(any("skipped" in fields for fields in saved.values()))
+
+    def test_tags_only_set_the_tag(self):
+        """No tag counts as opening the item; "none" removes the tag."""
+        for tag in ranking.TAGS:
+            self.assertTrue(server.set_color(self.post["url"], tag))
+            self.assertEqual(server.colors[self.post["url"]], tag)
+            self.assertNotIn(self.post["url"], server.viewed)
+            self.assertEqual(server.load_json(server.STATE_FILE)["items"][self.post["url"]], {"color": tag})
+        self.assertTrue(server.set_color(self.post["url"], "none"))
         self.assertNotIn(self.post["url"], server.colors)
-        self.assertIn(self.post["url"], server.skipped)
-        saved = server.load_json(server.STATE_FILE)["items"][self.post["url"]]
-        self.assertEqual(set(saved), {"skipped"})
+        self.assertFalse(server.set_color(self.post["url"], "blue"))
+
+    def test_saved_green_points_carry_over_only_if_changed(self):
+        old = dict(ranking.DEFAULT_TERMS)
+        for key in ("green_points", "white_points", "red_points"):
+            del old[key]
+        for green, expected in ((0, 10), (25, 25)):
+            with self.subTest(green=green):
+                server.save_json(server.SETTINGS_FILE, {"version": 1, "terms": dict(old, green_bonus_points=green)})
+                server.load_settings()
+                self.assertEqual((ranking.TERMS["green_points"], ranking.TERMS["white_points"], ranking.TERMS["red_points"]),
+                                 (expected, -50, -1000))
+                ranking.TERMS.update(ranking.DEFAULT_TERMS)
 
     def test_settings_are_saved_with_their_version_and_served_with_limits(self):
         self.assertIsNone(server.save_settings(dict(ranking.DEFAULT_TERMS, task_bonus=5)))

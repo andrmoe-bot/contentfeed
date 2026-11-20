@@ -55,10 +55,12 @@ p { margin: 0; color: var(--muted); display: -webkit-box; -webkit-line-clamp: 3;
 .play { position: relative; display: block; width: 100%; padding: 0; border: 0; border-radius: 0; background: #000; }
 .play img { opacity: .9; }
 .viewed { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 0 10px 8px 16px; font-size: 13px; color: var(--muted); }
-.dots { display: flex; margin-left: auto; }
-/* A 28px target around an 14px dot: a ring in its color, filled when it's the item's color */
-.dot { width: 28px; height: 28px; padding: 0; border: 0; border-radius: 50%; background: none; display: grid; place-items: center; }
-.dot::before { content: ""; width: 14px; height: 14px; box-sizing: border-box; border-radius: 50%; border: 2px solid var(--dot); }
+.dots { display: flex; gap: 2px; margin-left: auto; }
+/* A 28px-high target around a 14px dot and its points: a ring in its color, filled when it's the item's tag */
+.dot { min-width: 28px; height: 28px; padding: 0 6px; border: 0; border-radius: 14px; background: none; display: flex; align-items: center; gap: 4px;
+  color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; cursor: pointer; }
+.dot::before { content: ""; flex: none; width: 14px; height: 14px; box-sizing: border-box; border-radius: 50%; border: 2px solid var(--dot); }
+.dot[aria-pressed="true"] { color: var(--text); font-weight: 600; }
 .dot[aria-pressed="true"]::before { background: var(--dot-fill, var(--dot)); }
 .dot:hover::before { transform: scale(1.2); }
 .dot.green { --dot: #16a34a; }

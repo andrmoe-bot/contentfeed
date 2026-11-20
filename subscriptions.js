@@ -95,25 +95,25 @@ function row(s) {
     if (data.subscriptions) show(data.subscriptions);
   });
 
-  // Mark posts older than an age red, so they sink to the bottom of the feed.
+  // Tag posts older than an age "don't show again" (red), which adds its points (−1000 by default).
   const ageInput = el("input", { type: "number", min: "0", step: "any", value: "1", required: "", "aria-label": `Age for ${s.title}` });
   const unitSelect = el("select", { "aria-label": "Unit" }, ...Object.keys(AGE_UNITS).map((u) => el("option", { value: u }, u)));
   unitSelect.value = "years";
-  const redForm = el("form", { class: "red-edit" }, "Mark posts older than", ageInput, unitSelect,
-    el("button", { type: "submit" }, "Mark red"));
+  const redForm = el("form", { class: "red-edit" }, "Tag posts older than", ageInput, unitSelect,
+    el("button", { type: "submit" }, "Don't show again"));
   redForm.addEventListener("submit", async (e) => {
     e.preventDefault();
     const older = `older than ${ageInput.value} ${unitSelect.value}`;
-    if (!confirm(`Mark the posts in ${s.title} ${older} red? Posts you made green stay green.`)) return;
+    if (!confirm(`Tag the posts in ${s.title} ${older} “don't show again”? Posts you've already tagged keep their tag.`)) return;
     const { ok, data } = await api("/api/subscriptions/red", { url: s.url, age: ageInput.value * AGE_UNITS[unitSelect.value] });
-    say(ok ? `Marked ${data.marked} post${data.marked === 1 ? "" : "s"} in ${s.title} ${older} red.`
-      : "Couldn't mark posts; is it still in feeds.txt?", !ok);
+    say(ok ? `Tagged ${data.marked} post${data.marked === 1 ? "" : "s"} in ${s.title} ${older} “don't show again”.`
+      : "Couldn't tag posts; is it still in feeds.txt?", !ok);
     if (data.subscriptions) show(data.subscriptions);
   });
 
   const removeBtn = el("button", { type: "button", class: "danger" }, "Unsubscribe");
   removeBtn.addEventListener("click", async () => {
-    if (!confirm(`Unsubscribe from ${s.title}? Its posts will disappear from the feed, along with which ones you opened or colored.`)) return;
+    if (!confirm(`Unsubscribe from ${s.title}? Its posts will disappear from the feed, along with which ones you opened or tagged.`)) return;
     const { ok, data } = await api("/api/subscriptions/remove", { url: s.url });
     say(ok ? `Unsubscribed from ${s.title}.` : "Couldn't unsubscribe; it may already be gone.", !ok);
     if (data.subscriptions) show(data.subscriptions);
