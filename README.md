@@ -113,7 +113,7 @@ starting with `#` are comments.
 A subscription can be an RSS or Atom feed, a CalDAV calendar collection or shared `.ics` link, or a page that has one: a YouTube channel
 (`youtube.com/@handle`, `/channel/…`) or playlist, a subreddit, a blog, a Mastodon profile and so on.
 It can also be a blog or news page without a feed (see Pages without a feed), a series on NRK TV
-(see NRK TV) or a Jellyfin server (see Jellyfin).
+(see NRK TV), an author on arXiv or Google Scholar (see Authors) or a Jellyfin server (see Jellyfin).
 Incomplete tasks appear as cards; events don't — they take place when scheduled, not whenever the
 feed happens to show them, so they work through the stop-watching timer only (see Stop watching):
 every event that hasn't ended acts as a stop time at its start minus the Event lead time setting,
@@ -264,6 +264,29 @@ says "I dag" or "Fredag". Episodes are dated by when they came out on NRK TV.
 
 Clicking a card opens the episode on tv.nrk.no; it doesn't play in the card. Many programs can only
 be watched in Norway.
+
+## Authors
+
+To follow a researcher's papers, subscribe to one of these:
+
+- **An arXiv author page**, such as `https://arxiv.org/a/lecun_y_1`: the papers the author has claimed
+  on arXiv, from the page's own feed. Authors get such a page once they claim their papers, so it may
+  be missing or behind on recent ones.
+- **An arXiv author search**: search arXiv for the author's name with "Authors" chosen, as "LeCun, Yann",
+  and subscribe to the results' address (`https://arxiv.org/search/?query=LeCun%2C+Yann&searchtype=author…`).
+  The feed asks arXiv's API for the 50 newest papers by anyone with that name, so a common name brings
+  other people's papers too.
+- **A Google Scholar profile**, such as `https://scholar.google.com/citations?user=JicYPdAAAAAJ`: the papers
+  on the profile, including ones not on arXiv. Google Scholar has no feed or API, so the server reads the
+  newest 100 from the profile page, which can break when Google changes it. It gives only each paper's year,
+  so papers show approximate dates: the middle of their year at first, and the day they appeared on
+  the profile for recent papers found later. Google Scholar turns away clients that ask often, so a profile is
+  checked at most every 6 hours (Check now and Refresh all check it anyway), and each paper's own page is never
+  read. If Google asks for a CAPTCHA instead, the Subscriptions page shows the error and later checks try again.
+  Cards link to the paper's page on Google Scholar.
+
+arXiv papers link to their abstract page, without a version number, so a new version of a paper is
+the same post.
 
 ## Viewed items
 
