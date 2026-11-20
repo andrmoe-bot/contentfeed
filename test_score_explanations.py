@@ -7,7 +7,7 @@ from test_ranking import NOW, item
 
 class ScoreExplanationTests(unittest.TestCase):
     def test_component_inputs_match_weighted_similarity_and_omit_unknowns(self):
-        terms = dict(ranking.DEFAULT_TERMS, similar_base_percent=0, similar_publish_weight=1,
+        terms = dict(ranking.DEFAULT_TERMS, similar_base_percent=0, similar_series_percent=0, similar_publish_weight=1,
                        similar_length_weight=1, similar_title_weight=2)
         first = dict(item('first', 'feed'), title='CPU design', estimated_minutes=10)
         second = dict(item('second', 'feed', date=NOW - 15 * 86400),
@@ -23,7 +23,7 @@ class ScoreExplanationTests(unittest.TestCase):
         self.assertEqual(result['percent'], 83)
 
     def test_above_matches_sum_to_penalty_and_recent_match_identifies_source(self):
-        terms = dict(ranking.DEFAULT_TERMS, similar_base_percent=0, similar_length_weight=1)
+        terms = dict(ranking.DEFAULT_TERMS, similar_base_percent=0, similar_series_percent=0, similar_length_weight=1)
         posts = [dict(item(str(i), 'feed', age=1 if i == 0 else None),
                       estimated_minutes=10) for i in range(5)]
         posts.append(item('unrelated', 'other'))
@@ -72,7 +72,7 @@ class ScoreExplanationTests(unittest.TestCase):
                     self.assertTrue(ranking.title_tokens(part['text']) & shared)
 
     def test_paging_and_disabled_title_component_preserve_explanations(self):
-        terms = dict(ranking.DEFAULT_TERMS, similar_base_percent=0, similar_title_weight=0)
+        terms = dict(ranking.DEFAULT_TERMS, similar_base_percent=0, similar_series_percent=0, similar_title_weight=0)
         posts = [item(str(i), 'feed', date=NOW - i * 86400) for i in range(12)]
         ranked = ranking.rank('score', posts, NOW, terms, lazy=True)
         first, _ = ranked.read(4)
@@ -86,7 +86,7 @@ class ScoreExplanationTests(unittest.TestCase):
                 self.assertTrue(all(not p['shared'] for p in match['title_parts']))
 
     def test_zero_components_still_count_in_normalization(self):
-        terms = dict(ranking.DEFAULT_TERMS, similar_base_percent=0, similar_length_weight=1,
+        terms = dict(ranking.DEFAULT_TERMS, similar_base_percent=0, similar_series_percent=0, similar_length_weight=1,
                        similar_title_weight=1, similar_publish_weight=0)
         first = dict(item('first', 'feed'), title='CPU', estimated_minutes=10)
         second = dict(item('second', 'feed'), title='Baking', estimated_minutes=10)

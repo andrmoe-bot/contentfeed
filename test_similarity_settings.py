@@ -120,8 +120,9 @@ class SimilaritySettingsTests(unittest.TestCase):
                 self.assertEqual(defaults['task_bonus'], 0)
                 self.assertEqual(defaults['event_lead_minutes'], 30)
                 self.assertEqual(defaults['task_deadline_bonus'], 200)
-                self.assertEqual(candidate()['similar']['percent'], 75)
-                equal = dict(defaults, similar_length_weight=1)
+                # Parts 1 and 2 are a series: 75% series base + 25% × 50% publish time
+                self.assertEqual(candidate()['similar']['percent'], 88)
+                equal = dict(defaults, similar_series_percent=50, similar_length_weight=1)
                 self.assertTrue(request('/api/settings', equal)['ok'])
                 self.assertEqual(candidate()['similar']['percent'], 69)
                 preview = dict(equal, similar_publish_weight=0)
@@ -142,7 +143,7 @@ class SimilaritySettingsTests(unittest.TestCase):
                     request('/api/settings', invalid)
                 self.assertEqual(error.exception.code, 400)
                 self.assertEqual(request('/api/settings')['terms'], equal)
-                off = dict(equal, similar_base_percent=0, similar_publish_weight=0, similar_length_weight=0)
+                off = dict(equal, similar_base_percent=0, similar_series_percent=0, similar_publish_weight=0, similar_length_weight=0)
                 self.assertTrue(request('/api/settings', off)['ok'])
                 self.assertTrue(all(it['similar'] is None for it in request('/api/feed')['items']))
                 with urllib.request.urlopen(base + '/', timeout=5) as response:

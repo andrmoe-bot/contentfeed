@@ -40,7 +40,7 @@ class SubscriptionSimilarityTests(unittest.TestCase):
         self.assertEqual(second['similar']['percent'], 50)
         self.assertEqual(second['similar']['strength'], 25)
         self.assertEqual(first['similar']['percent'], 100)
-        disabled = dict(terms, similar_base_percent=0)
+        disabled = dict(terms, similar_base_percent=0, similar_series_percent=0)
         ranking.similar_to_recent([first, second], NOW, disabled)
         self.assertIsNone(first['similar'])
         self.assertIsNone(second['similar'])

@@ -83,3 +83,28 @@ def of_post(subscription: dict, url: str) -> list[dict]:
             found.append({"id": f"{group['kind']}:{group['id']}", "title": group["title"], "url": group["url"],
                           "posts": list(reversed(group["posts"]))})
     return found
+
+
+def memberships(subscription: dict) -> dict[str, list[str]]:
+    """{a post's url: the ids of the series it's in}, with the same ids as of_post, for posts in any series."""
+    out = {}
+    for group in groups(subscription):
+        if group["kind"] == "loose":
+            continue
+        if group["kind"] == "titles":
+            # Each set of posts that follow each other is a series, named by its smallest url.
+            root = {}
+            def find(url):
+                while url in root:
+                    url = root[url]
+                return url
+            for url, before in group["prev"].items():
+                a, b = find(url), find(before["url"])
+                if a != b:
+                    root[max(a, b)] = min(a, b)
+            for url in group["prev"].keys() | {before["url"] for before in group["prev"].values()}:
+                out.setdefault(url, []).append("titles:" + find(url))
+        else:
+            for p in group["posts"]:
+                out.setdefault(p["url"], []).append(f"{group['kind']}:{group['id']}")
+    return out

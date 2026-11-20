@@ -982,6 +982,7 @@ def build_items(entries: dict[str, list[str]], subs: dict[str, list[str]], now: 
         for playlist in s.get("youtube_playlists", []):
             for video in playlist["videos"]:
                 playlists_by_video.setdefault(video, []).append(playlist["id"])
+        in_series = {} if "latest" in tags else series.memberships(s)
         for post in s.get("items", []):
             if post["url"] in seen:
                 continue
@@ -993,6 +994,7 @@ def build_items(entries: dict[str, list[str]], subs: dict[str, list[str]], now: 
                 "domain": domain(post["url"]),
                 "added": post["first_seen"], "date": post_date(post), "position": -1,
                 "sub_last_viewed": sub_opened.get(sub_url), "sub": sub_url,
+                "series_ids": in_series.get(post["url"], []),
             })
     for item in items:
         item.update(view_state(item["url"]), next_after=next_after.get(item["url"]),
