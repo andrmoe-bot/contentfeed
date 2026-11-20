@@ -1,7 +1,7 @@
 """Subscriptions: finding, fetching and parsing public feeds (RSS 2.0, RSS 1.0 and Atom).
 
 A subscription can be given as the feed itself or as a page that has one: a YouTube channel,
-handle or playlist, a subreddit, a blog, a Mastodon profile, and so on. Many sites have a feed without
+handle or playlist, a subreddit, an author on arXiv, a blog, a Mastodon profile, and so on. Many sites have a feed without
 linking to it, so discover() also tries the usual addresses, such as /feed and /rss.xml. Pages with no
 feed at all are read by pages.py instead.
 """
@@ -15,7 +15,7 @@ import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
-from urllib.parse import parse_qs, urljoin, urlparse
+from urllib.parse import parse_qs, quote, urljoin, urlparse
 import outbound
 
 from content_length import duration_minutes, reading_minutes, youtube_minutes
@@ -74,7 +74,33 @@ def known_feed_url(url: str) -> str | None:
             return f"https://www.youtube.com/feeds/videos.xml?playlist_id={q['list'][0]}"
     if host == "reddit.com" and re.match(r"^/(r|user|u)/[^/]+/?$", p.path):
         return f"https://www.reddit.com{p.path.rstrip('/')}/.rss"
+    if host == "arxiv.org":
+        return arxiv_author_feed(p.path, q)
     return None
+
+
+ARXIV_API = "https://export.arxiv.org/api/query"
+ARXIV_QUERY_TITLE = re.compile(r'^arXiv Query: search_query=au:"?([^"&]+)"?')
+
+
+def arxiv_author_feed(path: str, query: dict) -> str | None:
+    """An arXiv author's papers as a feed. An author page (arxiv.org/a/lecun_y_1) has its own feed, of the
+    papers its author has claimed; an author search (arxiv.org/search/?searchtype=author&query=LeCun, Yann)
+    becomes the same search in arXiv's API, newest first, which finds papers by anyone with that name."""
+    m = re.match(r"^/a/([\w.-]+?)(\.html|\.atom2?)?/?$", path)
+    if m:
+        return f"https://arxiv.org/a/{m.group(1)}.atom2"
+    name = query.get("query", [""])[0].strip()
+    if path.rstrip("/") == "/search" and query.get("searchtype", [""])[0] == "author" and name:
+        search = quote(f'au:"{name}"')
+        return f"{ARXIV_API}?search_query={search}&sortBy=submittedDate&sortOrder=descending&max_results={MAX_ITEMS_PER_FEED}"
+    return None
+
+
+def arxiv_abs(link: str) -> str:
+    """An arXiv paper's address without its version, so a new version is the same post."""
+    m = re.match(r"^https?://(?:www\.|export\.)?arxiv\.org/abs/(.+?)(v\d+)?$", link)
+    return f"https://arxiv.org/abs/{m.group(1)}" if m else link
 
 
 class MetaParser(HTMLParser):
@@ -326,7 +352,7 @@ def parse(body: bytes, base_url: str) -> dict:
     for entry in root.iter():
         if local(entry.tag) not in ("item", "entry"):
             continue
-        link = urljoin(base_url, item_link(entry))
+        link = arxiv_abs(urljoin(base_url, item_link(entry)))
         if not link.startswith("http"):
             continue
         raw = ""
@@ -353,8 +379,11 @@ def parse(body: bytes, base_url: str) -> dict:
             "published": parse_date(text_of(entry, "published", "pubDate", "date", "updated", "issued")),
         })
     items.sort(key=lambda it: it["published"] or 0, reverse=True)
+    title = html_to_text(text_of(channel, "title"))[0]
+    if m := ARXIV_QUERY_TITLE.match(text_of(channel, "title")):  # arXiv's API calls its feed "arXiv Query: search_query=au:..."
+        title = f"{m.group(1)} on arXiv"
     return {
-        "title": html_to_text(text_of(channel, "title"))[0] or urlparse(base_url).netloc,
+        "title": title or urlparse(base_url).netloc,
         "site": site,
         "icon": urljoin(site, "/favicon.ico"),
         "items": items[:MAX_ITEMS_PER_FEED],

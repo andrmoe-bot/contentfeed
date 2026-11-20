@@ -35,6 +35,7 @@ import icalendar_parser
 import jellyfin
 import nrk
 import pages
+import scholar
 from content_length import page_minutes, youtube_minutes
 
 import ranking
@@ -92,6 +93,8 @@ TEMPLATES = {
 # A Jellyfin server, or a library or series on one, needs its login in jellyfin.json; see the README.
 # A private CalDAV calendar needs its login in caldav.json; credentials don't go in this list.
 # A series on NRK TV is its address, such as https://tv.nrk.no/serie/skam.
+# An author on arXiv is their author page (https://arxiv.org/a/lecun_y_1) or an author search on arXiv,
+# and an author on Google Scholar is their profile (https://scholar.google.com/citations?user=…).
 #
 # https://www.youtube.com/@veritasium science video
 # https://www.reddit.com/r/python programming
@@ -371,7 +374,7 @@ def merge_posts(old: list[dict], new: list[dict], now: float) -> list[dict]:
 
 # Where a subscription's posts come from, saved as its "source" once found. Subscriptions saved before
 # sources were recorded get theirs from what was saved about them (see known_source).
-SOURCES = ("nrk", "jellyfin", "caldav", "feed", "page")
+SOURCES = ("nrk", "scholar", "jellyfin", "caldav", "feed", "page")
 
 
 def known_source(url: str, old: dict) -> str | None:
@@ -380,6 +383,8 @@ def known_source(url: str, old: dict) -> str | None:
         return old["source"]
     if nrk.series_id(url):
         return "nrk"
+    if scholar.user_id(url):
+        return "scholar"
     if any(p.get("jellyfin") for p in old.get("items", [])):
         return "jellyfin"
     if old.get("page"):
@@ -418,6 +423,10 @@ def fetch_source(source: str, url: str, old: dict, force: bool) -> tuple[str, di
     known = {p["url"] for p in old.get("items", [])}
     if source == "nrk":
         return source, nrk.fetch(url, known)
+    if source == "scholar":
+        if not force and time.time() - old.get("scholar_checked", 0) < scholar.CHECK_INTERVAL:
+            return source, None  # Google Scholar turns away clients that ask often
+        return source, scholar.fetch(url, {p["url"]: p.get("published") for p in old.get("items", [])})
     if source == "jellyfin":
         return source, jellyfin.fetch(url, jellyfin_login(url))
     if source == "page":
@@ -434,6 +443,8 @@ def detect_source(url: str) -> tuple[str, dict]:
     """(source, posts) for a new subscription, trying each kind of source in turn."""
     if nrk.series_id(url):
         return "nrk", nrk.fetch(url)
+    if scholar.user_id(url):
+        return "scholar", scholar.fetch(url)
     logins, problem = jellyfin.read_logins(JELLYFIN_FILE)
     login = jellyfin.login_for(url, logins)
     if login is not None:
@@ -916,8 +927,8 @@ ranked_cache: dict[tuple, CachedRanking] = {}
 
 def enrichment_key(post: dict, cached: dict, pending_keys: set, now: float) -> str | None:
     """Identify incomplete posts eligible for enrichment, using one state snapshot."""
-    if post.get("jellyfin") or (post.get("estimated_minutes") and not post.get("date_approx")):
-        return None
+    if post.get("jellyfin") or post.get("scholar") or (post.get("estimated_minutes") and not post.get("date_approx")):
+        return None  # Google Scholar turns away clients that read many of its pages
     video = post.get("youtube") if post.get("kind") == "subscription" else None
     key = "video:" + video if video else post["url"]
     metadata = cached.get(post["url"], {})
