@@ -382,7 +382,9 @@ is its name as a whole word, such as `\bWork\b`, which matches "Work block" and 
 "Homework"; `^(work|focus)\b` would match titles starting with either word. An empty pattern means
 the calendar never turns the mode on. Of several matching modes, the one added first wins. Picking a mode
 or Normal in the list uses it until you pick Auto again. The panel always shows and changes the
-settings of the mode in effect, the status line names it, unless it's Normal, and when it changes,
+settings of the mode in effect, and the status line names it, unless it's Normal. While an event has
+a mode on, the status line says when the event ends ("Work mode until 17:00") and leaves out a stop
+time that comes after that. When the mode changes,
 such as when a work block starts, the feed is shown again from the top. Remove deletes the mode
 shown and its settings. Modes are saved in `settings.json` with the normal settings.
 
