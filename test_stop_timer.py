@@ -24,18 +24,29 @@ class StopFilterTests(unittest.TestCase):
     def test_no_stop_means_no_filter(self):
         post = dict(item("post", "feed"), estimated_minutes=60)
         self.assertEqual(ranking.effective_stop([post], NOW, ranking.DEFAULT_TERMS), (None, None))
-        self.assertTrue(ranking.fits_before_stop(post, NOW, None))
+        self.assertIsNone(ranking.minutes_past_stop(post, NOW, None))
 
-    def test_timer_filters_by_estimated_length(self):
+    def test_minutes_past_stop_by_estimated_length(self):
         post = dict(item("post", "feed"), estimated_minutes=45)
         long_post = dict(item("long", "feed"), estimated_minutes=120)
         unknown = dict(item("unknown", "feed"))
         stop = NOW + 3600
         self.assertEqual(ranking.effective_stop([post], NOW, ranking.DEFAULT_TERMS, stop), (stop, None))
-        self.assertTrue(ranking.fits_before_stop(post, NOW, stop))  # 45 minutes fit in the hour
-        self.assertFalse(ranking.fits_before_stop(post, NOW, NOW + 30 * 60))
-        self.assertFalse(ranking.fits_before_stop(long_post, NOW, stop))
-        self.assertTrue(ranking.fits_before_stop(unknown, NOW, NOW + 1))  # unknown lengths stay
+        self.assertIsNone(ranking.minutes_past_stop(post, NOW, stop))  # 45 minutes fit in the hour
+        self.assertIsNone(ranking.minutes_past_stop(dict(post, estimated_minutes=60), NOW, stop))  # exactly fits
+        self.assertEqual(ranking.minutes_past_stop(post, NOW, NOW + 30 * 60), 15)
+        self.assertEqual(ranking.minutes_past_stop(long_post, NOW, stop), 60)
+        self.assertEqual(ranking.minutes_past_stop(dict(post, estimated_minutes=60.2), NOW, stop), 1)  # rounded up
+        self.assertIsNone(ranking.minutes_past_stop(unknown, NOW, NOW + 1))  # unknown lengths get none
+
+    def test_running_past_the_stop_costs_points_per_minute(self):
+        post = dict(item("post", "feed"), estimated_minutes=45, past_stop=15)
+        reasons = dict(ranking.score(post, NOW, ranking.DEFAULT_TERMS))
+        self.assertEqual(reasons["runs 15 minutes past the stop time"], -300)
+        off = dict(ranking.DEFAULT_TERMS, past_stop_per_minute=0)
+        self.assertFalse(any("past the stop" in label for label, _ in ranking.score(post, NOW, off)))
+        fits = dict(post, past_stop=None)
+        self.assertFalse(any("past the stop" in label for label, _ in ranking.score(fits, NOW, ranking.DEFAULT_TERMS)))
 
     def test_past_timer_has_fired(self):
         """A stop time in the past is not ignored: it means the time has run out."""
@@ -92,11 +103,18 @@ class StopFilterTests(unittest.TestCase):
         self.assertEqual(ranking.effective_stop([ongoing], NOW, ranking.DEFAULT_TERMS),
                          (NOW - 600 - 30 * 60, ongoing))
 
-    def test_calendar_items_are_never_filtered(self):
-        event = dict(item("event", "cal"), calendar_kind="event", calendar_start=NOW + 600)
-        task = dict(item("task", "cal"), calendar_kind="task", deadline=NOW + 600)
+    def test_calendar_items_never_run_past_the_stop(self):
+        event = dict(item("event", "cal"), calendar_kind="event", calendar_start=NOW + 600, estimated_minutes=60)
+        task = dict(item("task", "cal"), calendar_kind="task", deadline=NOW + 600, estimated_minutes=60)
         for it in (event, task):
-            self.assertTrue(ranking.fits_before_stop(it, NOW, NOW + 1))
+            self.assertIsNone(ranking.minutes_past_stop(it, NOW, NOW + 1))
+
+    def test_post_limit_is_a_whole_number_from_zero(self):
+        self.assertEqual(ranking.DEFAULT_TERMS["post_limit"], ranking.LIMIT)  # no limit
+        ranking.check_terms(dict(ranking.DEFAULT_TERMS, post_limit=0))
+        for bad in (-1, 2.5):
+            with self.assertRaises(ValueError):
+                ranking.check_terms(dict(ranking.DEFAULT_TERMS, post_limit=bad))
 
 
 class StopTimerServerTests(unittest.TestCase):
@@ -126,6 +144,11 @@ class StopTimerServerTests(unittest.TestCase):
 
     def urls(self, result):
         return {it["url"] for it in result["items"]}
+
+    def past_stop(self, result, url):
+        """Whether the post got points for running past the stop time."""
+        card = next(it for it in result["items"] if it["url"] == url)
+        return any("past the stop" in r["label"] for r in card["reasons"])
 
     def test_set_stop_validates_persists_and_clears(self):
         self.assertEqual(server.set_stop("tomorrow"), "stop_at must be a unix time or null")
@@ -157,24 +180,30 @@ class StopTimerServerTests(unittest.TestCase):
         server.set_stop(2_000_000)
         self.assertEqual(server.settings()["stop_at"], 2_000_000.0)
 
-    def test_feed_filters_posts_that_would_run_past_the_stop(self):
-        server.set_stop(time.time() + 30 * 60)
-        result = server.feed("score")
-        self.assertIn(self.short["url"], self.urls(result))  # 10 minutes fit
-        self.assertNotIn(self.long["url"], self.urls(result))  # 120 minutes don't
-        self.assertEqual(result["stop_at"], server.stop["stop_at"])
-        self.assertEqual(result["total"], 1)
+    def order(self, result):
+        return [it["url"] for it in result["items"]]
 
-    def test_viewed_post_stays_when_it_would_run_past_the_stop(self):
-        """The post you're viewing doesn't move away as time passes: it stays even when it no longer fits."""
+    def test_posts_that_would_run_past_the_stop_are_pushed_down_not_left_out(self):
+        server.set_stop(time.time() + 30 * 60)
+        server.subscriptions[self.url]["items"] = [self.long, self.short]
+        self.long["published"] = 2_000_000  # newer: first without the stop
+        result = server.feed("score")
+        self.assertEqual(self.order(result), [self.short["url"], self.long["url"]])  # 10 minutes fit; 120 don't
+        long_card = result["items"][1]
+        self.assertTrue(any(r["label"] in ("runs 90 minutes past the stop time", "runs 91 minutes past the stop time")
+                            for r in long_card["reasons"]))
+        self.assertEqual(result["stop_at"], server.stop["stop_at"])
+        self.assertEqual(result["total"], 2)
+
+    def test_viewed_post_gets_no_past_stop_points(self):
+        """Reloading while you watch doesn't push down the post you're viewing."""
         server.set_stop(time.time() + 30 * 60)
         server.viewed[self.long["url"]] = time.time()  # you're watching the long one now
         result = server.feed("score")
-        self.assertIn(self.short["url"], self.urls(result))  # 10 minutes fit
-        self.assertIn(self.long["url"], self.urls(result))  # viewed, so kept although it doesn't fit
-        self.assertEqual(result["total"], 2)
+        long_card = next(it for it in result["items"] if it["url"] == self.long["url"])
+        self.assertFalse(any("past the stop" in r["label"] for r in long_card["reasons"]))
 
-    def test_only_the_latest_viewed_post_is_kept(self):
+    def test_only_the_latest_viewed_post_is_exempt(self):
         server.set_stop(time.time() + 30 * 60)
         other_long = {"url": "https://example.com/other-long", "title": "Other long", "first_seen": 1_000_000,
                       "published": 1_000_000, "estimated_minutes": 90}
@@ -182,17 +211,20 @@ class StopTimerServerTests(unittest.TestCase):
         now = time.time()
         server.viewed[other_long["url"]] = now - 600  # opened earlier
         server.viewed[self.long["url"]] = now - 60  # opened last: this is the one you're viewing
-        result = server.feed("score")
-        self.assertIn(self.long["url"], self.urls(result))
-        self.assertNotIn(other_long["url"], self.urls(result))  # only the latest viewed is exempt
+        cards = {it["url"]: it for it in server.feed("score")["items"]}
+        self.assertFalse(any("past the stop" in r["label"] for r in cards[self.long["url"]]["reasons"]))
+        self.assertTrue(any("past the stop" in r["label"] for r in cards[other_long["url"]]["reasons"]))
 
-    def test_tagged_post_is_not_kept(self):
-        """A tag is not viewing: a tagged post that no longer fits is still left out."""
-        server.set_stop(time.time() + 30 * 60)
-        server.colors[self.long["url"]] = "green"
+    def test_post_limit_cuts_the_feed_but_not_a_subscription_page(self):
+        server.save_settings(dict(ranking.DEFAULT_TERMS, post_limit=1))
         result = server.feed("score")
-        self.assertNotIn(self.long["url"], self.urls(result))
-        self.assertEqual(result["total"], 1)
+        self.assertEqual(len(result["items"]), 1)
+        self.assertEqual((result["total"], result["post_limit"]), (2, 1))
+        self.assertEqual(len(server.feed("score", subscription_url=self.url)["items"]), 2)
+        server.save_settings(dict(ranking.DEFAULT_TERMS, post_limit=0))
+        self.assertEqual(server.feed("score")["items"], [])  # an empty feed
+        server.save_settings(dict(ranking.DEFAULT_TERMS))
+        self.assertIsNone(server.feed("score")["post_limit"])  # no limit
 
     def test_fired_stop_keeps_the_feed_and_marks_it_stopped(self):
         """A fired stop (timer or event) no longer empties the feed server-side: the response keeps
@@ -287,10 +319,10 @@ class StopTimerServerTests(unittest.TestCase):
 
     def test_clearing_the_timer_restores_the_feed(self):
         server.set_stop(time.time() + 30 * 60)
-        self.assertNotIn(self.long["url"], self.urls(server.feed("score")))
+        self.assertTrue(self.past_stop(server.feed("score"), self.long["url"]))
         server.set_stop(None)
         result = server.feed("score")
-        self.assertIn(self.long["url"], self.urls(result))
+        self.assertFalse(self.past_stop(result, self.long["url"]))
         self.assertIsNone(result["stop_at"])
 
     def test_event_sets_the_stop_with_the_lead_time(self):
@@ -304,8 +336,8 @@ class StopTimerServerTests(unittest.TestCase):
         self.assertFalse(result["stopped"])
         self.assertEqual(result["stop_event"]["title"], "Dinner")
         self.assertNotIn(event["url"], self.urls(result))  # events aren't feed items
-        self.assertIn(self.short["url"], self.urls(result))
-        self.assertNotIn(self.long["url"], self.urls(result))  # 120 minutes don't fit before the stop
+        self.assertFalse(self.past_stop(result, self.short["url"]))
+        self.assertTrue(self.past_stop(result, self.long["url"]))  # 120 minutes don't fit before the stop
 
     def test_events_are_not_feed_items_but_still_act_as_stop_times(self):
         start = time.time() + 5 * 3600  # far enough that both posts fit before the stop

@@ -1055,16 +1055,18 @@ def build_items(entries: dict[str, list[str]], subs: dict[str, list[str]], now: 
     return items, new
 
 
-def fitting_before_stop(items: list[dict], stopping: dict, now: float, post_url: str | None) -> list[dict]:
-    """While the stop is ahead, leave out posts that would run past it, so each one shown can be
-    finished before it. The post whose page is open stays, and so does the one you're viewing, even
-    when it no longer fits. Once the stop has fired the feed itself is left alone: the response's
-    stopped flag tells the page to switch to stop mode in JS, so switching back is seamless."""
+def mark_past_stop(items: list[dict], stopping: dict, now: float, post_url: str | None) -> list[dict]:
+    """While the stop is ahead, give each post past_stop: how many minutes it would run past it, for
+    the ranker's points. The post whose page is open and the one you're viewing are left unmarked, so
+    reloading while you watch doesn't push it down. Once the stop has fired the feed is left alone: the
+    response's stopped flag tells the page to switch to stop mode in JS, so switching back is seamless."""
     if stopping["stop_at"] is None or stopping["stopped"]:
         return items
     watching = being_viewed(items)
-    return [it for it in items if it is watching or it["url"] == post_url
-            or ranking.fits_before_stop(it, now, stopping["stop_at"])]
+    for it in items:
+        if it is not watching and it["url"] != post_url:
+            it["past_stop"] = ranking.minutes_past_stop(it, now, stopping["stop_at"])
+    return items
 
 
 def ranking_for(ranker: str, terms: dict, entries: dict, subs: dict, search: str, post_url: str | None,
@@ -1084,7 +1086,7 @@ def ranking_for(ranker: str, terms: dict, entries: dict, subs: dict, search: str
         save_state(affects_feed=False)
     if post_url is None and search.strip():
         items = [p for p in items if matches_search(p, search)]
-    ranked = ranking.rank(ranker, fitting_before_stop(items, stopping, now, post_url), now, terms, lazy=True)
+    ranked = ranking.rank(ranker, mark_past_stop(items, stopping, now, post_url), now, terms, lazy=True)
     with lock:
         for k in [k for k, c in ranked_cache.items() if now - c.built >= RANKED_TTL or c.state_version != state_version]:
             del ranked_cache[k]
@@ -1123,11 +1125,15 @@ def feed(ranker: str, limit: int = MAX_ITEMS_SHOWN, terms: dict | None = None, *
     if post_url is not None:
         return {**post_details(ranked.source, post_url, ranker, limit, terms, now, enrich=enrich, search=search), **stopping}
     extra_count = terms["enrich_count"] if enrich else 0
+    # The post limit applies to the main feed, not to a subscription's page, where you browse its posts.
+    post_limit = terms["post_limit"] if subscription_url is None and terms["post_limit"] < ranking.LIMIT else None
+    if post_limit is not None:
+        limit = min(limit, post_limit)
     with lock:
         cached, pending_keys = dict(cache), set(pending)
     visible, extra = ranked.read(limit, extra_count, lambda post: enrichment_key(post, cached, pending_keys, now))
     result = {"items": ranking.explain_similarities(visible, ranked.source, terms, now),
-              "total": ranked.total, "pending": pending_count(), "ranker": ranker, **stopping}
+              "total": ranked.total, "post_limit": post_limit, "pending": pending_count(), "ranker": ranker, **stopping}
     if subscription_url is not None:
         next_up = sorted((p for p in ranked.source if p.get("next_after")), key=ranking.order, reverse=True)
         if enrich:

@@ -390,6 +390,7 @@ function scoreDetail(item, reason) {
       : `${rate(w.similar_penalty)} × ${strongest}`;
   }
   if (label.startsWith("estimated ")) return `|${n(item.estimated_minutes)} − ${rate(w.length_target_minutes)}| min × ${rate(w.length_per_minute)} pts/min`;
+  if (label.includes(" past the stop time")) return `${rate(w.past_stop_per_minute)} pts/min`;
   if (label.startsWith("age ")) {
     return `${rate(w.age_per_year)} pts/year`;
   }
@@ -595,16 +596,17 @@ function showStatus(data, text) {
 // How many items are shown and how they're ranked, with "Show more" when there are more.
 function showRanked(data) {
   const more = document.getElementById("more");
-  more.hidden = data.total <= items.length;
+  const limited = data.post_limit != null && data.post_limit < data.total;
+  more.hidden = limited || data.total <= items.length;
   more.textContent = `Show ${Math.min(PAGE, data.total - items.length)} more (${data.total - items.length} not shown)`;
-  showStatus(data, `${data.total > items.length ? `top ${items.length} of ${data.total}` : data.total} items · ranked by ${data.ranker}`);
+  showStatus(data, `${data.total > items.length ? `top ${items.length} of ${data.total}` : data.total} items${limited ? " (post limit)" : ""} · ranked by ${data.ranker}`);
   rankerNote(data.ranker);
 }
 
 function showFeed(data, more = false) {
   items = more ? appendNew(items, data.items) : data.items;
   render();
-  if (!items.length) feedEl.replaceChildren(el("p", {}, searchEl.value.trim() ? "No posts match your search." : data.stopped ? "Stopped: the stop time has passed." : data.stop_at ? "Everything left would run past the stop time." : "No posts in your feed yet."));
+  if (!items.length) feedEl.replaceChildren(el("p", {}, searchEl.value.trim() ? "No posts match your search." : data.post_limit === 0 && data.total ? "The post limit is 0, so the feed is empty. Change it in Settings." : data.stopped ? "Stopped: the stop time has passed." : "No posts in your feed yet."));
   showRanked(data);
 }
 

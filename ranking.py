@@ -26,20 +26,20 @@ Each item has its page metadata (url, title, description, domain, ...) plus thes
     sub_last_viewed  for a post: unix time you last opened any post in its subscription, or None
     series_ids   for a post: the ids of the series it's part of within its subscription (see series.py),
                  empty if none
+    past_stop    whole minutes its estimated length would run past the stop time in effect (see
+                 minutes_past_stop), or None when it fits, its length is unknown or nothing stops watching
 
 rank() adds one more, "similar": the item you opened recently that this one is most like, plus
 "total" and "matches", the summed strength and count of every recent match (see similarity), or
 None. The similar_penalty is based on the sum, not on the strongest match alone.
 
-Nothing is hidden: items you've opened or tagged are scored differently, not removed. The one
-exception is the stop-watching timer: while a stop time is in effect (see effective_stop), items whose
-estimated length would run past it are left out of the feed, so each post shown can be finished first.
-The post you're viewing (the one you opened most recently) is exempt, so it doesn't disappear as time
-passes; server.py applies that exemption, since viewing state lives there. Once the stop time has run
-out, the feed itself is left unchanged and the response's stopped flag tells the page to switch to
-stop mode (notice, playback force-stopped, alert), so it can switch back seamlessly. Calendar events
-are not feed items at all — they take place when scheduled — so subscriptions keep them apart from
-their posts, and they reach the feed only as stop times through effective_stop.
+Nothing is hidden: items you've opened, tagged or that would run past the stop time are scored
+differently, not removed. The one cut is the post limit term: the feed shows at most that many posts
+(server.py applies it; 0 gives an empty feed). Once the stop time has run out, the feed itself is
+left unchanged and the response's stopped flag tells the page to switch to stop mode (notice,
+playback force-stopped, alert), so it can switch back seamlessly. Calendar events are not feed items
+at all — they take place when scheduled — so subscriptions keep them apart from their posts, and
+they reach the feed only as stop times through effective_stop.
 
 A ranker registered with spread=True penalizes similarity to posts above it (see rank).
 
@@ -96,6 +96,8 @@ DEFAULT_TERMS = {
     "length_per_minute": 0,  # signed points per minute away from the target length
     "length_target_minutes": 0,  # target runtime or reading time; 0 preserves the original linear score
     "age_per_year": 0,  # signed points per fractional 365-day year since publication (or addition for links)
+    "past_stop_per_minute": -20,  # signed points per minute a post would run past the stop time
+    "post_limit": 10_000_000,  # most posts the feed shows; the maximum (LIMIT) means no limit, 0 an empty feed
 }
 TERMS = dict(DEFAULT_TERMS)
 # Every scoring coefficient is signed; windows, similarity parameters and counts are not.
@@ -103,7 +105,7 @@ SIGNED = {
     "next_up_bonus", "seen_bonus", "new_sub_bonus", "series_penalty", "similar_penalty",
     "above_similarity_penalty", "green_points", "white_points", "red_points", "video_bonus", "image_bonus",
     "article_bonus", "youtube_shorts_bonus", "length_per_minute", "age_per_year",
-    "task_deadline_bonus", "task_bonus", "task_priority_bonus",
+    "task_deadline_bonus", "task_bonus", "task_priority_bonus", "past_stop_per_minute",
 }
 LIMIT = 10_000_000
 # The tags you can give an item with the dots on its card, and their names. None of them counts as
@@ -112,7 +114,7 @@ TAGS = {"green": "show again soon", "white": "maybe later", "red": "don't show a
 # Each term's allowed values, which the score panel also gets, to check what you type.
 TERM_LIMITS = {key: {"min": -LIMIT if key in SIGNED else 0,
                      "max": 100 if key in ("similar_base_percent", "similar_series_percent", "enrich_count") else LIMIT,
-                     "integer": key == "enrich_count"}
+                     "integer": key in ("enrich_count", "post_limit")}
                for key in DEFAULT_TERMS}
 
 
@@ -207,16 +209,17 @@ def ongoing_event(events: list[dict], now: float) -> dict | None:
     return min(ongoing, key=lambda it: it["deadline"]) if ongoing else None
 
 
-def fits_before_stop(item: dict, now: float, stop: float | None) -> bool:
-    """Whether the item can be finished before the stop time: an item with a known estimated length
-    fits when now + its minutes is at or before the stop. Tasks aren't watched, and items
+def minutes_past_stop(item: dict, now: float, stop: float | None) -> int | None:
+    """How many whole minutes the item would run past the stop time if started now (rounded up, so
+    any overrun counts), or None when it can be finished before then. Tasks aren't watched, and items
     without an estimated length can't be ruled out, so they always fit."""
     if stop is None or item.get("calendar_kind"):
-        return True
+        return None
     minutes = item.get("estimated_minutes")
     if not valid_minutes(minutes):
-        return True
-    return now + minutes * 60 <= stop
+        return None
+    over = math.ceil((now + minutes * 60 - stop) / 60)
+    return over if over > 0 else None
 
 
 TITLE_STOP_WORDS = frozenset("a an the and or but of for to in on at by with from is are be as it its this that these those how what why when where who".split())
@@ -670,7 +673,7 @@ def _tag_reasons(item: dict, terms: dict) -> Reasons:
 @ranker("score", spread=True)
 def score(item: dict, now: float, terms: dict) -> Reasons:
     """Points for next up, opened before, a new subscription, a later part of a series, being like
-    something opened recently, its media type, and its tag. rank() then penalizes similarity to posts above it."""
+    something opened recently, its media type, length, age, running past the stop time, and its tag. rank() then penalizes similarity to posts above it."""
     w = terms
     reasons = []
     if item.get("calendar_kind"):
@@ -700,6 +703,9 @@ def score(item: dict, now: float, terms: dict) -> Reasons:
     if w["age_per_year"]:
         hours = hours_since(now, item["date"])
         reasons.append((f"age {hours_label(hours)}", points(hours / (24 * 365) * w["age_per_year"])))
+    past = item.get("past_stop")
+    if past and w["past_stop_per_minute"]:
+        reasons.append((f"runs {past} minute{'s' if past != 1 else ''} past the stop time", points(past * w["past_stop_per_minute"])))
     return reasons + _tag_reasons(item, w)
 
 
