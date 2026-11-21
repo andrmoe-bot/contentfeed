@@ -504,7 +504,9 @@ Age counts fractional 365-day years since publication (or addition for links), u
 hours, and future dates count as age 0. The feed reorders, showing its top, as you move a slider,
 and the setting is saved when you let go (or when you press Enter in the box). Settings that add no points when the page loads (those at 0, and the post limit when there is
 none) are hidden to keep the panel short, along with the similarity measures while both similarity
-penalties are; bring one back with its group's "Add a setting" list. The defaults are at the top of `ranking.py`. The other ranker,
+penalties are, and so is a group with nothing left to show. Bring a setting back with the "Add a
+setting" list below the groups, which lists the hidden ones under their groups' names: picking one
+opens its group and puts the cursor in its box. The defaults are at the top of `ranking.py`. The other ranker,
 `chronological`, has no rules: everything scores 0 and the newest item is first. To add another ranker, register a
 function with `@ranker("name")`, then select it with `.venv/bin/python server.py --ranker name`, or try
 it without a restart at `/api/feed?ranker=name`.

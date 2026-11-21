@@ -174,23 +174,30 @@ function settingRow({ key, label, before, after, extra, hint, blankIsMax }) {
 function buildSettings() {
   document.getElementById("settings").replaceChildren(...GROUPS.map((group) => {
     const count = el("span", { class: "changed" });
-    const add = el("select", { class: "add-setting", "aria-label": `Add a ${group.title} setting` });
-    add.addEventListener("change", () => {
-      const key = add.value;  // read before showTerms rebuilds the list
-      if (!key) return;
-      shownTerms.add(key);
-      showTerms();
-      controls[key].num.focus();
-    });
     const details = el("details", { class: "group" },
       el("summary", {}, group.title, count),
-      ...SETTINGS.filter((s) => s.group === group.id).map(settingRow), add);
+      ...SETTINGS.filter((s) => s.group === group.id).map(settingRow));
     details.open = groupOpen(group);
     details.addEventListener("toggle", () => rememberGroup(group.id, details.open));
-    groupEls[group.id] = { details, count, add };
+    groupEls[group.id] = { details, count };
     return details;
   }));
 }
+
+// One "Add a setting" list below the groups, with the hidden settings under their groups' names.
+// Picking one shows it, opens its group and puts the cursor in its box.
+const addSetting = document.getElementById("add-setting");
+addSetting.addEventListener("change", () => {
+  const key = addSetting.value;  // read before showTerms rebuilds the list
+  if (!key) return;
+  shownTerms.add(key);
+  showTerms();
+  const { group } = SETTINGS.find((s) => s.key === key);
+  groupEls[group].details.open = true;
+  const { num } = controls[key];
+  num.focus();
+  num.scrollIntoView({ block: "center" });
+});
 
 function showSettings(w) {
   for (const { key, extra } of SETTINGS) {
@@ -215,13 +222,17 @@ function showTerms() {
   for (const { key, measure } of SETTINGS) {
     document.querySelector(`.setting[data-key="${key}"]`).hidden = measure ? !similarity : !shownTerms.has(key);
   }
+  // A group with nothing shown is left out until you add one of its settings.
   for (const group of GROUPS) {
-    const hidden = SETTINGS.filter((s) => s.group === group.id && !s.measure && !shownTerms.has(s.key));
-    const { add } = groupEls[group.id];
-    add.replaceChildren(el("option", { value: "" }, "Add a setting…"),
-      ...hidden.map(({ key, label }) => el("option", { value: key }, label)));
-    add.hidden = !hidden.length;
+    groupEls[group.id].details.hidden = !SETTINGS.some((s) => s.group === group.id
+      && !document.querySelector(`.setting[data-key="${s.key}"]`).hidden);
   }
+  const groups = GROUPS.map((group) => [group,
+    SETTINGS.filter((s) => s.group === group.id && !s.measure && !shownTerms.has(s.key))]).filter(([, hidden]) => hidden.length);
+  addSetting.replaceChildren(el("option", { value: "" }, "Add a setting…"),
+    ...groups.map(([group, hidden]) => el("optgroup", { label: group.title },
+      ...hidden.map(({ key, label }) => el("option", { value: key }, label)))));
+  addSetting.hidden = !groups.length;
 }
 
 // Each group's heading counts its settings that differ from the defaults, so you can see where
