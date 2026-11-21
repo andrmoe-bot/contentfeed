@@ -510,6 +510,7 @@ let shownTag = null;  // the ETag of the feed as shown: the server answers "not 
 let checkTag = null;  // the ETag of the last answer, for checks
 let lastPending = 0;
 let firstLoad = true;
+let shownMode = null;  // the mode the feed shown was ranked for
 
 async function fetchFeed({ reorder = false, more = false } = {}) {
   clearTimeout(pollTimer);
@@ -544,13 +545,17 @@ async function fetchFeed({ reorder = false, more = false } = {}) {
     lastPending = data.pending;
     lastStop = data;
     forceStop(data);
-    if (show) {
+    syncMode(data.mode);
+    // A mode turning on or off changes the settings, so the feed is shown again from the top.
+    const modeChanged = !!data.mode && shownMode !== null && data.mode.name !== shownMode;
+    if (show || modeChanged) {
+      shownMode = data.mode?.name ?? null;
       shownTag = checkTag;
       firstLoad = false;
       if (postPage) showPost(data);
       else if (subscriptionPage) showSubscription(data, more ? "more" : "all");
       else showFeed(data, more);
-      if (reorder) window.scrollTo(0, 0);
+      if (reorder || modeChanged) window.scrollTo(0, 0);
     } else {
       refreshCards(postPage ? [data.item, ...data.series.flatMap((g) => g.items), ...data.similar.items]
         : [...data.items, ...(data.next_up || [])]);
@@ -584,12 +589,13 @@ function appendNew(list, fresh) {
   return [...list, ...fresh.filter((it) => !urls.has(it.url))];
 }
 
-// The status line: calendars that didn't answer, the stop time, if any, then text, then how many
-// fetches are under way.
+// The status line: calendars that didn't answer, the mode, unless it's Normal, the stop time, if any,
+// then text, then how many fetches are under way.
 function showStatus(data, text) {
   const unreachable = (data.calendars_unreachable || []).map((c) =>
     `Calendar “${c.title}” isn't answering; using its events from ${c.fetched ? clock(c.fetched) : "before"}`);
-  statusEl.textContent = [...unreachable, stopNote(data.stop_at, data.stopped), text, data.pending ? `fetching ${data.pending}…` : ""]
+  const modeNote = data.mode && data.mode.name !== "Normal" ? `${data.mode.name} mode` : "";
+  statusEl.textContent = [...unreachable, modeNote, stopNote(data.stop_at, data.stopped), text, data.pending ? `fetching ${data.pending}…` : ""]
     .filter(Boolean).join(" · ");
 }
 
@@ -606,7 +612,7 @@ function showRanked(data) {
 function showFeed(data, more = false) {
   items = more ? appendNew(items, data.items) : data.items;
   render();
-  if (!items.length) feedEl.replaceChildren(el("p", {}, searchEl.value.trim() ? "No posts match your search." : data.post_limit === 0 && data.total ? "The post limit is 0, so the feed is empty. Change it in Settings." : data.stopped ? "Stopped: the stop time has passed." : "No posts in your feed yet."));
+  if (!items.length) feedEl.replaceChildren(el("p", {}, searchEl.value.trim() ? "No posts match your search." : data.post_limit === 0 && data.total ? `The post limit is 0${data.mode && data.mode.name !== "Normal" ? ` in ${data.mode.name} mode` : ""}, so the feed is empty. Change it in Settings.` : data.stopped ? "Stopped: the stop time has passed." : "No posts in your feed yet."));
   showRanked(data);
 }
 

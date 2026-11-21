@@ -4,6 +4,8 @@
 // Settings that add no points when the page loads (0, or no post limit) are hidden to keep the panel
 // short; each group's "Add a setting" brings them back. The similarity measures (marked measure: true)
 // only shape the two similarity penalties, so they're shown whenever either penalty is.
+// Each mode has its own settings. The panel shows and changes the active mode's: the one you picked
+// in its Mode list, or with Auto, the mode the calendar turns on (see server.active_mode).
 const GROUPS = [
   { id: "feed", title: "Feed", open: true },
   { id: "opened", title: "Opened and next up", open: true },
@@ -77,6 +79,9 @@ let limits = {};  // each term's {min, max, integer}, from the server
 let saved = {};  // as saved on the server
 let draft = {};  // as shown in the panel
 let defaults = {};
+let modeList = [];  // [{name, terms}], the modes besides Normal
+let mode = { name: "Normal", source: "default", event: null };  // the active mode, whose settings the panel shows
+const termsOf = (name, data) => (name === "Normal" ? data.terms : data.modes.find((m) => m.name === name)?.terms || data.terms);
 
 // Slider positions: 0, then 1, 1.5, 2, 3, 5, 7 times each power of ten from 10^lo up to 10^hi,
 // mirrored below 0 for terms that may be negative.
@@ -276,10 +281,11 @@ async function saveNow() {
     return panelSay(`${label} must be a ${integer ? "whole " : ""}number from ${fmt(min)} to ${fmt(max)}.`, true);
   }
   if (sameTerms(draft, saved)) return;
-  const { ok, data } = await api("/api/settings", { terms: draft });
+  const { ok, data } = await api("/api/settings", { terms: draft, mode: mode.name });
   if (!ok) return panelSay(`Couldn't save: ${data.error || "unknown error"}`, true);
-  saved = data.terms;
-  panelSay("Saved.");
+  modeList = data.modes;
+  saved = termsOf(mode.name, data);
+  panelSay(mode.name === "Normal" && !modeList.length ? "Saved." : `Saved for ${mode.name}.`);
 }
 
 let rankerShown = null;
@@ -292,8 +298,6 @@ function rankerNote(ranker) {
 async function loadSettings() {
   const { ok, data } = await api("/api/settings");
   if (!ok) throw new Error(data.error);
-  saved = data.terms;
-  draft = { ...saved };
   defaults = data.defaults;
   limits = data.limits;
   buildSettings();
@@ -303,8 +307,70 @@ async function loadSettings() {
     const second = extra ? ` and ${fmt(defaults[extra.key])} ${extra.after}` : "";
     controls[key].def.textContent = `Default ${value}${second}.`;
   }
+  showMode(data);
+}
+
+// Show the active mode's settings, from /api/settings or /api/modes. Settings that add no points in
+// this mode are hidden again, as each mode uses different ones.
+function showMode(data) {
+  modeList = data.modes;
+  mode = data.mode;
+  saved = termsOf(mode.name, data);
+  draft = { ...saved };
   showSettings(draft);
+  shownTerms.clear();
   hideUnusedTerms(saved);
+  showModeBar();
+}
+
+const modeSelect = document.getElementById("mode");
+function showModeBar() {
+  modeSelect.replaceChildren(
+    el("option", { value: "" }, mode.source === "chosen" ? "Auto: follow the calendar" : `Auto: ${mode.name}`),
+    ...["Normal", ...modeList.map((m) => m.name)].map((name) => el("option", { value: name }, name)),
+    el("option", { value: "+new" }, "New mode…"));
+  modeSelect.value = mode.source === "chosen" ? mode.name : "";
+  document.getElementById("mode-remove").hidden = mode.name === "Normal";
+  document.getElementById("mode-hint").textContent =
+    mode.source === "calendar" ? `These are ${mode.name}'s settings, on during “${mode.event}”.`
+    : mode.source === "chosen" ? `These are ${mode.name}'s settings, until you pick Auto.`
+    : modeList.length ? "These are the normal settings. A mode is on during a free (not busy) calendar event with its name in the title."
+    : "Add a mode to use other settings during free (not busy) calendar events with its name in the title, such as Work.";
+}
+
+// Mode changes save what you were changing first, then show the new mode's settings and feed.
+async function modeRequest(body) {
+  await saving;
+  const { ok, data } = await api("/api/modes", body);
+  if (!ok) {
+    showModeBar();
+    return panelSay(data.error || "Couldn't change the mode.", true);
+  }
+  panelSay("");
+  showMode(data);
+  load({ reorder: true });
+}
+
+modeSelect.addEventListener("change", () => {
+  const value = modeSelect.value;
+  if (value !== "+new") return modeRequest({ choose: value || null });
+  const name = prompt(`Name of the new mode. It starts with ${mode.name}'s settings and is on during free calendar events with its name in the title.`);
+  if (name === null || !name.trim()) return showModeBar();
+  modeRequest({ add: name.trim(), copy_from: mode.name });
+});
+
+document.getElementById("mode-remove").addEventListener("click", () => {
+  if (confirm(`Remove the ${mode.name} mode and its settings?`)) modeRequest({ remove: mode.name });
+});
+
+// The feed says which mode it used. When that's another one, such as when a calendar event turns a
+// mode on, the panel switches to its settings.
+let modeCheck = null;
+function syncMode(fresh) {
+  if (!fresh || modeCheck || !Object.keys(limits).length) return;
+  if (fresh.name === mode.name && fresh.source === mode.source && fresh.event === mode.event) return;
+  modeCheck = api("/api/settings").then(({ ok, data }) => { if (ok) showMode(data); })
+    .finally(() => { modeCheck = null; });
 }
 
 document.getElementById("reset").addEventListener("click", async () => {
