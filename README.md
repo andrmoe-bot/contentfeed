@@ -399,13 +399,13 @@ All scoring terms add their configured signed points; negative values subtract p
 - −30 for anything you've opened, including next up
 - 0 if nothing from its subscription has been opened yet, such as one you just subscribed to
 - −30 for a later part of a series when you haven't opened anything before it (see below)
-- −40 × the **sum** over everything you opened recently of similarity × the fraction of the 24-hour window remaining since opening; each match contributes on its own, not just the strongest (see below)
+- 0 (off) × the **sum** over everything you opened recently of similarity × the fraction of the 24-hour window remaining since opening; each match contributes on its own, not just the strongest (see below)
 - 0 for its media type: video (YouTube, Jellyfin, NRK TV, pages with a video file), image (a link straight to a picture) or
   article (anything else). Each has its own setting, which may be negative, to favor or hold back that type.
-- 0 per **minute away from the target content length** by default. Content length adds `weight × |estimated minutes − target minutes|`. Set a negative weight to favor content near the target, or a positive weight to favor content farther away. The target defaults to 0 minutes, preserving existing scores; both the weight and target are configurable in Settings. Runtime metadata is used where available; text is estimated at 200 words per minute (at least one minute). Feed text may be only an excerpt, and page estimates can include surrounding text. Unknown lengths have no adjustment. When the site loads, the five highest-ranked posts with incomplete data are updated in the background, regardless of score weights. YouTube updates fetch runtime and exact publication time together. Change this count with “Fetch details” in Settings (0–100; 0 disables it). Routine polling does not start additional batches; unavailable data stays unknown and recent attempts are skipped for six hours.
+- 0 per **minute away from the target content length** by default. Content length adds `weight × |estimated minutes − target minutes|`. Set a negative weight to favor content near the target, or a positive weight to favor content farther away. The target defaults to 0 minutes, preserving existing scores; both the weight and target are configurable in Settings. Runtime metadata is used where available; text is estimated at 200 words per minute (at least one minute). Feed text may be only an excerpt, and page estimates can include surrounding text. Unknown lengths have no adjustment. When the site loads, the highest-ranked posts with incomplete data can be updated in the background, regardless of score weights; this is off by default. YouTube updates fetch runtime and exact publication time together. Set how many with “Fetch details” in Settings (0–100; 0, the default, turns it off). Routine polling does not start additional batches; unavailable data stays unknown and recent attempts are skipped for six hours.
 - +10 if tagged "show again soon" (green), −50 if "maybe later" (white), −1000 if "don't show again" (red)
-- −15 × the **sum of similarities to posts above it**. A 100% match contributes −15,
-  a 50% match contributes −7.5; two 50% matches contribute −15 together. It uses the same
+- 0 (off) × the **sum of similarities to posts above it**. At −15, a 100% match contributes −15,
+  a 50% match contributes −7.5, and two 50% matches contribute −15 together. It uses the same
   publish-time and content-length weights as recent-view similarity, without a viewing-time fade.
   Different subscriptions do not match. “Similar posts above” replaces the fixed repeat penalty;
   existing saved repeat amounts are carried over to the new setting.
@@ -470,12 +470,13 @@ How alike two items are, from 0 to 100%:
 The similarity penalty fades linearly to zero over 24 hours, updated in whole hours. Every
 recently opened match adds its own similarity × remaining fraction, so the penalty is the sum
 over all of them: two 50% matches opened 12 hours ago together cost the same as one 100% match
-done. After you
+done. With Like something opened at −40, after you
 watch a video, its channel's next one (published a week later) starts at next up 30 − 35.2;
 after 12 hours, that penalty is only 17.6. These examples use the default 50% subscription base
 and publish-time-only measured similarity.
-Something you've opened starts at −70 (−30 for opened and −40 for being like itself),
-reaches −50 after 12 hours, and −30 after 24 hours.
+Something you've opened then starts at −70 (−30 for opened and −40 for being like itself),
+reaches −50 after 12 hours, and −30 after 24 hours. Both similarity penalties are 0, so off, by
+default.
 
 The feed is built from the top down, choosing the highest current score after accounting for
 similarity to all posts already placed. Less-similar posts can overtake closer matches from the
@@ -501,7 +502,9 @@ a box for an exact number and a slider; the sliders go in steps of 1, 1.5, 2, 3,
 of ten, so they cover both small and large numbers. Leave the post limit's box empty for no limit.
 Age counts fractional 365-day years since publication (or addition for links), updated in whole
 hours, and future dates count as age 0. The feed reorders, showing its top, as you move a slider,
-and the setting is saved when you let go (or when you press Enter in the box). The defaults are at the top of `ranking.py`. The other ranker,
+and the setting is saved when you let go (or when you press Enter in the box). Settings that add no points when the page loads (those at 0, and the post limit when there is
+none) are hidden to keep the panel short, along with the similarity measures while both similarity
+penalties are; bring one back with its group's "Add a setting" list. The defaults are at the top of `ranking.py`. The other ranker,
 `chronological`, has no rules: everything scores 0 and the newest item is first. To add another ranker, register a
 function with `@ranker("name")`, then select it with `.venv/bin/python server.py --ranker name`, or try
 it without a restart at `/api/feed?ranker=name`.

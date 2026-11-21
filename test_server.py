@@ -311,6 +311,7 @@ class FeedCacheTests(unittest.TestCase):
         rank.assert_called_once()
 
     def test_enrichment_beyond_visible_prefix_keeps_highest_incomplete_selection(self):
+        ranking.TERMS["enrich_count"] = 5  # off by default
         server.subscriptions[self.url]['items'] = [
             dict(self.post, url=f'https://example.com/{i}', estimated_minutes=10 if i < 25 else None)
             for i in range(40)]
@@ -329,6 +330,10 @@ if __name__ == "__main__":
 
 
 class LengthEnrichmentTests(FeedCacheTests):
+    def setUp(self):
+        super().setUp()
+        ranking.TERMS["enrich_count"] = 5  # off by default
+
     def test_missing_subscription_length_is_scheduled_and_used(self):
         ranking.TERMS["length_per_minute"] = -2
         result = server.feed("score", enrich=True)

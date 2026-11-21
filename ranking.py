@@ -69,7 +69,7 @@ DEFAULT_TERMS = {
     "next_up_bonus": 30,  # the post after the one you opened most recently in a subscription
     "seen_bonus": -30,  # items you've opened; below 0 puts them under unopened ones
     "new_sub_bonus": 0,  # for posts from a subscription you've never opened anything from
-    "similar_penalty": -40,  # added per 100% combined similarity to what you opened recently (see similarity):
+    "similar_penalty": 0,  # added per 100% combined similarity to what you opened recently (see similarity):
     "similar_hours": 24,  # penalty fades linearly to zero this many hours after opening
     "similar_base_percent": 50,  # same-subscription baseline; other similarity fills the remainder
     "similar_series_percent": 75,  # baseline for posts in the same series; never below the subscription's
@@ -77,7 +77,7 @@ DEFAULT_TERMS = {
     "similar_length_weight": 0,  # relative weight of duration similarity; 0 keeps the old behavior
     "similar_days": 30,  # posts from the same subscription are alike if published within this many days
     "series_penalty": -30,  # added to a later part of a series when you haven't opened anything before it
-    "above_similarity_penalty": -15,  # added per 100% similarity to each post above it
+    "above_similarity_penalty": 0,  # added per 100% similarity to each post above it
     "event_lead_minutes": 30,  # an upcoming event stops watching this many minutes before it starts
     "task_deadline_bonus": 200,  # maximum points for a task due now
     "task_bonus": 0,  # fixed points added to every task
@@ -89,7 +89,7 @@ DEFAULT_TERMS = {
     "video_bonus": 0,  # for each media type (see media_type); below 0 is a penalty
     "image_bonus": 0,
     "article_bonus": 0,
-    "enrich_count": 5,  # highest-ranked incomplete posts to enrich on page load
+    "enrich_count": 0,  # highest-ranked incomplete posts to enrich on page load
     "length_per_minute": 0,  # signed points per minute away from the target length
     "length_target_minutes": 0,  # target runtime or reading time; 0 preserves the original linear score
     "age_per_year": 0,  # signed points per fractional 365-day year since publication (or addition for links)

@@ -1,12 +1,12 @@
 import unittest
 
 import ranking
-from test_ranking import NOW, item
+from test_ranking import NOW, item, TERMS_ON
 
 
 class ScoreExplanationTests(unittest.TestCase):
     def test_component_inputs_match_weighted_similarity_and_omit_unknowns(self):
-        terms = dict(ranking.DEFAULT_TERMS, similar_base_percent=0, similar_series_percent=0, similar_publish_weight=1,
+        terms = dict(TERMS_ON, similar_base_percent=0, similar_series_percent=0, similar_publish_weight=1,
                        similar_length_weight=3)
         first = dict(item('first', 'feed'), title='CPU design', estimated_minutes=10)
         second = dict(item('second', 'feed', date=NOW - 15 * 86400),
@@ -21,7 +21,7 @@ class ScoreExplanationTests(unittest.TestCase):
         self.assertEqual(result['percent'], 50)
 
     def test_above_matches_sum_to_penalty_and_recent_match_identifies_source(self):
-        terms = dict(ranking.DEFAULT_TERMS, similar_base_percent=0, similar_series_percent=0, similar_length_weight=1)
+        terms = dict(TERMS_ON, similar_base_percent=0, similar_series_percent=0, similar_length_weight=1)
         posts = [dict(item(str(i), 'feed', age=1 if i == 0 else None),
                       estimated_minutes=10) for i in range(5)]
         posts.append(item('unrelated', 'other'))
@@ -41,7 +41,7 @@ class ScoreExplanationTests(unittest.TestCase):
         self.assertTrue(all('above_matches' not in c for c in visible))
 
     def test_paging_preserves_explanations(self):
-        terms = dict(ranking.DEFAULT_TERMS, similar_base_percent=0, similar_series_percent=0)
+        terms = dict(TERMS_ON, similar_base_percent=0, similar_series_percent=0)
         posts = [item(str(i), 'feed', date=NOW - i * 86400) for i in range(12)]
         ranked = ranking.rank('score', posts, NOW, terms, lazy=True)
         first, _ = ranked.read(4)
@@ -51,7 +51,7 @@ class ScoreExplanationTests(unittest.TestCase):
         self.assertEqual(explained_first, explained_full[:4])
 
     def test_zero_components_still_count_in_normalization(self):
-        terms = dict(ranking.DEFAULT_TERMS, similar_base_percent=0, similar_series_percent=0, similar_length_weight=1,
+        terms = dict(TERMS_ON, similar_base_percent=0, similar_series_percent=0, similar_length_weight=1,
                        similar_publish_weight=1, similar_days=10)
         first = dict(item('first', 'feed'), estimated_minutes=10)
         second = dict(item('second', 'feed', date=NOW - 20 * 86400), estimated_minutes=10)

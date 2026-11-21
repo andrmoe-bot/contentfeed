@@ -8,6 +8,8 @@ import ranking
 
 
 NOW = 2_000_000
+# These tests were written with both similarity penalties and page-load fetching on; they're off by default.
+TERMS_ON = dict(ranking.DEFAULT_TERMS, similar_penalty=-40, above_similarity_penalty=-15, enrich_count=5)
 
 
 def item(url, sub=None, age=None, date=NOW):
@@ -49,7 +51,7 @@ class ViewedPenaltyTests(unittest.TestCase):
             with self.subTest(bonus=bonus):
                 post = item('episode', 'feed', age=48)
                 post.update(next_after='previous episode')
-                terms = dict(ranking.DEFAULT_TERMS, next_up_bonus=bonus)
+                terms = dict(TERMS_ON, next_up_bonus=bonus)
                 reasons = ranking.score(post, NOW, terms)
                 seen = [(label, points) for label, points in reasons if label.startswith('opened')]
                 self.assertEqual(len(seen), 1)
@@ -67,17 +69,17 @@ class TagTests(unittest.TestCase):
                 with self.subTest(tag=tag, age=age):
                     plain = item('post', 'feed', age=age)
                     tagged = dict(plain, color=tag)
-                    reasons = ranking.score(tagged, NOW, ranking.DEFAULT_TERMS)
-                    self.assertEqual(reasons, ranking.score(plain, NOW, ranking.DEFAULT_TERMS)
+                    reasons = ranking.score(tagged, NOW, TERMS_ON)
+                    self.assertEqual(reasons, ranking.score(plain, NOW, TERMS_ON)
                                      + [(f"tagged “{ranking.TAGS[tag]}”", points)])
-                    terms = dict(ranking.DEFAULT_TERMS, **{f"{tag}_points": 7})
+                    terms = dict(TERMS_ON, **{f"{tag}_points": 7})
                     self.assertEqual(ranking.score(tagged, NOW, terms)[-1][1], 7)
                     terms[f"{tag}_points"] = 0
                     self.assertEqual(ranking.score(tagged, NOW, terms), ranking.score(plain, NOW, terms))
 
     def test_tasks_get_tag_points_too(self):
         task = dict(item('task'), calendar_kind='task', color='red')
-        self.assertEqual(ranking.score(task, NOW, ranking.DEFAULT_TERMS)[-1], ("tagged “don't show again”", -1000))
+        self.assertEqual(ranking.score(task, NOW, TERMS_ON)[-1], ("tagged “don't show again”", -1000))
 
 
 class AgeTests(unittest.TestCase):
@@ -91,7 +93,7 @@ class AgeTests(unittest.TestCase):
         for sub in [None, 'feed']:
             for weight, first in [(2, 'old'), (-2, 'new')]:
                 with self.subTest(sub=sub, weight=weight):
-                    terms = dict(ranking.DEFAULT_TERMS, similar_base_percent=0, similar_series_percent=0, age_per_year=weight,
+                    terms = dict(TERMS_ON, similar_base_percent=0, similar_series_percent=0, age_per_year=weight,
                                    above_similarity_penalty=0)
                     ranking.check_terms(terms)
                     ranked = ranking.rank('score', [item('old', sub, date=NOW - 36 * 3600),
@@ -103,7 +105,7 @@ class AgeTests(unittest.TestCase):
                                                        'points': ranking.points(1.5 / 365 * weight)}])
 
     def test_one_year_uses_configured_points(self):
-        terms = dict(ranking.DEFAULT_TERMS, age_per_year=-12)
+        terms = dict(TERMS_ON, age_per_year=-12)
         ranked = ranking.rank('score', [item('old', date=NOW - 365 * 86400)], NOW, terms)
         self.assertEqual(ranked[0]['score'], -12)
 
@@ -111,20 +113,20 @@ class AgeTests(unittest.TestCase):
         for key in ranking.SIGNED:
             for value in [-12, 12]:
                 with self.subTest(key=key, value=value):
-                    self.assertEqual(ranking.check_terms(dict(ranking.DEFAULT_TERMS, **{key: value}))[key], value)
+                    self.assertEqual(ranking.check_terms(dict(TERMS_ON, **{key: value}))[key], value)
 
     def test_series_and_recent_similarity_add_signed_points(self):
         for value in [-12, 12]:
             post = dict(item('post', 'feed'), series_first='First')
-            terms = dict(ranking.DEFAULT_TERMS, series_penalty=value)
+            terms = dict(TERMS_ON, series_penalty=value)
             self.assertEqual(sum(p for _, p in ranking.score(post, NOW, terms)), value)
             post = item('seen', 'feed', age=0)
-            terms = dict(ranking.DEFAULT_TERMS, seen_bonus=0, similar_penalty=value)
+            terms = dict(TERMS_ON, seen_bonus=0, similar_penalty=value)
             ranked = ranking.rank('score', [post], NOW, terms)
             self.assertEqual(ranked[0]['score'], value)
 
     def test_whole_hours_and_future_dates(self):
-        terms = dict(ranking.DEFAULT_TERMS, similar_base_percent=0, similar_series_percent=0, age_per_year=-365 / 7)
+        terms = dict(TERMS_ON, similar_base_percent=0, similar_series_percent=0, age_per_year=-365 / 7)
         for seconds, expected in [(-86400, 0), (3599, 0), (3600, -0.01),
                                   (7199, -0.01), (86400, -0.14),
                                   (302400, -0.5), (604800, -1), (907200, -1.5)]:
@@ -146,7 +148,7 @@ class SimilarityTests(unittest.TestCase):
                  (24, 0, 40, 1, 1), (24, 30, 0, 1, 1)]
         for hours, days, penalty, publish, length in cases:
             with self.subTest(hours=hours, days=days, penalty=penalty, publish=publish, length=length):
-                w = dict(ranking.DEFAULT_TERMS, similar_base_percent=0, similar_series_percent=0, similar_hours=hours,
+                w = dict(TERMS_ON, similar_base_percent=0, similar_series_percent=0, similar_hours=hours,
                          similar_days=days, similar_penalty=penalty,
                          similar_publish_weight=publish, similar_length_weight=length)
                 expected, actual = copy.deepcopy(items), copy.deepcopy(items)
@@ -155,7 +157,7 @@ class SimilarityTests(unittest.TestCase):
                 self.assertEqual(actual, expected)
 
     def test_linear_decay_and_cutoff(self):
-        w = dict(ranking.DEFAULT_TERMS, similar_base_percent=0, similar_series_percent=0, seen_bonus=0)
+        w = dict(TERMS_ON, similar_base_percent=0, similar_series_percent=0, seen_bonus=0)
         for age, expected in [(0, -40), (6, -30), (12, -20), (23, -1.67), (24, 0), (25, 0)]:
             with self.subTest(age=age):
                 it = item("self", age=age)
@@ -166,20 +168,20 @@ class SimilarityTests(unittest.TestCase):
         candidate = item("candidate", "a")
         old = item("old", "a", age=23)
         fresh = item("fresh", "a", age=0, date=NOW - 15 * 86400)
-        ranking.similar_to_recent([candidate, old, fresh], NOW, ranking.DEFAULT_TERMS)
+        ranking.similar_to_recent([candidate, old, fresh], NOW, TERMS_ON)
         self.assertEqual(candidate["similar"]["title"], "fresh")
         self.assertEqual(candidate["similar"]["strength"], 75)
 
     def test_self_wins_ties(self):
         first, second = item("first", "a", 0), item("second", "a", 0)
-        ranking.similar_to_recent([first, second], NOW, ranking.DEFAULT_TERMS)
+        ranking.similar_to_recent([first, second], NOW, TERMS_ON)
         self.assertEqual(first["similar"]["why"], "itself")
         self.assertEqual(second["similar"]["why"], "itself")
 
     def test_shared_tags_do_not_match(self):
         first, second = item("first", "a"), item("second", "b", 0)
         first["tags"] = second["tags"] = ["science"]
-        ranking.similar_to_recent([first, second], NOW, ranking.DEFAULT_TERMS)
+        ranking.similar_to_recent([first, second], NOW, TERMS_ON)
         self.assertIsNone(first["similar"])
 
     def test_only_same_subscription_is_compared_at_scale(self):
@@ -193,13 +195,13 @@ class SimilarityTests(unittest.TestCase):
             calls += 1
             return original(metric, *args)
         with patch.object(ranking.SimilarityMetric, "percent", counted):
-            ranking.similar_to_recent(items, NOW, ranking.DEFAULT_TERMS)
+            ranking.similar_to_recent(items, NOW, TERMS_ON)
         self.assertEqual(calls, 19_900)  # 20,000 same-sub candidates, including 100 self matches
 
 
 class NormalizedSimilarityTests(unittest.TestCase):
     def terms(self, publish=1, length=1, **kwargs):
-        return dict(ranking.DEFAULT_TERMS, similar_base_percent=0, similar_series_percent=0, similar_publish_weight=publish,
+        return dict(TERMS_ON, similar_base_percent=0, similar_series_percent=0, similar_publish_weight=publish,
                     similar_length_weight=length, **kwargs)
 
     def pair(self, days=15, first=10, second=20):
@@ -287,15 +289,15 @@ class NormalizedSimilarityTests(unittest.TestCase):
     def test_default_weights_blend_base_and_publish_time(self):
         self.assertEqual(ranking.DEFAULT_TERMS['similar_length_weight'], 0)
         for days, expected in [(0, 100), (7, 88), (14, 77), (30, 50)]:
-            self.assertEqual(ranking.similarity(*self.pair(days, 1, 1000), ranking.DEFAULT_TERMS)[0], expected)
+            self.assertEqual(ranking.similarity(*self.pair(days, 1, 1000), TERMS_ON)[0], expected)
 
     def test_component_weights_are_validated(self):
         for key in ['similar_publish_weight', 'similar_length_weight']:
             for invalid in [-1, True, '1', float('nan'), float('inf'), ranking.LIMIT + 1]:
                 with self.subTest(key=key, value=invalid), self.assertRaises(ValueError):
-                    ranking.check_terms(dict(ranking.DEFAULT_TERMS, similar_base_percent=0, similar_series_percent=0, **{key: invalid}))
+                    ranking.check_terms(dict(TERMS_ON, similar_base_percent=0, similar_series_percent=0, **{key: invalid}))
             for valid in [0, 0.5, ranking.LIMIT]:
-                self.assertEqual(ranking.check_terms(dict(ranking.DEFAULT_TERMS, similar_base_percent=0, similar_series_percent=0, **{key: valid}))[key], valid)
+                self.assertEqual(ranking.check_terms(dict(TERMS_ON, similar_base_percent=0, similar_series_percent=0, **{key: valid}))[key], valid)
 
     def test_recency_decay_is_applied_after_combining_components(self):
         first, second = self.pair(days=15)
@@ -322,7 +324,7 @@ class NormalizedSimilarityTests(unittest.TestCase):
         self.assertEqual(candidate['similar']['strength'], 56.25)
 
     def test_penalty_sums_all_matches_not_just_the_strongest(self):
-        terms = dict(ranking.DEFAULT_TERMS, similar_base_percent=0, similar_series_percent=0, seen_bonus=0, above_similarity_penalty=0)
+        terms = dict(TERMS_ON, similar_base_percent=0, similar_series_percent=0, seen_bonus=0, above_similarity_penalty=0)
         candidate = item('candidate', 'a')
         fresh = item('fresh', 'a', age=0, date=NOW - 15 * 86400)
         older = item('older', 'a', age=6, date=NOW - 15 * 86400)
