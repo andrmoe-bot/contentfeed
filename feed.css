@@ -146,3 +146,7 @@ nav button[aria-expanded="true"] { font-weight: 600; }
 .mode-bar label { font-weight: 600; }
 .mode-bar select { padding: 6px 8px; font-size: 14px; }
 #mode-remove[hidden] { display: none; }
+.mode-pattern[hidden] { display: none; }
+.mode-pattern { display: grid; gap: 4px; }
+.mode-pattern label { font-weight: 600; }
+.mode-pattern input { font: 14px ui-monospace, monospace; padding: 6px 8px; }

@@ -331,11 +331,13 @@ function showModeBar() {
     el("option", { value: "+new" }, "New mode…"));
   modeSelect.value = mode.source === "chosen" ? mode.name : "";
   document.getElementById("mode-remove").hidden = mode.name === "Normal";
+  document.getElementById("mode-pattern-row").hidden = mode.name === "Normal";
+  if (document.activeElement !== patternBox) patternBox.value = modeList.find((m) => m.name === mode.name)?.pattern ?? "";
   document.getElementById("mode-hint").textContent =
     mode.source === "calendar" ? `These are ${mode.name}'s settings, on during “${mode.event}”.`
     : mode.source === "chosen" ? `These are ${mode.name}'s settings, until you pick Auto.`
-    : modeList.length ? "These are the normal settings. A mode is on during a free (not busy) calendar event with its name in the title."
-    : "Add a mode to use other settings during free (not busy) calendar events with its name in the title, such as Work.";
+    : modeList.length ? "These are the normal settings. A mode is on during a free (not busy) calendar event that matches its pattern."
+    : "Add a mode to use other settings, such as during free (not busy) calendar events for work.";
 }
 
 // Mode changes save what you were changing first, then show the new mode's settings and feed.
@@ -354,9 +356,26 @@ async function modeRequest(body) {
 modeSelect.addEventListener("change", () => {
   const value = modeSelect.value;
   if (value !== "+new") return modeRequest({ choose: value || null });
-  const name = prompt(`Name of the new mode. It starts with ${mode.name}'s settings and is on during free calendar events with its name in the title.`);
+  const name = prompt(`Name of the new mode. It starts with ${mode.name}'s settings. Free calendar events with the name in their title turn it on; you can change which below.`);
   if (name === null || !name.trim()) return showModeBar();
   modeRequest({ add: name.trim(), copy_from: mode.name });
+});
+
+// The pattern is saved when you press Enter or leave the box. It may turn the mode on or off, so the
+// feed is shown again. An invalid one stays in the box with the server's error, to fix.
+const patternBox = document.getElementById("mode-pattern");
+patternBox.addEventListener("change", async () => {
+  const shown = modeList.find((m) => m.name === mode.name);
+  if (!shown || patternBox.value === shown.pattern) return;
+  await saving;
+  const { ok, data } = await api("/api/modes", { pattern: patternBox.value, mode: mode.name });
+  if (!ok) return panelSay(data.error || "Couldn't save the pattern.", true);
+  panelSay("Saved the pattern.");
+  const focused = document.activeElement === patternBox;
+  if (focused) patternBox.blur();  // so showMode shows the pattern as saved
+  showMode(data);
+  if (focused) patternBox.focus();
+  load({ reorder: true });
 });
 
 document.getElementById("mode-remove").addEventListener("click", () => {

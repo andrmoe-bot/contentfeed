@@ -65,12 +65,28 @@ class ModeTests(unittest.TestCase):
     def set_events(self, *events):
         server.subscriptions[self.cal_url]["events"] = list(events)
 
-    def test_names_mode_matches_whole_words_ignoring_case(self):
-        self.assertTrue(server.names_mode("Work block", "Work"))
-        self.assertTrue(server.names_mode("Deep work", "Work"))
-        self.assertTrue(server.names_mode("deep-work", "work"))
-        self.assertFalse(server.names_mode("Homework", "Work"))
-        self.assertTrue(server.names_mode("Kids (C++)", "C++"))
+    def test_patterns_are_regular_expressions_ignoring_case(self):
+        self.assertTrue(server.matches_pattern("Deep work", r"\bwork\b"))
+        self.assertFalse(server.matches_pattern("Homework", r"\bwork\b"))
+        self.assertTrue(server.matches_pattern("Focus: thesis", r"^(focus|deep work)\b"))
+        self.assertFalse(server.matches_pattern("Anything", ""))  # empty: never on from the calendar
+
+    def test_a_new_mode_matches_its_name_and_the_pattern_can_be_changed(self):
+        self.assertIsNone(server.add_mode("C++"))
+        self.assertEqual(server.modes[0]["pattern"], r"\bC\+\+\b")
+        self.assertIsNone(server.add_mode("Work"))
+        self.assertEqual(server.set_mode_pattern("work", r"^(work|focus)"), None)
+        self.assertEqual(server.modes[1]["pattern"], r"^(work|focus)")
+        self.assertIsNone(server.choose_mode(None))
+        now = time.time()
+        self.set_events(event("focus", now - 60, now + 3600, free=True, title="Focus time"))
+        self.assertEqual(server.feed("score")["mode"], {"name": "Work", "source": "calendar", "event": "Focus time"})
+        self.assertTrue(server.set_mode_pattern("Work", "(").startswith("the pattern isn't a valid regular expression"))
+        self.assertEqual(server.set_mode_pattern("Work", 5), "the pattern must be text")
+        self.assertEqual(server.set_mode_pattern("Work", "x" * 501), "the pattern can be at most 500 characters")
+        self.assertEqual(server.set_mode_pattern("Play", "x"), "there's no mode called Play")
+        self.assertIsNone(server.set_mode_pattern("Work", ""))
+        self.assertEqual(server.feed("score")["mode"]["name"], "Normal")
 
     def test_a_free_event_naming_a_mode_turns_it_on_while_it_lasts(self):
         self.assertIsNone(server.add_mode("Work"))
@@ -98,7 +114,7 @@ class ModeTests(unittest.TestCase):
     def test_a_new_mode_copies_settings_and_a_chosen_mode_beats_the_calendar(self):
         ranking.TERMS["video_bonus"] = 5
         self.assertIsNone(server.add_mode(" Work ", "Normal"))
-        self.assertEqual(server.settings()["modes"], [{"name": "Work", "terms": dict(ranking.TERMS)}])
+        self.assertEqual(server.settings()["modes"], [{"name": "Work", "pattern": r"\bWork\b", "terms": dict(ranking.TERMS)}])
         self.assertEqual(server.settings()["mode"], {"name": "Work", "source": "chosen", "event": None})
         now = time.time()
         self.set_events(event("work", now - 60, now + 3600, free=True, title="Work"))
@@ -134,9 +150,11 @@ class ModeTests(unittest.TestCase):
         terms = {k: v for k, v in ranking.DEFAULT_TERMS.items() if k != "post_limit"}
         server.SETTINGS_FILE.write_text(json.dumps({"version": 2, "terms": ranking.DEFAULT_TERMS, "modes": [
             {"name": "Work", "terms": dict(terms, gone=1)}, {"name": "Bad", "terms": dict(terms, task_bonus="x")},
+            {"name": "Broken", "pattern": "(", "terms": terms}, {"name": "Focus", "pattern": "^focus", "terms": terms},
             {"name": ""}, "junk"], "mode_choice": "Missing"}))
         server.load_settings()
-        self.assertEqual([m["name"] for m in server.modes], ["Work"])
+        self.assertEqual([(m["name"], m["pattern"]) for m in server.modes],
+                         [("Work", r"\bWork\b"), ("Broken", ""), ("Focus", "^focus")])
         self.assertEqual(server.mode_terms("Work"), ranking.DEFAULT_TERMS)
         self.assertEqual(server.mode_choice, {})
 
@@ -147,6 +165,9 @@ class ModeTests(unittest.TestCase):
         self.assertEqual((code, body["mode"]["source"]), (200, "default"))
         body, code = server.settings_api({"terms": dict(ranking.DEFAULT_TERMS, white_points=0), "mode": "Work"})
         self.assertEqual((code, body["modes"][0]["terms"]["white_points"]), (200, 0))
+        body, code = server.modes_api({"pattern": "^deep", "mode": "Work"})
+        self.assertEqual((code, body["modes"][0]["pattern"]), (200, "^deep"))
+        self.assertEqual(server.modes_api({"pattern": "[", "mode": "Work"})[1], 400)
         body, code = server.modes_api({"remove": "Work"})
         self.assertEqual((code, body["modes"]), (200, []))
         self.assertEqual(server.modes_api({})[1], 400)

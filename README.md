@@ -392,8 +392,11 @@ starts as a copy of the settings shown, and you change it like any other. Normal
 effect when no mode is on.
 
 With Mode set to Auto (the default), a mode is on while a calendar event marked free (not busy)
-takes place whose title has the mode's name in it as whole words, ignoring case: "Work block" and
-"Deep work" turn Work on, "Homework" doesn't. Of several, the mode added first wins. Picking a mode
+takes place whose title matches the mode's **Calendar events matching** pattern: a regular
+expression (Python syntax) searched for anywhere in the title, ignoring case. A new mode's pattern
+is its name as a whole word, such as `\bWork\b`, which matches "Work block" and "Deep work" but not
+"Homework"; `^(work|focus)\b` would match titles starting with either word. An empty pattern means
+the calendar never turns the mode on. Of several matching modes, the one added first wins. Picking a mode
 or Normal in the list uses it until you pick Auto again. The panel always shows and changes the
 settings of the mode in effect, the status line names it, unless it's Normal, and when it changes,
 such as when a work block starts, the feed is shown again from the top. Remove deletes the mode

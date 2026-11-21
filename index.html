@@ -42,6 +42,12 @@
     <button type="button" id="mode-remove" hidden>Remove</button>
   </div>
   <p class="hint" id="mode-hint"></p>
+  <div class="mode-pattern" id="mode-pattern-row" hidden>
+    <label for="mode-pattern">Calendar events matching</label>
+    <input id="mode-pattern" type="text" spellcheck="false" autocomplete="off" placeholder="nothing">
+    <p class="hint">A regular expression, ignoring case, searched for in the titles of free (not busy)
+      events. While one takes place, Auto turns this mode on. Empty: never.</p>
+  </div>
   <p class="hint">Each post's score adds up these points, and the feed shows the highest first. A card's
     “Score” lists its points. Changes show as you slide and are saved when you let go.</p>
   <div id="settings"></div>
