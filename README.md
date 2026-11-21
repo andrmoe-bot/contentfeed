@@ -60,7 +60,7 @@ It holds:
   and `colors.json`; they're moved into `state.json` at startup and the old files kept as `.bak`.
   Older versions also recorded skips (the old white dot); at startup, an untagged item whose last
   skip came after you last opened it is tagged "maybe later" instead.
-- `settings.json`: your score settings from the feed's score panel, if you changed them
+- `settings.json`: your score settings from the feed's score panel, if you changed them, and your modes
 - `stop.json`: the stop-watching timer, if you set one (see Stop watching)
 - `jellyfin.json`: logins for Jellyfin servers you subscribe to (see Jellyfin), if any
 - `caldav.json`: logins for private CalDAV calendars you subscribe to, if any
@@ -118,8 +118,9 @@ It can also be a blog or news page without a feed (see Pages without a feed), a 
 or a Jellyfin server (see Jellyfin).
 Incomplete tasks appear as cards; events don't — they take place when scheduled, not whenever the
 feed happens to show them, so they work through the stop-watching timer only (see Stop watching):
-every event that hasn't ended acts as a stop time at its start minus the Event lead time setting,
-so posts you couldn't finish before you need to leave for it are pushed down. The score panel
+every busy event that hasn't ended acts as a stop time at its start minus the Event lead time setting,
+so posts you couldn't finish before you need to leave for it are pushed down. Events marked free
+(not busy) don't stop watching; they can turn a mode on instead (see Modes). The score panel
 controls task urgency during the final 30 days before a deadline. Tasks also get the
 similar-posts-above penalty against other tasks in the same calendar, and the fixed Task term
 adds points to every task (default 0). The Task priority term gives a task points by its
@@ -322,7 +323,7 @@ Opening an item (clicking its link, middle-clicking it, or playing its video) re
 last viewed it. Scrolling past doesn't count. Nothing is hidden: an item you've opened scores lower (see Ranking). The card says when you
 viewed it.
 
-The feed's order changes only when you load the page, change a setting or the stop timer, or
+The feed's order changes only when you load the page, change a setting, the mode or the stop timer, or
 search, and then the page shows the top of the feed; "Show more" adds the next posts below the ones
 shown. Otherwise nothing moves while you're watching: the page checks the server in the background
 and updates each card's score, tag and viewed time (and the status line and stop state) in place.
@@ -360,12 +361,13 @@ at startup. The "Stop mode" button next to the timer switches between stop mode 
 manually at any time — the feed is hidden (and playback stopped) until you switch back, whatever the
 server's stop state says.
 
-Events use the same system with a lead time: every event that hasn't ended acts as a stop time at
+Events use the same system with a lead time: every busy event that hasn't ended acts as a stop time at
 its start minus the **Event lead time** setting in the score panel (30 minutes by default; 0 stops
 exactly at the event's start). The earliest stop in effect — your timer or an event's — is the one
 counts. So with dinner at 19:00 and the default lead, posts you couldn't finish by 18:30 are pushed
 down. Events themselves never appear as feed cards; the notice above the stopped
-feed names the event. Ended events don't stop watching anymore.
+feed names the event. Ended events don't stop watching anymore, and neither do events marked free
+(not busy) in your calendar, such as time set off for work: those turn modes on (see Modes).
 
 When the stop time runs out — the timer, or an event's lead time — any video or other media playing
 is force-stopped, and the page sounds a short audio alert once per stop, next to the notice.
@@ -381,6 +383,24 @@ Each card has three dots in its bottom corner, each showing the points it adds:
 A tag only adds its points to the item's score; change them in the score panel (see Ranking). Tagging
 an item doesn't count as opening it, so it neither gets the "seen" points nor makes the post after it
 next up. Items start untagged; click the dot of an item's tag again to remove the tag.
+
+## Modes
+
+A mode is a separate set of settings, such as Work with a post limit of 0 for an empty page, or
+points for tasks. Add one with "New mode…" in the Mode list at the top of the settings panel; it
+starts as a copy of the settings shown, and you change it like any other. Normal is the settings in
+effect when no mode is on.
+
+With Mode set to Auto (the default), a mode is on while a calendar event marked free (not busy)
+takes place whose title matches the mode's **Calendar events matching** pattern: a regular
+expression (Python syntax) searched for anywhere in the title, ignoring case. A new mode's pattern
+is its name as a whole word, such as `\bWork\b`, which matches "Work block" and "Deep work" but not
+"Homework"; `^(work|focus)\b` would match titles starting with either word. An empty pattern means
+the calendar never turns the mode on. Of several matching modes, the one added first wins. Picking a mode
+or Normal in the list uses it until you pick Auto again. The panel always shows and changes the
+settings of the mode in effect, the status line names it, unless it's Normal, and when it changes,
+such as when a work block starts, the feed is shown again from the top. Remove deletes the mode
+shown and its settings. Modes are saved in `settings.json` with the normal settings.
 
 ## Ranking
 

@@ -125,6 +125,9 @@ viewed: dict[str, float] = {}  # url -> unix time you last opened it
 colors: dict[str, str] = {}  # url -> the tag you gave it (see ranking.TAGS); most items have none
 stop: dict = {}  # {"stop_at": unix time}: the stop-watching timer; empty when unset. Once passed,
 # it has fired: the feed stops showing content until the timer is cleared
+# Modes, each with its own settings, saved in settings.json with the normal settings (ranking.TERMS):
+modes: list[dict] = []  # [{"name": str, "pattern": regex, "terms": dict}], in the order they were added
+mode_choice: dict = {}  # {"name": mode}: the mode you chose in the panel; empty to follow the calendar
 subscriptions: dict[str, dict] = {}  # feeds.txt url -> resolved feed, its posts and fetch status
 pending: set[str] = set()
 feed_interval = 30 * 60  # seconds between checks of each subscription; set by --feed-interval
@@ -791,8 +794,73 @@ def mark_older_red(url: str, age: float) -> int | None:
 
 
 def settings() -> dict:
-    return {"terms": ranking.TERMS, "defaults": ranking.DEFAULT_TERMS, "limits": ranking.TERM_LIMITS,
-            "stop_at": stop.get("stop_at")}
+    """The settings panel's data: the normal settings (terms), each mode's, the active mode and how it
+    was chosen (see active_mode), the defaults and limits, and the stop timer."""
+    with lock:
+        mode = active_mode(calendar_events(list(subscriptions)), time.time())
+        return {"terms": dict(ranking.TERMS), "modes": [mode_data(m) for m in modes],
+                "mode": mode, "defaults": ranking.DEFAULT_TERMS, "limits": ranking.TERM_LIMITS,
+                "stop_at": stop.get("stop_at")}
+
+
+NORMAL = "Normal"  # the mode in effect when no other is: its settings are ranking.TERMS
+MODE_NAME_MAX = 40
+
+
+def find_mode(name: str) -> dict | None:
+    """The mode with this name, ignoring case, or None. Call with lock held."""
+    return next((m for m in modes if m["name"].casefold() == name.casefold()), None)
+
+
+def mode_terms(name: str) -> dict:
+    """A mode's settings; the normal settings for Normal or a mode that doesn't exist. Call with lock held."""
+    mode = find_mode(name) if name != NORMAL else None
+    return mode["terms"] if mode else ranking.TERMS
+
+
+PATTERN_MAX = 500
+
+
+def mode_data(mode: dict) -> dict:
+    """A mode as saved and sent to the panel."""
+    return {"name": mode["name"], "pattern": mode["pattern"], "terms": dict(mode["terms"])}
+
+
+def pattern_error(pattern) -> str | None:
+    """Why this can't be a mode's calendar pattern, or None if it can."""
+    if not isinstance(pattern, str):
+        return "the pattern must be text"
+    if len(pattern) > PATTERN_MAX:
+        return f"the pattern can be at most {PATTERN_MAX} characters"
+    try:
+        re.compile(pattern)
+    except re.error as e:
+        return f"the pattern isn't a valid regular expression: {e}"
+    return None
+
+
+def matches_pattern(title: str, pattern: str) -> bool:
+    """Whether an event title matches a mode's pattern: a regular expression found anywhere in the
+    title, ignoring case. An empty pattern matches nothing, so the calendar never turns the mode on."""
+    return bool(pattern) and re.search(pattern, title, re.IGNORECASE) is not None
+
+
+def active_mode(events: list[dict], now: float) -> dict:
+    """The mode in effect: {"name", "source", "event"}. The mode you chose in the panel, if any
+    ("source": "chosen"); else the first mode whose pattern matches the title of a free (not busy)
+    calendar event taking place now ("calendar", with the event's title); else Normal ("default"). Free events
+    don't stop watching (see ranking.effective_stop); they turn modes on instead. Call with lock held."""
+    chosen = mode_choice.get("name")
+    if chosen == NORMAL or (chosen and find_mode(chosen)):
+        return {"name": chosen, "source": "chosen", "event": None}
+    ongoing = [e for e in events if e.get("calendar_kind") == "event" and e.get("free")
+               and e.get("calendar_start") is not None and e.get("deadline") is not None
+               and e["calendar_start"] <= now < e["deadline"]]
+    for mode in modes:
+        event = next((e for e in ongoing if matches_pattern(e.get("title") or "", mode["pattern"])), None)
+        if event:
+            return {"name": mode["name"], "source": "calendar", "event": event.get("title")}
+    return {"name": NORMAL, "source": "default", "event": None}
 
 
 def set_stop(value) -> str | None:
@@ -816,15 +884,96 @@ def load_stop():
         stop["stop_at"] = float(value)
 
 
-def save_settings(terms) -> str | None:
-    """Set the score ranker's terms from the feed's score panel. Returns an error message, or None."""
+def write_settings():
+    """Save the normal settings, the modes and the mode you chose to settings.json."""
+    with lock:
+        data = {"version": SETTINGS_VERSION, "terms": dict(ranking.TERMS),
+                "modes": [mode_data(m) for m in modes],
+                "mode_choice": mode_choice.get("name")}
+    save_json(SETTINGS_FILE, data)
+
+
+def save_settings(terms, mode: str = NORMAL) -> str | None:
+    """Set a mode's terms (Normal's by default) from the feed's settings panel. Returns an error
+    message, or None."""
     try:
         checked = ranking.check_terms(terms if isinstance(terms, dict) else {})
     except ValueError as e:
         return str(e)
     with lock:
-        ranking.TERMS.update(checked)
-    save_json(SETTINGS_FILE, {"version": SETTINGS_VERSION, "terms": checked})
+        target = ranking.TERMS if mode == NORMAL else (find_mode(mode) or {}).get("terms")
+        if target is None:
+            return f"there's no mode called {mode}"
+        target.update(checked)
+    write_settings()
+    return None
+
+
+def mode_name_error(name) -> str | None:
+    """Why a new mode can't have this name, or None if it can. Call with lock held."""
+    if not isinstance(name, str) or not name.strip():
+        return "a mode needs a name"
+    if len(name.strip()) > MODE_NAME_MAX:
+        return f"a mode's name can be at most {MODE_NAME_MAX} characters"
+    if not name.isprintable():
+        return "a mode's name can't have control characters"
+    if name.strip().casefold() in (NORMAL.casefold(), "auto") or find_mode(name.strip()):
+        return f"there's already a mode called {name.strip()}"
+    return None
+
+
+def add_mode(name, copy_from: str = NORMAL) -> str | None:
+    """Add a mode whose settings start as a copy of another mode's, and switch to it, so the panel
+    shows its settings to change. Its calendar pattern starts as its name, as a whole word. Returns an
+    error message, or None."""
+    with lock:
+        error = mode_name_error(name)
+        if error:
+            return error
+        name = name.strip()
+        modes.append({"name": name, "pattern": rf"\b{re.escape(name)}\b", "terms": dict(mode_terms(copy_from))})
+        mode_choice["name"] = name
+    write_settings()
+    return None
+
+
+def set_mode_pattern(name, pattern) -> str | None:
+    """Set the regular expression for the calendar events that turn a mode on. Returns an error, or None."""
+    error = pattern_error(pattern)
+    if error:
+        return error
+    with lock:
+        mode = find_mode(name) if isinstance(name, str) else None
+        if mode is None:
+            return f"there's no mode called {name}"
+        mode["pattern"] = pattern
+    write_settings()
+    return None
+
+
+def remove_mode(name) -> str | None:
+    """Remove a mode and its settings. If you had chosen it, the calendar decides the mode again."""
+    with lock:
+        mode = find_mode(name) if isinstance(name, str) else None
+        if mode is None:
+            return f"there's no mode called {name}"
+        modes.remove(mode)
+        if (mode_choice.get("name") or "").casefold() == mode["name"].casefold():
+            mode_choice.clear()
+    write_settings()
+    return None
+
+
+def choose_mode(name) -> str | None:
+    """Use a mode until you choose another, or follow the calendar again with None."""
+    with lock:
+        if name is None:
+            mode_choice.clear()
+        elif name == NORMAL or (isinstance(name, str) and find_mode(name)):
+            mode_choice["name"] = name if name == NORMAL else find_mode(name)["name"]
+        else:
+            return f"there's no mode called {name}"
+    write_settings()
     return None
 
 
@@ -857,17 +1006,41 @@ def migrate_terms(data: dict) -> dict | None:
     return terms
 
 
-def load_settings():
-    terms = migrate_terms(load_json(SETTINGS_FILE))
-    if terms is None:
-        return
-    # Settings saved by another version may lack newer terms, which keep their defaults, or have
-    # ones that no longer exist, which are dropped.
+def complete_terms(terms: dict) -> dict:
+    """Saved terms, checked. Settings saved by another version may lack newer terms, which keep their
+    defaults, or have ones that no longer exist, which are dropped. ValueError if a value is wrong."""
     terms = {k: v for k, v in terms.items() if k in ranking.DEFAULT_TERMS}
-    try:
-        ranking.TERMS.update(ranking.check_terms({**ranking.DEFAULT_TERMS, **terms}))
-    except ValueError as e:
-        print(f"Ignoring {SETTINGS_FILE}: {e}")
+    return ranking.check_terms({**ranking.DEFAULT_TERMS, **terms})
+
+
+def load_settings():
+    data = load_json(SETTINGS_FILE)
+    terms = migrate_terms(data)
+    if terms is not None:
+        try:
+            ranking.TERMS.update(complete_terms(terms))
+        except ValueError as e:
+            print(f"Ignoring the normal settings in {SETTINGS_FILE}: {e}")
+    saved_modes = data.get("modes") if isinstance(data.get("modes"), list) else []
+    with lock:
+        modes.clear()
+        for mode in saved_modes:
+            if not isinstance(mode, dict) or mode_name_error(mode.get("name")):
+                continue
+            mode_terms_saved = migrate_terms({"version": data.get("version", 0), "terms": mode.get("terms")})
+            pattern = mode.get("pattern", rf"\b{re.escape(mode['name'].strip())}\b")
+            if pattern_error(pattern):
+                print(f"Ignoring mode {mode['name']}'s calendar pattern in {SETTINGS_FILE}: {pattern_error(pattern)}")
+                pattern = ""
+            try:
+                modes.append({"name": mode["name"].strip(), "pattern": pattern,
+                              "terms": complete_terms(mode_terms_saved or {})})
+            except ValueError as e:
+                print(f"Ignoring mode {mode['name']} in {SETTINGS_FILE}: {e}")
+        mode_choice.clear()
+        chosen = data.get("mode_choice")
+        if chosen == NORMAL or (isinstance(chosen, str) and find_mode(chosen)):
+            mode_choice["name"] = chosen
 
 
 def series_state(subs: dict[str, list[str]]) -> tuple[dict[str, str], dict[str, str]]:
@@ -1100,8 +1273,8 @@ def ranking_for(ranker: str, terms: dict, entries: dict, subs: dict, search: str
 def feed(ranker: str, limit: int = MAX_ITEMS_SHOWN, terms: dict | None = None, *, enrich: bool = False,
          search: str = "", post_url: str | None = None, subscription_url: str | None = None) -> dict:
     """The ranked feed: everything, or a subscription's posts (with its next up), or a post's page
-    (see post_details). terms other than the saved ones preview them, such as while you move a slider."""
-    terms = terms or ranking.TERMS
+    (see post_details). It uses the active mode's settings (see active_mode); terms other than the saved
+    ones preview them, such as while you move a slider."""
     entries = read_entries()
     subs = all_subs = read_entries(FEEDS_FILE)
     if subscription_url is not None:
@@ -1118,8 +1291,10 @@ def feed(ranker: str, limit: int = MAX_ITEMS_SHOWN, terms: dict | None = None, *
     with lock:
         # Every subscribed calendar's events stop watching, on every page, not only their own subscription's.
         events = calendar_events(all_subs)
+        mode = active_mode(events, now)
+        terms = terms or dict(mode_terms(mode["name"]))
         stopping = stop_state(events, now, terms, stop.get("stop_at"), lambda event: calendar_name(event, all_subs))
-    stopping = {**stopping,
+    stopping = {**stopping, "mode": mode,
                 "calendars_unreachable": unreachable_calendars(all_subs)}
     ranked = ranking_for(ranker, terms, entries, subs, search, post_url, stopping, now)
     if post_url is not None:
@@ -1593,7 +1768,23 @@ def mark_red_api(body):
 
 
 def settings_api(body):
-    error = save_settings(body.get("terms"))
+    error = save_settings(body.get("terms"), str(body.get("mode") or NORMAL))
+    return {"ok": not error, "error": error, **settings()}, 400 if error else 200
+
+
+def modes_api(body):
+    """{"add": name, "copy_from": mode}, {"remove": name}, {"choose": name, or null to follow the
+    calendar} or {"pattern": regex, "mode": name}."""
+    if "add" in body:
+        error = add_mode(body["add"], str(body.get("copy_from") or NORMAL))
+    elif "remove" in body:
+        error = remove_mode(body["remove"])
+    elif "choose" in body:
+        error = choose_mode(body["choose"])
+    elif "pattern" in body:
+        error = set_mode_pattern(body.get("mode"), body["pattern"])
+    else:
+        error = "expected add, remove, choose or pattern"
     return {"ok": not error, "error": error, **settings()}, 400 if error else 200
 
 
@@ -1631,6 +1822,7 @@ POST_APIS = {
     "/api/viewed": lambda body: ok(set_viewed(str(body.get("url", "")))),
     "/api/color": lambda body: ok(set_color(str(body.get("url", "")), str(body.get("color", "")))),
     "/api/settings": settings_api,
+    "/api/modes": modes_api,
     "/api/stop": stop_api,
     "/api/refresh": refresh_api,
 }

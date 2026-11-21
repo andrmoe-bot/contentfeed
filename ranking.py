@@ -178,16 +178,16 @@ def effective_stop(events: list[dict], now: float, terms: dict, stop_at: float |
     """The stop-watching state: (stop, event), or (None, None) when nothing stops watching. The stop
     timer (stop_at) if set — unless it has fired and the event it was set for has since ended (see
     _timer_released) — and every event that hasn't ended, at its start minus the event lead
-    time setting: you need the lead time to get to the event, so watching should stop by then. The
-    earliest wins; event is the event that causes it, or None when it's the timer. A stop in the
+    time setting: you need the lead time to get to the event, so watching should stop by then. Events
+    marked free are left out. The earliest wins; event is the event that causes it, or None when it's the timer. A stop in the
     past means the time has run out: watching should stop now."""
     candidates = []
     if stop_at is not None and not _timer_released(events, now, stop_at):
         candidates.append((stop_at, None))
     lead = terms["event_lead_minutes"] * 60
     for it in events:
-        if it.get("calendar_kind") != "event":
-            continue
+        if it.get("calendar_kind") != "event" or it.get("free"):
+            continue  # events marked free, such as time set off for work, don't stop watching; see server.active_mode
         start = it.get("calendar_start")
         end = it.get("deadline") or start
         if start is None or (end is not None and end <= now):
@@ -199,8 +199,8 @@ def effective_stop(events: list[dict], now: float, terms: dict, stop_at: float |
 def ongoing_event(events: list[dict], now: float) -> dict | None:
     """The event taking place now (started, not yet ended), or None. Of several, the one that ends
     first, so the next one shows once it's over. Events without an end take no time, so they're
-    never ongoing."""
-    ongoing = [it for it in events if it.get("calendar_kind") == "event"
+    never ongoing, and events marked free don't count, as they don't stop watching."""
+    ongoing = [it for it in events if it.get("calendar_kind") == "event" and not it.get("free")
                and it.get("calendar_start") is not None and it.get("deadline") is not None
                and it["calendar_start"] <= now < it["deadline"]]
     return min(ongoing, key=lambda it: it["deadline"]) if ongoing else None

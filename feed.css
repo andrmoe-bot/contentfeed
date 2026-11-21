@@ -141,3 +141,12 @@ nav button[aria-expanded="true"] { font-weight: 600; }
   content: ""; position: absolute; inset: 50% auto auto 50%; width: 64px; height: 44px; transform: translate(-50%, -50%);
   border-radius: 12px; background: #e00 url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M9 7l8 5-8 5z' fill='white'/%3E%3C/svg%3E") center / 28px no-repeat;
 }
+
+.mode-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.mode-bar label { font-weight: 600; }
+.mode-bar select { padding: 6px 8px; font-size: 14px; }
+#mode-remove[hidden] { display: none; }
+.mode-pattern[hidden] { display: none; }
+.mode-pattern { display: grid; gap: 4px; }
+.mode-pattern label { font-weight: 600; }
+.mode-pattern input { font: 14px ui-monospace, monospace; padding: 6px 8px; }
