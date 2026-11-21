@@ -1126,17 +1126,22 @@ def enrich_posts(ranked: list[dict], count: int):
 
 def stop_state(events: list[dict], now: float, terms: dict, calendar_of=lambda event: None) -> dict:
     """The stop-watching state for a feed response: the effective stop time, whether it has run out
-    (stopped), stop_event, the event that causes it, and ongoing_event, the
-    event taking place now, if any. Both come with all their details and calendar_of(event), their
-    calendar's name, for the stop screen to show with a countdown to the start or the end."""
+    (stopped), stop_event, the event that causes it, ongoing_event, the event taking place now, if
+    any, and while stopped, stopped_until, when the feed returns, and next_event, the next event to
+    get ready for, if any (see ranking.stopped_until). The events come with all their details and
+    calendar_of(event), their calendar's name, for the stop screen to show with a countdown to the
+    start or the end."""
     effective, event = ranking.effective_stop(events, now, terms)
     ongoing = ranking.ongoing_event(events, now)
+    until, upcoming = ranking.stopped_until(events, now, terms)
     details = lambda e: ({**{k: e.get(k) for k in ("url", "title", "description", "calendar_kind", "calendar_start", "deadline")},
                           "calendar": calendar_of(e)} if e is not None else None)
     return {"stop_at": effective,
             "stopped": effective is not None and now >= effective,
             "stop_event": details(event),
-            "ongoing_event": details(ongoing)}
+            "ongoing_event": details(ongoing),
+            "stopped_until": until,
+            "next_event": details(upcoming)}
 
 
 ARXIV_AUTHOR_TITLE = re.compile(r"^(.+?)(?:'s articles)? on arXiv$")

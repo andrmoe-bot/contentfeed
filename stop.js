@@ -7,20 +7,29 @@
 // audio alert sounds (see forceStop). Since the feed itself is still served, switching back to the
 // feed is seamless once the event is over.
 
-// While a stop time is in effect, poll faster (10s) so the stop firing — and the feed returning
-// once the event is over — are noticed promptly.
-function pollDelay(pending, stopAt) {
-  return pending ? 1500 : stopAt ? 10000 : 30000;
+// How long until the next check of the feed: soon while fetches are under way, every 10 seconds while
+// a stop time is in effect, else every 30, but always just after the next change the response
+// announces: the stop time, the feed returning, or the event that turned a mode on ending.
+function pollDelay(data) {
+  if (!data) return 30000;
+  const base = data.pending ? 1500 : data.stop_at ? 10000 : 30000;
+  const now = Date.now() / 1000;
+  const changes = [data.stopped ? null : data.stop_at, data.stopped_until, data.mode?.until]
+    .filter((t) => t && t > now).map((t) => (t - now) * 1000 + 500);
+  return Math.min(base, ...changes);
 }
 
-// The status line leads with the stop time while one is in effect: the next event minus its lead time.
-function stopNote(stopAt, stopped) {
-  if (!stopAt) return "";
-  const hhmm = clock(stopAt);
-  if (stopped) return `Stopped at ${hhmm}`;
-  const remaining = Math.round((stopAt - Date.now() / 1000) / 60);
-  const when = remaining > 0 ? `in ${remaining} min` : "now";
-  return `Stopping at ${hhmm} (${when}) · posts that would run past it are pushed down`;
+// The status line leads with the stop time while one is in effect: the next event minus its lead
+// time, with the event, or while stopped, when the feed returns and the events it's stopped for.
+function stopNote(data) {
+  if (!data.stop_at) return "";
+  if (data.stopped) {
+    const events = [data.ongoing_event, data.next_event].filter(Boolean).map((e) => `“${e.title}”`);
+    const until = data.stopped_until ? ` until ${when(data.stopped_until)}` : "";
+    return `Stopped${until}${events.length ? ` for ${events.join(", then ")}` : ""}`;
+  }
+  const event = data.stop_event ? ` for “${data.stop_event.title}”` : "";
+  return `Stopping at ${when(data.stop_at)}${event} (${inTime(data.stop_at)}) · posts that would run past it are pushed down`;
 }
 
 let lastStop = null;  // the stop fields of the last feed response
@@ -37,10 +46,10 @@ function renderStopNotice() {
     notice = el("div", { id: "stop-notice", role: "status" });
     feedEl.before(notice);
   }
-  const ongoing = lastStop && lastStop.ongoing_event;
-  // An event that caused the stop but hasn't started yet: its lead time, to get ready for it.
-  const upcoming = lastStop && lastStop.stopped && lastStop.stop_event
-    && !(ongoing && lastStop.stop_event.url === ongoing.url) ? lastStop.stop_event : null;
+  const ongoing = lastStop.ongoing_event;
+  // The next event the feed is stopped for, such as lunch right after the meeting taking place:
+  // in its lead time, to get ready for it.
+  const upcoming = lastStop.next_event;
   // An ongoing event that caused the stop is shown below and says enough on its own.
   notice.replaceChildren(...(upcoming ? [leadNote(upcoming)] : []));
   if (ongoing) notice.append(eventDetails(ongoing, false));
@@ -50,15 +59,12 @@ function renderStopNotice() {
 
 // The lead time before an event: stop watching now and get ready for it.
 function leadNote(event) {
-  return `Stop watching now and get ready: “${event.title}” starts at ${clock(event.calendar_start)}.`;
+  return `Stop watching now and get ready: “${event.title}” starts at ${when(event.calendar_start)}.`;
 }
 
 // An event in full: the one taking place now, with a countdown to its end, or the upcoming one
 // to get ready for, with a countdown to its start.
 function eventDetails(event, upcoming) {
-  const day = (unix) => new Date(unix * 1000).toDateString();
-  const when = (unix) => day(unix) === new Date().toDateString() ? clock(unix)
-    : `${new Date(unix * 1000).toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" })} ${clock(unix)}`;
   const link = /^https?:/.test(event.url || "")
     ? el("a", { href: event.url, target: "_blank", rel: "noopener noreferrer" }, "Open event ↗") : null;
   const end = upcoming ? event.calendar_start : event.deadline;

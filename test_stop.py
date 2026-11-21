@@ -98,6 +98,44 @@ class StopFilterTests(unittest.TestCase):
                 ranking.check_terms(dict(ranking.DEFAULT_TERMS, post_limit=bad))
 
 
+class StoppedUntilTests(unittest.TestCase):
+    """When the feed returns, and which event comes next, while watching is stopped."""
+    def event(self, name, start, end=None, **extra):
+        return dict(item(name, "cal"), title=name, calendar_kind="event", calendar_start=start, deadline=end, **extra)
+
+    def test_not_stopped_means_nothing(self):
+        later = self.event("later", NOW + 3 * 3600, NOW + 4 * 3600)
+        self.assertEqual(ranking.stopped_until([later], NOW, ranking.DEFAULT_TERMS), (None, None))
+
+    def test_an_ongoing_event_stops_until_it_ends(self):
+        meeting = self.event("meeting", NOW - 600, NOW + 1800)
+        self.assertEqual(ranking.stopped_until([meeting], NOW, ranking.DEFAULT_TERMS), (NOW + 1800, None))
+
+    def test_in_the_lead_time_the_event_is_next(self):
+        dinner = self.event("dinner", NOW + 600, NOW + 4200)
+        self.assertEqual(ranking.stopped_until([dinner], NOW, ranking.DEFAULT_TERMS), (NOW + 4200, dinner))
+
+    def test_events_whose_lead_time_starts_before_the_feed_returns_extend_the_stop(self):
+        meeting = self.event("meeting", NOW - 600, NOW + 900)
+        lunch = self.event("lunch", NOW + 900, NOW + 2700)  # its lead time begins during the meeting
+        walk = self.event("walk", NOW + 2700 + 1700, NOW + 2700 + 3600)  # lead begins 100 s before lunch ends
+        dinner = self.event("dinner", NOW + 4 * 3600, NOW + 5 * 3600)  # well after: the feed returns first
+        until, upcoming = ranking.stopped_until([dinner, walk, lunch, meeting], NOW, ranking.DEFAULT_TERMS)
+        self.assertEqual((until, upcoming), (NOW + 2700 + 3600, lunch))
+
+    def test_an_event_without_an_end_stops_until_it_starts(self):
+        reminder = self.event("reminder", NOW + 600)
+        self.assertEqual(ranking.stopped_until([reminder], NOW, ranking.DEFAULT_TERMS), (NOW + 600, reminder))
+
+    def test_free_and_all_day_events_never_stop_watching(self):
+        free = self.event("free", NOW - 600, NOW + 1800, free=True)
+        birthday = self.event("birthday", NOW - 3600, NOW + 20 * 3600, all_day=True)
+        for events in ([free], [birthday]):
+            self.assertEqual(ranking.effective_stop(events, NOW, ranking.DEFAULT_TERMS), (None, None))
+            self.assertEqual(ranking.stopped_until(events, NOW, ranking.DEFAULT_TERMS), (None, None))
+            self.assertIsNone(ranking.ongoing_event(events, NOW))
+
+
 class StopServerTests(unittest.TestCase):
     def setUp(self):
         self.stack = contextlib.ExitStack()
@@ -299,6 +337,19 @@ class StopServerTests(unittest.TestCase):
         start = time.time() + minutes_from_now * 60
         return {"url": self.url + "#item=dinner", "title": "Dinner", "first_seen": 1_000_000,
                 "published": start, "calendar_kind": "event", "calendar_start": start, "deadline": start + 3600}
+
+    def test_stopped_response_says_when_the_feed_returns_and_what_is_next(self):
+        meeting = dict(self.dinner(-10), url=self.url + "#item=meeting", title="Meeting")
+        meeting["deadline"] = meeting["calendar_start"] + 20 * 60  # ends in 10 minutes
+        lunch = dict(self.dinner(10), url=self.url + "#item=lunch", title="Lunch")  # right after
+        server.subscriptions[self.url]["events"] = [meeting, lunch]
+        result = server.feed("score")
+        self.assertTrue(result["stopped"])
+        self.assertEqual((result["ongoing_event"]["title"], result["next_event"]["title"]), ("Meeting", "Lunch"))
+        self.assertAlmostEqual(result["stopped_until"], lunch["deadline"], places=3)
+        server.subscriptions[self.url]["events"] = [self.dinner(120)]
+        result = server.feed("score")
+        self.assertEqual((result["stopped_until"], result["next_event"]), (None, None))
 
     def test_events_saved_among_posts_move_to_events_at_startup(self):
         event = self.dinner(120)

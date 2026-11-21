@@ -31,6 +31,14 @@ class FreeEventTests(unittest.TestCase):
         self.assertEqual({p["title"]: p["free"] for p in posts},
                          {"Work block": True, "Lunch": False, "Call": False, "Task": False})
 
+    def test_events_on_whole_days_are_all_day(self):
+        data = calendar_data(
+            "BEGIN:VEVENT\r\nUID:a\r\nDTSTART;VALUE=DATE:20261117\r\nDTEND;VALUE=DATE:20261118\r\nSUMMARY:Birthday\r\nEND:VEVENT",
+            "BEGIN:VEVENT\r\nUID:b\r\nDTSTART:20261117T120000Z\r\nDTEND:20261117T130000Z\r\nSUMMARY:Lunch\r\nEND:VEVENT",
+            "BEGIN:VTODO\r\nUID:c\r\nDUE;VALUE=DATE:20261117\r\nSUMMARY:Task\r\nEND:VTODO")
+        posts = icalendar_parser.parse_calendar_resource(data.decode(), "https://calendar.test/cal/")
+        self.assertEqual({p["title"]: p["all_day"] for p in posts}, {"Birthday": True, "Lunch": False, "Task": False})
+
     def test_free_events_neither_stop_watching_nor_count_as_ongoing(self):
         free = event("work", NOW - 60, NOW + 3600, free=True)
         later = event("later", NOW + 600, NOW + 3600, free=True)

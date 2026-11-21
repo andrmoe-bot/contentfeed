@@ -161,30 +161,58 @@ def valid_minutes(value) -> bool:
             and math.isfinite(value) and value > 0)
 
 
-def effective_stop(events: list[dict], now: float, terms: dict):
-    """The stop-watching state: (stop, event), or (None, None) when nothing stops watching. Every busy
-    event that hasn't ended stops watching at its start minus the event lead time setting: you need
-    the lead time to get to the event, so watching should stop by then. Events marked free are left
-    out. The earliest wins; event is the event that causes it. A stop in the past means the time has
-    run out: watching should stop now."""
-    candidates = []
+def stops_watching(event: dict) -> bool:
+    """Whether a calendar item is an event that stops watching: busy, at a time of day. Events marked
+    free, such as time set off for work, turn modes on instead (see server.active_mode), and all-day
+    events, such as birthdays, would stop the feed for the whole day."""
+    return (event.get("calendar_kind") == "event" and not event.get("free") and not event.get("all_day")
+            and event.get("calendar_start") is not None)
+
+
+def _stops(events: list[dict], now: float, terms: dict) -> list[tuple[float, float, dict]]:
+    """(stop, end, event) for each event that stops watching and hasn't ended, earliest stop first.
+    An event stops watching at its start minus the event lead time setting: you need the lead time to
+    get to it. An event without an end ends when it starts."""
     lead = terms["event_lead_minutes"] * 60
+    out = []
     for it in events:
-        if it.get("calendar_kind") != "event" or it.get("free"):
-            continue  # events marked free, such as time set off for work, don't stop watching; see server.active_mode
-        start = it.get("calendar_start")
+        if not stops_watching(it):
+            continue
+        start = it["calendar_start"]
         end = it.get("deadline") or start
-        if start is None or (end is not None and end <= now):
-            continue  # ended events don't stop watching anymore
-        candidates.append((start - lead, it))
-    return min(candidates, key=lambda c: c[0]) if candidates else (None, None)
+        if end > now:  # ended events don't stop watching anymore
+            out.append((start - lead, end, it))
+    return sorted(out, key=lambda s: s[0])
+
+
+def effective_stop(events: list[dict], now: float, terms: dict):
+    """The stop-watching state: (stop, event), or (None, None) when nothing stops watching: the earliest
+    stop of the events that stop watching (see _stops), and the event that causes it. A stop in the
+    past means the time has run out: watching should stop now."""
+    stops = _stops(events, now, terms)
+    return (stops[0][0], stops[0][2]) if stops else (None, None)
+
+
+def stopped_until(events: list[dict], now: float, terms: dict) -> tuple[float | None, dict | None]:
+    """While watching is stopped: (when the feed returns, the next event to start), else (None, None).
+    The feed returns when every event whose stop has come has ended, including events whose lead time
+    begins before then, such as lunch right after a meeting. The next event is the first of those
+    that hasn't started yet, if any."""
+    until, upcoming = None, None
+    for stop, end, event in _stops(events, now, terms):
+        if stop > (now if until is None else until):
+            break
+        until = max(until or end, end)
+        if upcoming is None and event["calendar_start"] > now:
+            upcoming = event
+    return until, upcoming
 
 
 def ongoing_event(events: list[dict], now: float) -> dict | None:
     """The event taking place now (started, not yet ended), or None. Of several, the one that ends
     first, so the next one shows once it's over. Events without an end take no time, so they're
-    never ongoing, and events marked free don't count, as they don't stop watching."""
-    ongoing = [it for it in events if it.get("calendar_kind") == "event" and not it.get("free")
+    never ongoing, and only events that stop watching count (see stops_watching)."""
+    ongoing = [it for it in events if stops_watching(it)
                and it.get("calendar_start") is not None and it.get("deadline") is not None
                and it["calendar_start"] <= now < it["deadline"]]
     return min(ongoing, key=lambda it: it["deadline"]) if ongoing else None
