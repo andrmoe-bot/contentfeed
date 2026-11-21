@@ -301,7 +301,6 @@ async function loadSettings() {
   defaults = data.defaults;
   limits = data.limits;
   buildSettings();
-  showStopTimer(data.stop_at);
   for (const { key, extra, blankIsMax } of SETTINGS) {
     const value = blankIsMax && defaults[key] === limits[key].max ? "no limit" : fmt(defaults[key]);
     const second = extra ? ` and ${fmt(defaults[extra.key])} ${extra.after}` : "";

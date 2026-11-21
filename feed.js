@@ -27,7 +27,7 @@ const PAGE = 300;  // items per "Show more"
 let limit = PAGE;
 let pollTimer;
 const cards = new Map();  // section + URL -> cached card; one post can appear in several feeds
-// The feed's order changes only when you load the page, change a setting or the stop timer, or search;
+// The feed's order changes only when you load the page, change a setting or the mode, or search;
 // "Show more" adds the next posts below. The page still checks the server in the background, for
 // the stop time and each card's score, tag and viewed time, but nothing moves away while you watch.
 let shown = [];  // items as last shown

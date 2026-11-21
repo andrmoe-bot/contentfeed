@@ -61,7 +61,6 @@ It holds:
   Older versions also recorded skips (the old white dot); at startup, an untagged item whose last
   skip came after you last opened it is tagged "maybe later" instead.
 - `settings.json`: your score settings from the feed's score panel, if you changed them, and your modes
-- `stop.json`: the stop-watching timer, if you set one (see Stop watching)
 - `jellyfin.json`: logins for Jellyfin servers you subscribe to (see Jellyfin), if any
 - `caldav.json`: logins for private CalDAV calendars you subscribe to, if any
 - `cache.json` and `feeds.json`: fetched page details and subscription posts
@@ -117,7 +116,7 @@ It can also be a blog or news page without a feed (see Pages without a feed), a 
 (see NRK TV), an author on arXiv or Google Scholar (see Authors), the papers citing a paper (see Citations)
 or a Jellyfin server (see Jellyfin).
 Incomplete tasks appear as cards; events don't — they take place when scheduled, not whenever the
-feed happens to show them, so they work through the stop-watching timer only (see Stop watching):
+feed happens to show them, so they only stop watching (see Stop watching):
 every busy event that hasn't ended acts as a stop time at its start minus the Event lead time setting,
 so posts you couldn't finish before you need to leave for it are pushed down. Events marked free
 (not busy) don't stop watching; they can turn a mode on instead (see Modes). The score panel
@@ -323,7 +322,7 @@ Opening an item (clicking its link, middle-clicking it, or playing its video) re
 last viewed it. Scrolling past doesn't count. Nothing is hidden: an item you've opened scores lower (see Ranking). The card says when you
 viewed it.
 
-The feed's order changes only when you load the page, change a setting, the mode or the stop timer, or
+The feed's order changes only when you load the page, change a setting or the mode, or
 search, and then the page shows the top of the feed; "Show more" adds the next posts below the ones
 shown. Otherwise nothing moves while you're watching: the page checks the server in the background
 and updates each card's score, tag and viewed time (and the status line and stop state) in place.
@@ -332,45 +331,30 @@ the one playing in another card.
 
 ## Stop watching
 
-Set a stop time with the "Stop watching at" box at the top of the feed (a time earlier today counts
-as tomorrow). While it's ahead, a post whose estimated length would run past it gets the **Past the
-stop time** points for each minute it would (−20 per minute by default, rounded up to whole minutes),
-so a post running 1 minute over drops a little and a two-hour film sinks to the bottom. Nothing is
-left out. Like the rest of the order, this is worked out when the feed is shown, not as time passes.
-The post you're viewing (the one you opened last) is exempt, so reloading while you watch doesn't
-push it down. Posts without an estimated length and tasks get no points. To leave posts out
-altogether, use the post limit (see Ranking). The status line shows the stop time and how long is
-left. The timer is kept in `stop.json` in the data directory, so every device on the network shares
-it. When the time runs out, the page switches to stop mode: the feed is hidden behind a notice —
-the event that caused the stop, or a generic “Stop time reached” message for the timer, with a
-Clear button. An upcoming event's lead time means "stop watching now and get ready for the event":
-the notice says so and when the event starts, and shows the event in full with a countdown to its
-start. Any video playing is force-stopped and a short audio alert
-sounds once.
-If an event is taking place right now, stop mode also shows it in full — its calendar, title, start
-and end, description and link — with a countdown to when it's over (of several, the one that ends
-first); when a countdown reaches zero the page checks again at once instead of waiting for the next poll.
-The feed itself is still served, so when the stop is over the page switches straight back to the
-normal feed with nothing rebuilt. The stopped state lasts until you clear the timer or the event
-that caused it has ended — the feed returns on its own once the event is over. A fired timer is
-released when the event it was set for has ended too, so a timer set to get you to an event
-doesn't keep the feed stopped afterwards; a timer with no such event stays until you clear it. While
-a stop is in effect the page polls every 10 seconds, so the stop firing and the feed returning are
-both noticed promptly. A timer left over from a previous day (more than 24 hours past) is dropped
-at startup. The "Stop mode" button next to the timer switches between stop mode and the normal feed
-manually at any time — the feed is hidden (and playback stopped) until you switch back, whatever the
-server's stop state says.
+Calendar events stop watching. Every busy event that hasn't ended has a stop time at its start
+minus the **Event lead time** setting (30 minutes by default; 0 stops exactly at the event's
+start), and the earliest one counts. So with dinner at 19:00 and the default lead, the stop time is
+18:30. Events marked free (not busy) don't stop watching; they can turn a mode on instead (see
+Modes). Events never appear as feed cards, and ended events don't stop watching anymore.
 
-Events use the same system with a lead time: every busy event that hasn't ended acts as a stop time at
-its start minus the **Event lead time** setting in the score panel (30 minutes by default; 0 stops
-exactly at the event's start). The earliest stop in effect — your timer or an event's — is the one
-counts. So with dinner at 19:00 and the default lead, posts you couldn't finish by 18:30 are pushed
-down. Events themselves never appear as feed cards; the notice above the stopped
-feed names the event. Ended events don't stop watching anymore, and neither do events marked free
-(not busy) in your calendar, such as time set off for work: those turn modes on (see Modes).
+While the stop time is ahead, a post whose estimated length would run past it gets the **Past the
+stop time** points for each minute it would (−20 per minute by default, rounded up to whole
+minutes), so a post running 1 minute over drops a little and a two-hour film sinks to the bottom.
+Nothing is left out. Like the rest of the order, this is worked out when the feed is shown, not as
+time passes. The post you're viewing (the one you opened last) is exempt, so reloading while you
+watch doesn't push it down. Posts without an estimated length and tasks get no points. To leave
+posts out altogether, use the post limit (see Ranking). The status line shows the stop time and how
+long is left.
 
-When the stop time runs out — the timer, or an event's lead time — any video or other media playing
-is force-stopped, and the page sounds a short audio alert once per stop, next to the notice.
+When the stop time runs out, the page shows the stop screen: the feed is hidden behind a notice
+saying to stop watching now and get ready for the event, with the event in full — its calendar,
+title, start and end, description and link — and a countdown to its start. Any video or other
+media playing is force-stopped, and a short audio alert sounds once per stop. If an event is taking
+place right now, the stop screen shows it with a countdown to when it's over (of several, the one
+that ends first); when a countdown reaches zero the page checks again at once instead of waiting
+for the next poll. The feed itself is still served, so once the event is over the page switches
+straight back to the feed with nothing rebuilt. While a stop time is in effect the page polls every
+10 seconds, so the stop firing and the feed returning are both noticed promptly.
 
 ## Tags
 

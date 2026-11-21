@@ -1,39 +1,11 @@
-// The stop-watching timer. While it's ahead, posts that would run past it get the "Past the stop
-// time" points for each minute they would (as of when the feed was shown: the page doesn't reorder
-// as time passes). When the stop time runs out (the timer, or an event's lead time), the page
-// switches to stop mode in JS: the feed is hidden behind a notice naming the event that caused the
-// stop (or a generic timer message) — in an event's lead time, "stop watching now and get ready",
-// with the event in full and a countdown to its start — and the event taking place now, if any, with a countdown to its end; playback is force-stopped and an audio alert sounds (see forceStop) — and since the feed
-// itself is still served, switching back to the normal feed is seamless once the stop is over. The "Stop mode" button next to the timer switches between stop
-// mode and the normal feed manually at any time. A time earlier today means tomorrow.
-const stopForm = document.getElementById("stop-form");
-const stopTime = document.getElementById("stop-time");
-const stopClear = document.getElementById("stop-clear");
-stopForm.addEventListener("submit", async (e) => {
-  e.preventDefault();
-  if (!stopTime.value) return;
-  const [h, m] = stopTime.value.split(":").map(Number);
-  const when = new Date();
-  when.setHours(h, m, 0, 0);
-  if (when.getTime() <= Date.now()) when.setDate(when.getDate() + 1);
-  const { ok, data } = await api("/api/stop", { stop_at: when.getTime() / 1000 });
-  if (!ok) return say(data.error || "Couldn't set the timer.", true);
-  stopClear.hidden = false;
-  say(`Stopping at ${stopTime.value}: posts that would run past it are pushed down.`);
-  load({ reorder: true });
-});
-stopClear.addEventListener("click", async () => {
-  await api("/api/stop", { stop_at: null });
-  showStopTimer(null);
-  say("Stop timer cleared.");
-  load({ reorder: true });
-});
-
-// The timer as saved on the server, in the box (or empty).
-function showStopTimer(stopAt) {
-  stopTime.value = stopAt ? clock(stopAt) : "";
-  stopClear.hidden = !stopAt;
-}
+// Stopping for calendar events. While an event's stop time is ahead (its start minus the Event lead
+// time setting), posts that would run past it get the "Past the stop time" points for each minute
+// they would (as of when the feed was shown: the page doesn't reorder as time passes). When it runs
+// out, the page shows the stop screen in JS: the feed is hidden behind a notice — in an event's lead
+// time, "stop watching now and get ready", with the event in full and a countdown to its start — and
+// the event taking place now, if any, with a countdown to its end; playback is force-stopped and an
+// audio alert sounds (see forceStop). Since the feed itself is still served, switching back to the
+// feed is seamless once the event is over.
 
 // While a stop time is in effect, poll faster (10s) so the stop firing — and the feed returning
 // once the event is over — are noticed promptly.
@@ -41,8 +13,7 @@ function pollDelay(pending, stopAt) {
   return pending ? 1500 : stopAt ? 10000 : 30000;
 }
 
-// The status line leads with the stop time while one is in effect: the timer, or the next event
-// minus its lead time, whichever comes first.
+// The status line leads with the stop time while one is in effect: the next event minus its lead time.
 function stopNote(stopAt, stopped) {
   if (!stopAt) return "";
   const hhmm = clock(stopAt);
@@ -53,31 +24,14 @@ function stopNote(stopAt, stopped) {
 }
 
 let lastStop = null;  // the stop fields of the last feed response
-// null follows the server's stopped flag; true or false is the Stop mode button forcing stop mode or the normal feed.
-let modeOverride = null;
-const stopModeBtn = document.getElementById("stop-mode");
-function stopModeActive() {
-  return modeOverride !== null ? modeOverride : !!(lastStop && lastStop.stopped);
+function stopScreenShown() {
+  return !!(lastStop && lastStop.stopped);
 }
-function updateStopModeBtn() {
-  const active = stopModeActive();
-  stopModeBtn.textContent = active ? "Back to normal" : "Stop mode";
-  stopModeBtn.setAttribute("aria-pressed", String(active));
-  stopModeBtn.title = active
-    ? "Switch back to the normal feed now"
-    : "Switch to stop mode now: hide the feed and stop playback";
-}
-stopModeBtn.addEventListener("click", () => {
-  modeOverride = !stopModeActive();
-  forceStop(null, true);  // manual switch: stop playback too, but no audio alert
-  render();
-});
 
 function renderStopNotice() {
   let notice = document.getElementById("stop-notice");
-  const stopped = stopModeActive();
+  const stopped = stopScreenShown();
   feedEl.classList.toggle("stopped", stopped);
-  updateStopModeBtn();
   if (!stopped) { notice?.remove(); return; }
   if (!notice) {
     notice = el("div", { id: "stop-notice", role: "status" });
@@ -87,19 +41,8 @@ function renderStopNotice() {
   // An event that caused the stop but hasn't started yet: its lead time, to get ready for it.
   const upcoming = lastStop && lastStop.stopped && lastStop.stop_event
     && !(ongoing && lastStop.stop_event.url === ongoing.url) ? lastStop.stop_event : null;
-  if (lastStop && lastStop.stopped) {
-    const hhmm = clock(lastStop.stop_at);
-    const clear = el("button", { type: "button" }, "Clear timer");
-    clear.addEventListener("click", () => stopClear.click());
-    // The ongoing event shown below is the cause: it says enough on its own. The Clear button only
-    // shows with a timer: clearing it doesn't end an event's stop. (replaceChildren would show a null.)
-    const message = upcoming ? leadNote(upcoming) : lastStop.stop_event ? null : `Stop time reached at ${hhmm}.`;
-    notice.replaceChildren(...[message, stopClear.hidden ? null : clear].filter(Boolean));
-  } else {
-    const back = el("button", { type: "button" }, "Back to feed");
-    back.addEventListener("click", () => { modeOverride = false; render(); });
-    notice.replaceChildren("Stop mode is on — the feed is hidden and playback is stopped. ", back);
-  }
+  // An ongoing event that caused the stop is shown below and says enough on its own.
+  notice.replaceChildren(...(upcoming ? [leadNote(upcoming)] : []));
   if (ongoing) notice.append(eventDetails(ongoing, false));
   if (upcoming) notice.append(eventDetails(upcoming, true));
   tickCountdown();
@@ -138,7 +81,7 @@ function countdown(end, label) {
 }
 
 // Updates the countdowns every second while they're shown; once one runs out (an event starts or
-// ends), checks the server again so stop mode shows what comes next (or the feed returns) without waiting
+// ends), checks the server again so the stop screen shows what comes next (or the feed returns) without waiting
 // for the next poll.
 let countdownTimer = null;
 const reloadedFor = new Set();
@@ -157,8 +100,7 @@ function tickCountdown() {
   countdownTimer = setTimeout(tickCountdown, 1000 - Date.now() % 1000);
 }
 
-// In stop mode playback is stopped, and the alert
-// sounds once for each stop the server reports (not for the Stop mode button).
+// On the stop screen playback is stopped, and the alert sounds once for each stop the server reports.
 let alertedStop = null;
 function alertSound() {
   try {
@@ -180,8 +122,8 @@ function alertSound() {
   } catch {}
 }
 
-function forceStop(data, manual = false) {
-  if (!stopModeActive()) { alertedStop = null; return; }
+function forceStop(data) {
+  if (!stopScreenShown()) { alertedStop = null; return; }
   if (playingCard) {
     // Rebuilding the playing card replaces its player with the play button, which stops playback.
     for (const c of cards.values()) if (c.el === playingCard) {
@@ -192,8 +134,8 @@ function forceStop(data, manual = false) {
     }
     playingCard = null;
   }
-  if (!manual && data && data.stopped) {  // alert only when the server's stop fires, not on manual switches
-    const key = `${data.stop_event ? data.stop_event.url : "timer"}@${data.stop_at}`;
+  if (data && data.stopped) {
+    const key = `${data.stop_event?.url}@${data.stop_at}`;
     if (alertedStop !== key) {
       alertedStop = key;
       alertSound();

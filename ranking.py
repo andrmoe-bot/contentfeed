@@ -36,7 +36,7 @@ None. The similar_penalty is based on the sum, not on the strongest match alone.
 Nothing is hidden: items you've opened, tagged or that would run past the stop time are scored
 differently, not removed. The one cut is the post limit term: the feed shows at most that many posts
 (server.py applies it; 0 gives an empty feed). Once the stop time has run out, the feed itself is
-left unchanged and the response's stopped flag tells the page to switch to stop mode (notice,
+left unchanged and the response's stopped flag tells the page to show the stop screen (notice,
 playback force-stopped, alert), so it can switch back seamlessly. Calendar events are not feed items
 at all — they take place when scheduled — so subscriptions keep them apart from their posts, and
 they reach the feed only as stop times through effective_stop.
@@ -161,29 +161,13 @@ def valid_minutes(value) -> bool:
             and math.isfinite(value) and value > 0)
 
 
-def _timer_released(events: list[dict], now: float, stop_at: float) -> bool:
-    """Whether a fired timer's stop is over: an event that was still upcoming when the timer fired
-    (its end is after the stop time) has now ended. The timer was presumably set to get to that
-    event, so once the event is over the feed should return, not stay stopped until cleared."""
-    for it in events:
-        if it.get("calendar_kind") != "event":
-            continue
-        end = it.get("deadline") or it.get("calendar_start")
-        if end is not None and stop_at < end <= now:
-            return True
-    return False
-
-
-def effective_stop(events: list[dict], now: float, terms: dict, stop_at: float | None = None):
-    """The stop-watching state: (stop, event), or (None, None) when nothing stops watching. The stop
-    timer (stop_at) if set — unless it has fired and the event it was set for has since ended (see
-    _timer_released) — and every event that hasn't ended, at its start minus the event lead
-    time setting: you need the lead time to get to the event, so watching should stop by then. Events
-    marked free are left out. The earliest wins; event is the event that causes it, or None when it's the timer. A stop in the
-    past means the time has run out: watching should stop now."""
+def effective_stop(events: list[dict], now: float, terms: dict):
+    """The stop-watching state: (stop, event), or (None, None) when nothing stops watching. Every busy
+    event that hasn't ended stops watching at its start minus the event lead time setting: you need
+    the lead time to get to the event, so watching should stop by then. Events marked free are left
+    out. The earliest wins; event is the event that causes it. A stop in the past means the time has
+    run out: watching should stop now."""
     candidates = []
-    if stop_at is not None and not _timer_released(events, now, stop_at):
-        candidates.append((stop_at, None))
     lead = terms["event_lead_minutes"] * 60
     for it in events:
         if it.get("calendar_kind") != "event" or it.get("free"):

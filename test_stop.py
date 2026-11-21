@@ -31,7 +31,6 @@ class StopFilterTests(unittest.TestCase):
         long_post = dict(item("long", "feed"), estimated_minutes=120)
         unknown = dict(item("unknown", "feed"))
         stop = NOW + 3600
-        self.assertEqual(ranking.effective_stop([post], NOW, ranking.DEFAULT_TERMS, stop), (stop, None))
         self.assertIsNone(ranking.minutes_past_stop(post, NOW, stop))  # 45 minutes fit in the hour
         self.assertIsNone(ranking.minutes_past_stop(dict(post, estimated_minutes=60), NOW, stop))  # exactly fits
         self.assertEqual(ranking.minutes_past_stop(post, NOW, NOW + 30 * 60), 15)
@@ -47,22 +46,6 @@ class StopFilterTests(unittest.TestCase):
         self.assertFalse(any("past the stop" in label for label, _ in ranking.score(post, NOW, off)))
         fits = dict(post, past_stop=None)
         self.assertFalse(any("past the stop" in label for label, _ in ranking.score(fits, NOW, ranking.DEFAULT_TERMS)))
-
-    def test_past_timer_has_fired(self):
-        """A stop time in the past is not ignored: it means the time has run out."""
-        self.assertEqual(ranking.effective_stop([], NOW, ranking.DEFAULT_TERMS, NOW - 1), (NOW - 1, None))
-
-    def test_fired_timer_is_released_once_its_event_has_ended(self):
-        """A fired timer stops the feed until cleared — but once the event it was set for has
-        ended, the stop is over and the feed can return. An event that ended before the timer
-        fired doesn't release it."""
-        terms = dict(ranking.DEFAULT_TERMS, event_lead_minutes=0)  # an event stops at its start
-        event = dict(item("event", "cal"), calendar_kind="event", calendar_start=NOW + 30, deadline=NOW + 45)
-        timer = NOW - 10
-        self.assertEqual(ranking.effective_stop([event], NOW, terms, timer), (timer, None))
-        self.assertEqual(ranking.effective_stop([event], NOW + 100, terms, timer), (None, None))
-        old = dict(item("old", "cal"), calendar_kind="event", calendar_start=NOW - 100, deadline=NOW - 50)
-        self.assertEqual(ranking.effective_stop([old], NOW + 10, terms, timer), (timer, None))
 
     def test_events_act_as_stop_times_with_the_configured_lead(self):
         event = dict(item("event", "cal"), calendar_kind="event",
@@ -88,12 +71,10 @@ class StopFilterTests(unittest.TestCase):
         self.assertIs(ranking.ongoing_event([long, upcoming], NOW), long)
 
     def test_earliest_stop_wins(self):
-        event = dict(item("event", "cal"), calendar_kind="event", calendar_start=NOW + 5 * 3600)
-        timer = NOW + 3600
-        self.assertEqual(ranking.effective_stop([event], NOW, ranking.DEFAULT_TERMS, timer), (timer, None))
-        timer = NOW + 10 * 3600
-        self.assertEqual(ranking.effective_stop([event], NOW, ranking.DEFAULT_TERMS, timer),
-                         (NOW + 5 * 3600 - 30 * 60, event))
+        later = dict(item("later", "cal"), calendar_kind="event", calendar_start=NOW + 5 * 3600)
+        sooner = dict(item("sooner", "cal"), calendar_kind="event", calendar_start=NOW + 3600)
+        self.assertEqual(ranking.effective_stop([later, sooner], NOW, ranking.DEFAULT_TERMS),
+                         (NOW + 3600 - 30 * 60, sooner))
 
     def test_ended_events_do_not_stop_watching_but_ongoing_ones_do(self):
         ended = dict(item("old", "cal"), calendar_kind="event", calendar_start=NOW - 7200, deadline=NOW - 3600)
@@ -117,16 +98,16 @@ class StopFilterTests(unittest.TestCase):
                 ranking.check_terms(dict(ranking.DEFAULT_TERMS, post_limit=bad))
 
 
-class StopTimerServerTests(unittest.TestCase):
+class StopServerTests(unittest.TestCase):
     def setUp(self):
         self.stack = contextlib.ExitStack()
         self.addCleanup(self.stack.close)
         root = Path(self.stack.enter_context(tempfile.TemporaryDirectory()))
         for name in ("LINKS_FILE", "FEEDS_FILE", "CACHE_FILE", "FEED_CACHE_FILE",
                      "STATE_FILE", "SETTINGS_FILE", "JELLYFIN_FILE",
-                     "CALDAV_FILE", "STOP_FILE"):
+                     "CALDAV_FILE"):
             self.stack.enter_context(patch.object(server, name, root / name, create=True))
-        for name in ("subscriptions", "cache", "added", "viewed", "colors", "ranked_cache", "stop"):
+        for name in ("subscriptions", "cache", "added", "viewed", "colors", "ranked_cache"):
             self.stack.enter_context(patch.object(server, name, {}))
         self.stack.enter_context(patch.object(server, "pending", set()))
         self.stack.enter_context(patch.object(server, "state_version", 0))
@@ -150,41 +131,11 @@ class StopTimerServerTests(unittest.TestCase):
         card = next(it for it in result["items"] if it["url"] == url)
         return any("past the stop" in r["label"] for r in card["reasons"])
 
-    def test_set_stop_validates_persists_and_clears(self):
-        self.assertEqual(server.set_stop("tomorrow"), "stop_at must be a unix time or null")
-        self.assertEqual(server.set_stop(True), "stop_at must be a unix time or null")
-        self.assertEqual(server.set_stop(-5), "stop_at must be a unix time or null")
-        self.assertIsNone(server.set_stop(2_000_000))
-        self.assertEqual(server.stop["stop_at"], 2_000_000.0)
-        self.assertEqual(json.loads(server.STOP_FILE.read_text()), {"stop_at": 2_000_000.0})
-        self.assertIsNone(server.set_stop(None))
-        self.assertEqual(server.stop, {})
-        self.assertEqual(json.loads(server.STOP_FILE.read_text()), {})
-
-    def test_load_stop_ignores_invalid_and_stale_values(self):
-        recent = time.time() - 3600
-        server.STOP_FILE.write_text(json.dumps({"stop_at": recent}))
-        server.load_stop()
-        self.assertEqual(server.stop, {"stop_at": recent})
-        server.stop.clear()
-        # A timer more than a day in the past was never cleared: stale, not a fired stop.
-        server.STOP_FILE.write_text(json.dumps({"stop_at": time.time() - 25 * 3600}))
-        server.load_stop()
-        self.assertEqual(server.stop, {})
-        server.STOP_FILE.write_text(json.dumps({"stop_at": "soon"}))
-        server.load_stop()
-        self.assertEqual(server.stop, {})
-
-    def test_settings_endpoint_reports_the_timer(self):
-        self.assertIsNone(server.settings()["stop_at"])
-        server.set_stop(2_000_000)
-        self.assertEqual(server.settings()["stop_at"], 2_000_000.0)
-
     def order(self, result):
         return [it["url"] for it in result["items"]]
 
     def test_posts_that_would_run_past_the_stop_are_pushed_down_not_left_out(self):
-        server.set_stop(time.time() + 30 * 60)
+        server.subscriptions[self.url]["events"] = [self.dinner(60)]  # stop in 30 minutes
         server.subscriptions[self.url]["items"] = [self.long, self.short]
         self.long["published"] = 2_000_000  # newer: first without the stop
         result = server.feed("score")
@@ -192,19 +143,19 @@ class StopTimerServerTests(unittest.TestCase):
         long_card = result["items"][1]
         self.assertTrue(any(r["label"] in ("runs 90 minutes past the stop time", "runs 91 minutes past the stop time")
                             for r in long_card["reasons"]))
-        self.assertEqual(result["stop_at"], server.stop["stop_at"])
+        self.assertAlmostEqual(result["stop_at"], server.subscriptions[self.url]["events"][0]["calendar_start"] - 30 * 60, places=3)
         self.assertEqual(result["total"], 2)
 
     def test_viewed_post_gets_no_past_stop_points(self):
         """Reloading while you watch doesn't push down the post you're viewing."""
-        server.set_stop(time.time() + 30 * 60)
+        server.subscriptions[self.url]["events"] = [self.dinner(60)]  # stop in 30 minutes
         server.viewed[self.long["url"]] = time.time()  # you're watching the long one now
         result = server.feed("score")
         long_card = next(it for it in result["items"] if it["url"] == self.long["url"])
         self.assertFalse(any("past the stop" in r["label"] for r in long_card["reasons"]))
 
     def test_only_the_latest_viewed_post_is_exempt(self):
-        server.set_stop(time.time() + 30 * 60)
+        server.subscriptions[self.url]["events"] = [self.dinner(60)]  # stop in 30 minutes
         other_long = {"url": "https://example.com/other-long", "title": "Other long", "first_seen": 1_000_000,
                       "published": 1_000_000, "estimated_minutes": 90}
         server.subscriptions[self.url]["items"].append(other_long)
@@ -227,25 +178,18 @@ class StopTimerServerTests(unittest.TestCase):
         self.assertIsNone(server.feed("score")["post_limit"])  # no limit
 
     def test_fired_stop_keeps_the_feed_and_marks_it_stopped(self):
-        """A fired stop (timer or event) no longer empties the feed server-side: the response keeps
-        the posts and sets stopped, and the page switches to stop mode in JS (feed hidden, playback
-        force-stopped, alert)."""
-        server.set_stop(time.time() - 10)  # the timer ran out
+        """A fired stop doesn't empty the feed server-side: the response keeps the posts and sets
+        stopped, and the page shows the stop screen in JS (feed hidden, playback force-stopped, alert)."""
+        server.subscriptions[self.url]["events"] = [self.dinner(10)]  # within the lead time
         server.viewed[self.long["url"]] = time.time() - 60  # you're watching the long one
         result = server.feed("score")
         self.assertTrue(result["stopped"])
         self.assertEqual(self.urls(result), {self.short["url"], self.long["url"]})  # feed kept
         self.assertEqual(result["total"], 2)
 
-    def test_fired_stop_still_keeps_the_open_post_page(self):
-        server.set_stop(time.time() - 10)  # the timer ran out
-        result = server.feed("score", 300, post_url=self.long["url"])
-        self.assertEqual(result["item"]["url"], self.long["url"])  # its page keeps the post
-        self.assertTrue(result["stopped"])
-
     def test_fired_event_stop_keeps_the_feed_and_names_the_event(self):
         """Crossing an event's lead time marks the feed stopped and names the event, but keeps the
-        feed itself — the page switches to stop mode in JS and back seamlessly."""
+        feed itself — the page shows the stop screen in JS and back seamlessly."""
         start = time.time() + 10 * 60  # within the 30-minute lead: the time has run out
         event = {"url": self.url + "#item=dinner", "title": "Dinner", "first_seen": 1_000_000,
                  "published": start, "calendar_kind": "event", "calendar_start": start,
@@ -286,44 +230,6 @@ class StopTimerServerTests(unittest.TestCase):
             self.assertIsNone(back["stop_at"])
             self.assertIn(self.short["url"], self.urls(back))
             self.assertIn(self.long["url"], self.urls(back))
-
-    def test_fired_timer_is_released_after_its_event_ends(self):
-        """A manual timer that fired is released once the event it was set for has ended, so the
-        feed returns after the event instead of staying stopped until cleared."""
-        t = time.time()
-        server.save_settings(dict(ranking.DEFAULT_TERMS, event_lead_minutes=0))  # event stops at start
-        event = {"url": self.url + "#item=dinner", "title": "Dinner", "first_seen": 1_000_000,
-                 "published": t + 30, "calendar_kind": "event", "calendar_start": t + 30,
-                 "deadline": t + 45}
-        server.subscriptions[self.url]["events"] = [event]
-        server.set_stop(t - 10)  # fired, and earlier than the event's own stop (t+30)
-        with patch.object(server.time, "time", lambda: t):
-            fired = server.feed("score")
-            self.assertTrue(fired["stopped"])
-            self.assertIsNone(fired["stop_event"])  # the timer, not the event, causes it
-        with patch.object(server.time, "time", lambda: t + 50):  # the event has ended
-            back = server.feed("score")
-            self.assertFalse(back["stopped"])
-            self.assertIn(self.short["url"], self.urls(back))
-            self.assertIn(self.long["url"], self.urls(back))
-
-    def test_fired_timer_marks_the_feed_stopped_with_a_generic_message(self):
-        server.set_stop(time.time() - 10)  # the time ran out
-        result = server.feed("score")
-        self.assertTrue(result["stopped"])
-        self.assertIsNone(result["stop_event"])
-        self.assertEqual(result["stop_at"], server.stop["stop_at"])
-        # the feed is kept; the page shows stop mode with a generic message in JS
-        self.assertEqual(self.urls(result), {self.short["url"], self.long["url"]})
-        self.assertEqual(result["total"], 2)
-
-    def test_clearing_the_timer_restores_the_feed(self):
-        server.set_stop(time.time() + 30 * 60)
-        self.assertTrue(self.past_stop(server.feed("score"), self.long["url"]))
-        server.set_stop(None)
-        result = server.feed("score")
-        self.assertFalse(self.past_stop(result, self.long["url"]))
-        self.assertIsNone(result["stop_at"])
 
     def test_event_sets_the_stop_with_the_lead_time(self):
         start = time.time() + 2 * 3600
@@ -384,10 +290,10 @@ class StopTimerServerTests(unittest.TestCase):
         self.assertAlmostEqual(result["stop_at"], start - 30 * 60, places=3)
 
     def test_post_page_keeps_its_post_even_when_it_no_longer_fits(self):
-        server.set_stop(time.time() + 30 * 60)
+        server.subscriptions[self.url]["events"] = [self.dinner(60)]  # stop in 30 minutes
         result = server.feed("score", 300, post_url=self.long["url"])
         self.assertEqual(result["item"]["url"], self.long["url"])
-        self.assertEqual(result["stop_at"], server.stop["stop_at"])
+        self.assertIsNotNone(result["stop_at"])
 
     def dinner(self, minutes_from_now):
         start = time.time() + minutes_from_now * 60
