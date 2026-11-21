@@ -1,6 +1,9 @@
 // The score settings panel, in groups that fold away. Each setting has a box for an exact number and
 // a slider. The sliders go in steps of 1, 1.5, 2, 3, 5 and 7 times a power of ten, so one slider covers
 // small and huge numbers. A group's heading says how many of its settings differ from the defaults.
+// Settings that add no points when the page loads (0, or no post limit) are hidden to keep the panel
+// short; each group's "Add a setting" brings them back. The similarity measures (marked measure: true)
+// only shape the two similarity penalties, so they're shown whenever either penalty is.
 const GROUPS = [
   { id: "feed", title: "Feed", open: true },
   { id: "opened", title: "Opened and next up", open: true },
@@ -59,13 +62,13 @@ const SETTINGS = [
     hint: "Per 100% similarity to each post you opened recently." },
   { group: "similarity", key: "above_similarity_penalty", label: "Like posts above", after: "points",
     hint: "Per 100% similarity to each post above it, to mix up the feed." },
-  { group: "similarity", key: "similar_base_percent", label: "Same subscription", after: "% alike",
+  { group: "similarity", measure: true, key: "similar_base_percent", label: "Same subscription", after: "% alike",
     hint: "Where similarity starts for posts from one subscription; the weights below fill the rest. Other subscriptions never match." },
-  { group: "similarity", key: "similar_series_percent", label: "Same series", after: "% alike",
+  { group: "similarity", measure: true, key: "similar_series_percent", label: "Same series", after: "% alike",
     hint: "Used instead for posts in one series, when higher." },
-  { group: "similarity", key: "similar_days", label: "Publish window", before: "alike within", after: "days" },
-  { group: "similarity", key: "similar_publish_weight", label: "Publish time weight", after: "" },
-  { group: "similarity", key: "similar_length_weight", label: "Length weight", after: "",
+  { group: "similarity", measure: true, key: "similar_days", label: "Publish window", before: "alike within", after: "days" },
+  { group: "similarity", measure: true, key: "similar_publish_weight", label: "Publish time weight", after: "" },
+  { group: "similarity", measure: true, key: "similar_length_weight", label: "Length weight", after: "",
     hint: "Relative to the publish time weight. Unknown lengths are left out." },
 ];
 // Every setting, including the second box some have, such as Similar's hours
@@ -161,7 +164,7 @@ function settingRow({ key, label, before, after, extra, hint, blankIsMax }) {
     box.addEventListener("change", save);
     second = [box, extra.after];
   }
-  return el("div", { class: "setting" },
+  return el("div", { class: "setting", "data-key": key },
     el("label", { for: `w-${key}` }, label),
     el("span", { class: "num" }, before || "", num, after || "", ...second),
     slider,
@@ -181,6 +184,21 @@ function buildSettings() {
   }));
 }
 
+// One "Add a setting" list below the groups, with the hidden settings under their groups' names.
+// Picking one shows it, opens its group and puts the cursor in its box.
+const addSetting = document.getElementById("add-setting");
+addSetting.addEventListener("change", () => {
+  const key = addSetting.value;  // read before showTerms rebuilds the list
+  if (!key) return;
+  shownTerms.add(key);
+  showTerms();
+  const { group } = SETTINGS.find((s) => s.key === key);
+  groupEls[group].details.open = true;
+  const { num } = controls[key];
+  num.focus();
+  num.scrollIntoView({ block: "center" });
+});
+
 function showSettings(w) {
   for (const { key, extra } of SETTINGS) {
     const { num, slider, list, blankIsMax } = controls[key];
@@ -189,6 +207,32 @@ function showSettings(w) {
     if (extra) showBox(controls[extra.key].num, extra.key, w[extra.key], false);
   }
   showChanged();
+}
+
+// Which settings are shown: those that added points when the page loaded, and those you added.
+const shownTerms = new Set();
+const contributes = (key, w) => (key === "post_limit" ? w[key] < limits[key].max : w[key] !== 0);
+function hideUnusedTerms(w) {
+  for (const { key, measure } of SETTINGS) if (!measure && contributes(key, w)) shownTerms.add(key);
+  showTerms();
+}
+
+function showTerms() {
+  const similarity = shownTerms.has("similar_penalty") || shownTerms.has("above_similarity_penalty");
+  for (const { key, measure } of SETTINGS) {
+    document.querySelector(`.setting[data-key="${key}"]`).hidden = measure ? !similarity : !shownTerms.has(key);
+  }
+  // A group with nothing shown is left out until you add one of its settings.
+  for (const group of GROUPS) {
+    groupEls[group.id].details.hidden = !SETTINGS.some((s) => s.group === group.id
+      && !document.querySelector(`.setting[data-key="${s.key}"]`).hidden);
+  }
+  const groups = GROUPS.map((group) => [group,
+    SETTINGS.filter((s) => s.group === group.id && !s.measure && !shownTerms.has(s.key))]).filter(([, hidden]) => hidden.length);
+  addSetting.replaceChildren(el("option", { value: "" }, "Add a setting…"),
+    ...groups.map(([group, hidden]) => el("optgroup", { label: group.title },
+      ...hidden.map(({ key, label }) => el("option", { value: key }, label)))));
+  addSetting.hidden = !groups.length;
 }
 
 // Each group's heading counts its settings that differ from the defaults, so you can see where
@@ -260,6 +304,7 @@ async function loadSettings() {
     controls[key].def.textContent = `Default ${value}${second}.`;
   }
   showSettings(draft);
+  hideUnusedTerms(saved);
 }
 
 document.getElementById("reset").addEventListener("click", async () => {

@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import patch
 
 import ranking
-from test_ranking import item, NOW
+from test_ranking import item, NOW, TERMS_ON
 
 
 def reference_similarity(first, second, terms):
@@ -61,7 +61,7 @@ def greedy_reference(items, terms):
 
 class AboveSimilarityTests(unittest.TestCase):
     def terms(self, **kwargs):
-        return dict(ranking.DEFAULT_TERMS, similar_base_percent=0, similar_series_percent=0, **kwargs)
+        return dict(TERMS_ON, similar_base_percent=0, similar_series_percent=0, **kwargs)
 
     def test_partial_matches_add_up_instead_of_fixed_repeat_counts(self):
         posts = [item('first', 'feed'), item('second', 'feed', date=NOW - 15 * 86400),

@@ -120,9 +120,14 @@ class SimilaritySettingsTests(unittest.TestCase):
                 self.assertEqual(defaults['task_bonus'], 0)
                 self.assertEqual(defaults['event_lead_minutes'], 30)
                 self.assertEqual(defaults['task_deadline_bonus'], 200)
+                for key in ('similar_penalty', 'above_similarity_penalty', 'enrich_count', 'task_priority_bonus'):
+                    self.assertEqual(defaults[key], 0, key)  # off unless you turn them on
+                self.assertIsNone(candidate()['similar'])
+                on = dict(defaults, similar_penalty=-40)
+                self.assertTrue(request('/api/settings', on)['ok'])
                 # Parts 1 and 2 are a series: 75% series base + 25% × 50% publish time
                 self.assertEqual(candidate()['similar']['percent'], 88)
-                equal = dict(defaults, similar_series_percent=50, similar_length_weight=1)
+                equal = dict(on, similar_series_percent=50, similar_length_weight=1)
                 self.assertTrue(request('/api/settings', equal)['ok'])
                 self.assertEqual(candidate()['similar']['percent'], 69)
                 preview = dict(equal, similar_publish_weight=0)

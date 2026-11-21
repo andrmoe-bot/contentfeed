@@ -3,7 +3,7 @@ import random
 import unittest
 
 import ranking
-from test_ranking import NOW, item
+from test_ranking import NOW, item, TERMS_ON
 from test_above_similarity import greedy_reference
 
 
@@ -20,7 +20,7 @@ class SubscriptionSimilarityTests(unittest.TestCase):
     def test_zero_restores_component_only_and_full_base_ignores_components(self):
         first, second = self.pair(12)
         for base, expected in [(0, 60), (25, 70), (50, 80), (100, 100)]:
-            terms = dict(ranking.DEFAULT_TERMS, similar_base_percent=base)
+            terms = dict(TERMS_ON, similar_base_percent=base)
             self.assertEqual(ranking.similarity(first, second, terms)[0], expected)
 
     def test_base_does_not_match_other_subscriptions_or_independent_links(self):
@@ -32,7 +32,7 @@ class SubscriptionSimilarityTests(unittest.TestCase):
         self.assertEqual(ranking.similarity(first, first, ranking.DEFAULT_TERMS)[0], 100)
 
     def test_base_alone_works_without_available_components(self):
-        terms = dict(ranking.DEFAULT_TERMS, similar_publish_weight=0,
+        terms = dict(TERMS_ON, similar_publish_weight=0,
                        similar_length_weight=0)
         first, second = self.pair(365)
         first['last_viewed'] = NOW - 12 * 3600
@@ -47,10 +47,10 @@ class SubscriptionSimilarityTests(unittest.TestCase):
 
     def test_above_penalty_counts_base_beyond_publish_window(self):
         first, second = self.pair(365)
-        ranked = ranking.rank('score', [first, second], NOW)
+        ranked = ranking.rank('score', [first, second], NOW, TERMS_ON)
         self.assertEqual([p['score'] for p in ranked], [0, -7.5])
         self.assertIn('50% total', ranked[1]['reasons'][-1]['label'])
-        explained = ranking.explain_similarities(ranked, ranked, ranking.DEFAULT_TERMS, NOW)
+        explained = ranking.explain_similarities(ranked, ranked, TERMS_ON, NOW)
         match = explained[1]['above_matches'][0]
         self.assertEqual(match['base_percent'], 50)
         self.assertEqual(match['percent'], 50)
@@ -59,9 +59,9 @@ class SubscriptionSimilarityTests(unittest.TestCase):
     def test_invalid_percentages_are_rejected(self):
         for value in [-1, 100.01, True, '50', float('nan'), float('inf')]:
             with self.subTest(value=value), self.assertRaises(ValueError):
-                ranking.check_terms(dict(ranking.DEFAULT_TERMS, similar_base_percent=value))
+                ranking.check_terms(dict(TERMS_ON, similar_base_percent=value))
         for value in [0, 12.5, 50, 100]:
-            self.assertEqual(ranking.check_terms(dict(ranking.DEFAULT_TERMS,
+            self.assertEqual(ranking.check_terms(dict(TERMS_ON,
                              similar_base_percent=value))['similar_base_percent'], value)
 
     def test_random_rankings_match_independent_rational_reference(self):
@@ -72,7 +72,7 @@ class SubscriptionSimilarityTests(unittest.TestCase):
                                age=rng.choice([None, 0, 12, 23, 30])),
                           title=rng.choice(['CPU design', 'CPU 12', 'Bread 12', 'the']),
                           estimated_minutes=rng.choice([None, 5, 10, 20])) for i in range(14)]
-            terms = dict(ranking.DEFAULT_TERMS, similar_base_percent=rng.choice([0, 12.5, 50, 100]),
+            terms = dict(TERMS_ON, similar_base_percent=rng.choice([0, 12.5, 50, 100]),
                            similar_publish_weight=rng.choice([0, 1, 2]),
                            similar_length_weight=rng.choice([0, 1, 2]))
             with self.subTest(seed=seed):
