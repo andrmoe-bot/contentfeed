@@ -75,9 +75,9 @@ DEFAULT_DATA_DIR = ROOT / "data"
 DATA_FILES = {
     "LINKS_FILE": "links.txt", "FEEDS_FILE": "feeds.txt", "CACHE_FILE": "cache.json", "FEED_CACHE_FILE": "feeds.json",
     "STATE_FILE": "state.json", "SETTINGS_FILE": "settings.json", "JELLYFIN_FILE": "jellyfin.json",
-    "CALDAV_FILE": "caldav.json", "STOP_FILE": "stop.json",
+    "CALDAV_FILE": "caldav.json",
 }
-LINKS_FILE = FEEDS_FILE = CACHE_FILE = FEED_CACHE_FILE = STATE_FILE = SETTINGS_FILE = JELLYFIN_FILE = CALDAV_FILE = STOP_FILE = Path()
+LINKS_FILE = FEEDS_FILE = CACHE_FILE = FEED_CACHE_FILE = STATE_FILE = SETTINGS_FILE = JELLYFIN_FILE = CALDAV_FILE = Path()
 # Before state.json, each of its fields had a file of its own, {url: value}.
 OLD_STATE_FILES = {"added": "added.json", "viewed": "viewed.json", "skipped": "skipped.json", "color": "colors.json"}
 TEMPLATES = {
@@ -123,8 +123,6 @@ cache: dict[str, dict] = {}
 added: dict[str, float] = {}  # url -> unix time the server first saw the link
 viewed: dict[str, float] = {}  # url -> unix time you last opened it
 colors: dict[str, str] = {}  # url -> the tag you gave it (see ranking.TAGS); most items have none
-stop: dict = {}  # {"stop_at": unix time}: the stop-watching timer; empty when unset. Once passed,
-# it has fired: the feed stops showing content until the timer is cleared
 # Modes, each with its own settings, saved in settings.json with the normal settings (ranking.TERMS):
 modes: list[dict] = []  # [{"name": str, "pattern": regex, "terms": dict}], in the order they were added
 mode_choice: dict = {}  # {"name": mode}: the mode you chose in the panel; empty to follow the calendar
@@ -795,12 +793,11 @@ def mark_older_red(url: str, age: float) -> int | None:
 
 def settings() -> dict:
     """The settings panel's data: the normal settings (terms), each mode's, the active mode and how it
-    was chosen (see active_mode), the defaults and limits, and the stop timer."""
+    was chosen (see active_mode), and the defaults and limits."""
     with lock:
         mode = active_mode(calendar_events(list(subscriptions)), time.time())
         return {"terms": dict(ranking.TERMS), "modes": [mode_data(m) for m in modes],
-                "mode": mode, "defaults": ranking.DEFAULT_TERMS, "limits": ranking.TERM_LIMITS,
-                "stop_at": stop.get("stop_at")}
+                "mode": mode, "defaults": ranking.DEFAULT_TERMS, "limits": ranking.TERM_LIMITS}
 
 
 NORMAL = "Normal"  # the mode in effect when no other is: its settings are ranking.TERMS
@@ -861,27 +858,6 @@ def active_mode(events: list[dict], now: float) -> dict:
         if event:
             return {"name": mode["name"], "source": "calendar", "event": event.get("title")}
     return {"name": NORMAL, "source": "default", "event": None}
-
-
-def set_stop(value) -> str | None:
-    """Set the stop-watching timer to a unix time, or clear it with None. Returns an error, or None."""
-    if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float))
-                              or not 0 < value <= 10_000_000_000):
-        return "stop_at must be a unix time or null"
-    with lock:
-        if value is None:
-            stop.clear()
-        else:
-            stop["stop_at"] = float(value)
-    save_json(STOP_FILE, stop)  # bumps state_version, so the feed is rebuilt with the new filter
-    return None
-
-
-def load_stop():
-    value = load_json(STOP_FILE).get("stop_at")
-    # A timer more than a day in the past was never cleared; treat it as stale, not as a fired stop.
-    if isinstance(value, (int, float)) and not isinstance(value, bool) and time.time() - 24 * 3600 < value:
-        stop["stop_at"] = float(value)
 
 
 def write_settings():
@@ -1147,13 +1123,12 @@ def enrich_posts(ranked: list[dict], count: int):
             schedule(post["url"], force=True)
 
 
-def stop_state(events: list[dict], now: float, terms: dict, stop_at: float | None,
-               calendar_of=lambda event: None) -> dict:
+def stop_state(events: list[dict], now: float, terms: dict, calendar_of=lambda event: None) -> dict:
     """The stop-watching state for a feed response: the effective stop time, whether it has run out
-    (stopped), stop_event, the event that causes it, if it isn't the timer, and ongoing_event, the
+    (stopped), stop_event, the event that causes it, and ongoing_event, the
     event taking place now, if any. Both come with all their details and calendar_of(event), their
-    calendar's name, for stop mode to show with a countdown to the start or the end."""
-    effective, event = ranking.effective_stop(events, now, terms, stop_at)
+    calendar's name, for the stop screen to show with a countdown to the start or the end."""
+    effective, event = ranking.effective_stop(events, now, terms)
     ongoing = ranking.ongoing_event(events, now)
     details = lambda e: ({**{k: e.get(k) for k in ("url", "title", "description", "calendar_kind", "calendar_start", "deadline")},
                           "calendar": calendar_of(e)} if e is not None else None)
@@ -1232,7 +1207,7 @@ def mark_past_stop(items: list[dict], stopping: dict, now: float, post_url: str 
     """While the stop is ahead, give each post past_stop: how many minutes it would run past it, for
     the ranker's points. The post whose page is open and the one you're viewing are left unmarked, so
     reloading while you watch doesn't push it down. Once the stop has fired the feed is left alone: the
-    response's stopped flag tells the page to switch to stop mode in JS, so switching back is seamless."""
+    response's stopped flag tells the page to show the stop screen in JS, so switching back is seamless."""
     if stopping["stop_at"] is None or stopping["stopped"]:
         return items
     watching = being_viewed(items)
@@ -1293,7 +1268,7 @@ def feed(ranker: str, limit: int = MAX_ITEMS_SHOWN, terms: dict | None = None, *
         events = calendar_events(all_subs)
         mode = active_mode(events, now)
         terms = terms or dict(mode_terms(mode["name"]))
-        stopping = stop_state(events, now, terms, stop.get("stop_at"), lambda event: calendar_name(event, all_subs))
+        stopping = stop_state(events, now, terms, lambda event: calendar_name(event, all_subs))
     stopping = {**stopping, "mode": mode,
                 "calendars_unreachable": unreachable_calendars(all_subs)}
     ranked = ranking_for(ranker, terms, entries, subs, search, post_url, stopping, now)
@@ -1788,11 +1763,6 @@ def modes_api(body):
     return {"ok": not error, "error": error, **settings()}, 400 if error else 200
 
 
-def stop_api(body):
-    error = set_stop(body.get("stop_at"))
-    return {"ok": not error, "error": error, "stop_at": stop.get("stop_at")}, 400 if error else 200
-
-
 def refresh_api(body):
     for u in read_entries():
         schedule(u, force=True)
@@ -1823,7 +1793,6 @@ POST_APIS = {
     "/api/color": lambda body: ok(set_color(str(body.get("url", "")), str(body.get("color", "")))),
     "/api/settings": settings_api,
     "/api/modes": modes_api,
-    "/api/stop": stop_api,
     "/api/refresh": refresh_api,
 }
 
@@ -1864,7 +1833,6 @@ def main():
         save_json(FEED_CACHE_FILE, subscriptions, affects_feed=False)
     load_state()
     load_settings()
-    load_stop()
     try:
         server = ThreadingHTTPServer((args.host, args.port), Handler)
     except PermissionError:

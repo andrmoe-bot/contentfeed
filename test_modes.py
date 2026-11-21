@@ -46,9 +46,9 @@ class ModeTests(unittest.TestCase):
         self.addCleanup(self.stack.close)
         root = Path(self.stack.enter_context(tempfile.TemporaryDirectory()))
         for name in ("LINKS_FILE", "FEEDS_FILE", "CACHE_FILE", "FEED_CACHE_FILE", "STATE_FILE",
-                     "SETTINGS_FILE", "JELLYFIN_FILE", "CALDAV_FILE", "STOP_FILE"):
+                     "SETTINGS_FILE", "JELLYFIN_FILE", "CALDAV_FILE"):
             self.stack.enter_context(patch.object(server, name, root / name, create=True))
-        for name in ("subscriptions", "cache", "added", "viewed", "colors", "ranked_cache", "stop", "mode_choice"):
+        for name in ("subscriptions", "cache", "added", "viewed", "colors", "ranked_cache", "mode_choice"):
             self.stack.enter_context(patch.object(server, name, {}))
         self.stack.enter_context(patch.object(server, "modes", []))
         self.stack.enter_context(patch.object(server, "pending", set()))
