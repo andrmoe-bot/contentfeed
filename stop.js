@@ -1,6 +1,6 @@
-// The stop-watching timer. While it's ahead, the server leaves out posts that would run past it,
-// so every post shown can be finished before the stop time (as of when the feed was shown: the page
-// doesn't reorder as time passes). When the stop time runs out (the timer, or an event's lead time), the page
+// The stop-watching timer. While it's ahead, posts that would run past it get the "Past the stop
+// time" points for each minute they would (as of when the feed was shown: the page doesn't reorder
+// as time passes). When the stop time runs out (the timer, or an event's lead time), the page
 // switches to stop mode in JS: the feed is hidden behind a notice naming the event that caused the
 // stop (or a generic timer message) — in an event's lead time, "stop watching now and get ready",
 // with the event in full and a countdown to its start — and the event taking place now, if any, with a countdown to its end; playback is force-stopped and an audio alert sounds (see forceStop) — and since the feed
@@ -19,7 +19,7 @@ stopForm.addEventListener("submit", async (e) => {
   const { ok, data } = await api("/api/stop", { stop_at: when.getTime() / 1000 });
   if (!ok) return say(data.error || "Couldn't set the timer.", true);
   stopClear.hidden = false;
-  say(`Stopping at ${stopTime.value}: the feed now shows only posts you can finish before then.`);
+  say(`Stopping at ${stopTime.value}: posts that would run past it are pushed down.`);
   load({ reorder: true });
 });
 stopClear.addEventListener("click", async () => {
@@ -49,7 +49,7 @@ function stopNote(stopAt, stopped) {
   if (stopped) return `Stopped at ${hhmm}`;
   const remaining = Math.round((stopAt - Date.now() / 1000) / 60);
   const when = remaining > 0 ? `in ${remaining} min` : "now";
-  return `Stopping at ${hhmm} (${when}) · only posts that finish before then`;
+  return `Stopping at ${hhmm} (${when}) · posts that would run past it are pushed down`;
 }
 
 let lastStop = null;  // the stop fields of the last feed response

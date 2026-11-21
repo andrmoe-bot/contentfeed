@@ -5,6 +5,8 @@
 const SETTINGS = [
   { key: "enrich_count", label: "Update incomplete posts", before: "", after: "posts on page load",
     hint: "Fetch missing runtime or exact publication time for this many highest-ranked incomplete posts when you open the site. 0 turns this off. This does not add score points." },
+  { key: "post_limit", label: "Post limit", before: "show at most", after: "posts",
+    hint: "The feed shows only this many of its highest-scoring posts, without “Show more”. 1 shows one post at a time; 0 an empty feed. The highest value, 10 000 000, means no limit. A subscription's page isn't limited." },
   { key: "next_up_bonus", label: "Next up", before: "", after: "points",
     hint: "Next up is the post after the one you opened most recently in a subscription: the next part of its series, or else the next published. Not for subscriptions tagged “latest”." },
   { key: "seen_bonus", label: "Seen", before: "", after: "points",
@@ -16,7 +18,9 @@ const SETTINGS = [
   { key: "above_similarity_penalty", label: "Similar posts above", before: "", after: "points per 100% similarity",
     hint: "Adds signed points for similarity to each post already above it, using the publish-time, content-length and title similarity weights below. Two 50% matches add up to the full configured points. Negative points penalize similarity. Different subscriptions do not match. No viewing-time fade." },
   { key: "event_lead_minutes", label: "Event lead time", before: "stop watching", after: "minutes before an event",
-    hint: "Every event that hasn't ended acts as a stop time this many minutes before it starts: while it's the earliest stop in effect, the feed shows only posts you can finish before then, so you can get to the event in time. 0 stops exactly when the event starts. The stop timer at the top can set an earlier time; the earliest stop wins. Events aren't feed items, so they never appear as cards." },
+    hint: "Every event that hasn't ended acts as a stop time this many minutes before it starts: while it's the earliest stop in effect, posts that would run past it get the Past the stop time points, so you can get to the event in time. 0 stops exactly when the event starts. The stop timer at the top can set an earlier time; the earliest stop wins. Events aren't feed items, so they never appear as cards." },
+  { key: "past_stop_per_minute", label: "Past the stop time", before: "", after: "points per minute",
+    hint: "While a stop time is ahead (the timer, or an event's lead time), added for each minute a post's estimated length would run past it if you started it now. Below 0 pushes down posts you couldn't finish. The post you're viewing is exempt; unknown lengths and tasks get none. Worked out when the feed is shown." },
   { key: "task_deadline_bonus", label: "Task urgency", before: "", after: "points at deadline",
     hint: "Maximum points for a task due now. The bonus ramps from 0 to this amount during the final 30 days before its deadline. Tasks in the same calendar can also get the similar-posts-above penalty." },
   { key: "task_bonus", label: "Task", before: "", after: "points",
@@ -76,6 +80,8 @@ function steps(lo, hi, signed) {
 }
 const SIGNED_STEPS = steps(0, 3, true);  // ±1 to ±1000 points
 const BONUS_STEPS = steps(0, 3, false);  // 1 to 1000 points
+// Whole numbers of posts, ending in the maximum: no limit
+const POST_LIMIT_STEPS = [0, 1, 2, 3, 5, 7, 10, 15, 20, 30, 50, 70, 100, 150, 200, 300, 500, 700, 1000, 10_000_000];
 
 // The slider position closest to a typed number, on the slider's log scale.
 function nearestStep(list, value) {
@@ -94,7 +100,8 @@ const controls = {};
 function buildSettings() {
   document.getElementById("settings").replaceChildren(...SETTINGS.map(({ key, term, label, before, after, extra, hint }) => {
     const { min, max } = limits[key];
-    const list = max <= 100 ? Array.from({ length: max + 1 }, (_, i) => i) : min < 0 ? SIGNED_STEPS : BONUS_STEPS;
+    const list = key === "post_limit" ? POST_LIMIT_STEPS
+      : max <= 100 ? Array.from({ length: max + 1 }, (_, i) => i) : min < 0 ? SIGNED_STEPS : BONUS_STEPS;
     const num = el("input", { type: "number", id: `w-${key}`, step: "any", inputmode: "decimal", required: "", min, max });
     const slider = el("input", { type: "range", min: 0, max: list.length - 1, step: 1, "aria-label": `${label} slider` });
     const def = el("span");
@@ -142,9 +149,13 @@ function showSettings(w) {
   showFormula();
 }
 
-// Hide the terms that are 0 when the page loads; "Add a term" brings them back.
+// Hide the terms that are 0 when the page loads, and the post limit when there is none; "Add a term"
+// brings them back.
 function hideZeroTerms(w) {
-  for (const { key, term } of SETTINGS) if (!term && (key === "enrich_count" || w[key] !== 0)) shownTerms.add(key);
+  for (const { key, term } of SETTINGS) {
+    if (term) continue;
+    if (key === "post_limit" ? w[key] < limits[key].max : key === "enrich_count" || w[key] !== 0) shownTerms.add(key);
+  }
   showTerms();
 }
 
@@ -180,6 +191,7 @@ function showFormula() {
     ["article_bonus", `${plus(w.article_bonus)} if article`],
     ["length_per_minute", `${plus(w.length_per_minute)} × |estimated minutes − ${fmt(w.length_target_minutes)} target minutes|`],
     ["age_per_year", `${plus(w.age_per_year)} × age in years`],
+    ["past_stop_per_minute", `${plus(w.past_stop_per_minute)} × minutes past the stop time`],
     ["green_points", `${plus(w.green_points)} if tagged “show again soon”`],
     ["white_points", `${plus(w.white_points)} if tagged “maybe later”`],
     ["red_points", `${plus(w.red_points)} if tagged “don't show again”`],
@@ -191,7 +203,8 @@ function showFormula() {
   const next = shownTerms.has("next_up_bonus") ? `next up: ${fmt(w.next_up_bonus)} · ` : "";
   const opened = shownTerms.has("seen_bonus") ? `opened: ${fmt(w.seen_bonus)} · ` : "";
   if (typeof relabelDots === "function") relabelDots();  // the dots on the cards show these points
-  document.getElementById("formula").textContent = `${next}${opened}all:${terms || " 0"}`;
+  const most = shownTerms.has("post_limit") && w.post_limit < limits.post_limit.max ? ` · top ${fmt(w.post_limit)} shown` : "";
+  document.getElementById("formula").textContent = `${next}${opened}all:${terms || " 0"}${most}`;
 }
 
 function panelSay(text, isError = false) {

@@ -119,7 +119,7 @@ or a Jellyfin server (see Jellyfin).
 Incomplete tasks appear as cards; events don't — they take place when scheduled, not whenever the
 feed happens to show them, so they work through the stop-watching timer only (see Stop watching):
 every event that hasn't ended acts as a stop time at its start minus the Event lead time setting,
-so the feed shows only posts you can finish before you need to leave for it. The score panel
+so posts you couldn't finish before you need to leave for it are pushed down. The score panel
 controls task urgency during the final 30 days before a deadline. Tasks also get the
 similar-posts-above penalty against other tasks in the same calendar, and the fixed Task term
 adds points to every task (default 0). The Task priority term gives a task points by its
@@ -332,10 +332,13 @@ the one playing in another card.
 ## Stop watching
 
 Set a stop time with the "Stop watching at" box at the top of the feed (a time earlier today counts
-as tomorrow). While it's ahead, the feed leaves out any post whose estimated length would run past
-it, so every post shown can be finished before the stop time. Like the rest of the order, this is
-worked out when the feed is shown: posts don't disappear as time passes. Posts without an estimated length
-stay, and tasks are never left out. The status line shows the stop time and how long is
+as tomorrow). While it's ahead, a post whose estimated length would run past it gets the **Past the
+stop time** points for each minute it would (−20 per minute by default, rounded up to whole minutes),
+so a post running 1 minute over drops a little and a two-hour film sinks to the bottom. Nothing is
+left out. Like the rest of the order, this is worked out when the feed is shown, not as time passes.
+The post you're viewing (the one you opened last) is exempt, so reloading while you watch doesn't
+push it down. Posts without an estimated length and tasks get no points. To leave posts out
+altogether, use the post limit (see Ranking). The status line shows the stop time and how long is
 left. The timer is kept in `stop.json` in the data directory, so every device on the network shares
 it. When the time runs out, the page switches to stop mode: the feed is hidden behind a notice —
 the event that caused the stop, or a generic “Stop time reached” message for the timer, with a
@@ -360,8 +363,8 @@ server's stop state says.
 Events use the same system with a lead time: every event that hasn't ended acts as a stop time at
 its start minus the **Event lead time** setting in the score panel (30 minutes by default; 0 stops
 exactly at the event's start). The earliest stop in effect — your timer or an event's — is the one
-the feed filters by. So with dinner at 19:00 and the default lead, the feed shows only posts you
-can finish by 18:30. Events themselves never appear as feed cards; the notice above the stopped
+counts. So with dinner at 19:00 and the default lead, posts you couldn't finish by 18:30 are pushed
+down. Events themselves never appear as feed cards; the notice above the stopped
 feed names the event. Ended events don't stop watching anymore.
 
 When the stop time runs out — the timer, or an event's lead time — any video or other media playing
@@ -407,8 +410,15 @@ All scoring terms add their configured signed points; negative values subtract p
   Different subscriptions do not match. “Similar posts above” replaces the fixed repeat penalty;
   existing saved repeat amounts are carried over to the new setting.
 
+- −20 per minute a post would run past the stop time, while one is ahead (see Stop watching)
+
 Equal scores are ordered unopened first, then newest first, so with nothing else going on the
 feed is newest first.
+
+The **Post limit** setting shows only that many of the highest-scoring posts, with no "Show more":
+1 gives one post at a time (tag or open it, reload, and the next one is there), and 0 an empty feed.
+Its highest value, 10 000 000, means no limit, which is the default; the setting is hidden in the
+panel until you add it. A subscription's page isn't limited.
 
 For YouTube, subscribing imports the channel’s public playlists in the background alongside older
 videos. Existing channels are backfilled automatically. Each playlist defines a series in its saved
