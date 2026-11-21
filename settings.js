@@ -333,7 +333,7 @@ function showModeBar() {
   document.getElementById("mode-pattern-row").hidden = mode.name === "Normal";
   if (document.activeElement !== patternBox) patternBox.value = modeList.find((m) => m.name === mode.name)?.pattern ?? "";
   document.getElementById("mode-hint").textContent =
-    mode.source === "calendar" ? `These are ${mode.name}'s settings, on during “${mode.event}” until ${clock(mode.until)}.`
+    mode.source === "calendar" ? `These are ${mode.name}'s settings, on during “${mode.event}” until ${when(mode.until)}.`
     : mode.source === "chosen" ? `These are ${mode.name}'s settings, until you pick Auto.`
     : modeList.length ? "These are the normal settings. A mode is on during a free (not busy) calendar event that matches its pattern."
     : "Add a mode to use other settings, such as during free (not busy) calendar events for work.";

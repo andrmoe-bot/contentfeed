@@ -25,6 +25,26 @@ function clock(unix) {
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
 
+// A time with its day, when that isn't today: "14:30", "midnight" (the end of today), "tomorrow
+// 09:00", "Mon 09:00" within the week, else "Mon, Nov 30 09:00".
+function when(unix) {
+  const d = new Date(unix * 1000), today = new Date();
+  const days = Math.round((new Date(d).setHours(0, 0, 0, 0) - new Date(today).setHours(0, 0, 0, 0)) / 86400000);
+  if (days === 0) return clock(unix);
+  if (days === 1 && d.getHours() === 0 && d.getMinutes() === 0) return "midnight";
+  if (days === 1) return `tomorrow ${clock(unix)}`;
+  const opts = days > 1 && days < 7 ? { weekday: "short" } : { weekday: "short", day: "numeric", month: "short" };
+  return `${d.toLocaleDateString(undefined, opts)} ${clock(unix)}`;
+}
+
+// How long until a unix time: "now", "in 5 min", "in 2 h", "in 2 h 30 min".
+function inTime(unix) {
+  const minutes = Math.round((unix - Date.now() / 1000) / 60);
+  if (minutes <= 0) return "now";
+  const h = Math.floor(minutes / 60), m = minutes % 60;
+  return `in ${[h ? `${h} h` : "", m || !h ? `${m} min` : ""].filter(Boolean).join(" ")}`;
+}
+
 // GET path, or with a body, POST it as JSON. Returns { ok, data }; a server that doesn't answer is an error too.
 async function api(path, body) {
   const res = await fetch(path, body ? {

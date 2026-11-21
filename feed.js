@@ -508,7 +508,6 @@ function load(how = {}) {
 let enrichOnLoad = true;
 let shownTag = null;  // the ETag of the feed as shown: the server answers "not modified" if it's still the same
 let checkTag = null;  // the ETag of the last answer, for checks
-let lastPending = 0;
 let firstLoad = true;
 let shownMode = null;  // the mode the feed shown was ranked for
 
@@ -527,7 +526,7 @@ async function fetchFeed({ reorder = false, more = false } = {}) {
     if (res.ok || res.status === 304) enrichOnLoad = false;
     if (res.status === 304) {
       if (reorder) window.scrollTo(0, 0);
-      pollTimer = setTimeout(load, pollDelay(lastPending, lastStop?.stop_at));
+      pollTimer = setTimeout(load, pollDelay(lastStop));
       return;
     }
     const data = await res.json();
@@ -542,7 +541,6 @@ async function fetchFeed({ reorder = false, more = false } = {}) {
       throw new Error(data.error);
     }
     checkTag = res.headers.get("ETag");
-    lastPending = data.pending;
     lastStop = data;
     forceStop(data);
     syncMode(data.mode);
@@ -562,8 +560,9 @@ async function fetchFeed({ reorder = false, more = false } = {}) {
       if (postPage) showStatus(data, "");
       else if (subscriptionPage) showSubscription(data, "none");
       else showRanked(data);
+      renderStopNotice();  // the stop screen comes and goes with the stop state, not with the order
     }
-    pollTimer = setTimeout(load, pollDelay(data.pending, data.stop_at));
+    pollTimer = setTimeout(load, pollDelay(data));
   } catch (error) {
     statusEl.textContent = error.message || "Server unreachable";
     if (postPage && !postData) feedEl.replaceChildren(el("p", { role: "status", id: "post-loading" }, error.message || "Couldn't load this post."));
@@ -596,9 +595,9 @@ function showStatus(data, text) {
   const unreachable = (data.calendars_unreachable || []).map((c) =>
     `Calendar “${c.title}” isn't answering; using its events from ${c.fetched ? clock(c.fetched) : "before"}`);
   const mode = data.mode && data.mode.name !== "Normal" ? data.mode : null;
-  const modeNote = mode ? `${mode.name} mode${mode.until ? ` until ${clock(mode.until)}` : ""}` : "";
+  const modeNote = mode ? `${mode.name} mode${mode.until ? ` until ${when(mode.until)}` : ""}` : "";
   const stopLater = mode?.until && data.stop_at && !data.stopped && data.stop_at > mode.until;
-  statusEl.textContent = [...unreachable, modeNote, stopLater ? "" : stopNote(data.stop_at, data.stopped), text, data.pending ? `fetching ${data.pending}…` : ""]
+  statusEl.textContent = [...unreachable, modeNote, stopLater ? "" : stopNote(data), text, data.pending ? `fetching ${data.pending}…` : ""]
     .filter(Boolean).join(" · ");
 }
 

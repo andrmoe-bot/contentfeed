@@ -119,7 +119,7 @@ Incomplete tasks appear as cards; events don't — they take place when schedule
 feed happens to show them, so they only stop watching (see Stop watching):
 every busy event that hasn't ended acts as a stop time at its start minus the Event lead time setting,
 so posts you couldn't finish before you need to leave for it are pushed down. Events marked free
-(not busy) don't stop watching; they can turn a mode on instead (see Modes). The score panel
+(not busy) and all-day events don't stop watching; free ones can turn a mode on instead (see Modes). The score panel
 controls task urgency during the final 30 days before a deadline. Tasks also get the
 similar-posts-above penalty against other tasks in the same calendar, and the fixed Task term
 adds points to every task (default 0). The Task priority term gives a task points by its
@@ -335,7 +335,9 @@ Calendar events stop watching. Every busy event that hasn't ended has a stop tim
 minus the **Event lead time** setting (30 minutes by default; 0 stops exactly at the event's
 start), and the earliest one counts. So with dinner at 19:00 and the default lead, the stop time is
 18:30. Events marked free (not busy) don't stop watching; they can turn a mode on instead (see
-Modes). Events never appear as feed cards, and ended events don't stop watching anymore.
+Modes). All-day events, such as birthdays and holidays, don't stop watching either, as they would
+stop the feed for the whole day. Events never appear as feed cards, and ended events don't stop
+watching anymore.
 
 While the stop time is ahead, a post whose estimated length would run past it gets the **Past the
 stop time** points for each minute it would (−20 per minute by default, rounded up to whole
@@ -343,8 +345,9 @@ minutes), so a post running 1 minute over drops a little and a two-hour film sin
 Nothing is left out. Like the rest of the order, this is worked out when the feed is shown, not as
 time passes. The post you're viewing (the one you opened last) is exempt, so reloading while you
 watch doesn't push it down. Posts without an estimated length and tasks get no points. To leave
-posts out altogether, use the post limit (see Ranking). The status line shows the stop time and how
-long is left.
+posts out altogether, use the post limit (see Ranking). The status line shows the stop time, the
+event and how long is left, such as "Stopping at 18:30 for “Dinner” (in 2 h 15 min)"; times on
+another day say which ("tomorrow 08:30").
 
 When the stop time runs out, the page shows the stop screen: the feed is hidden behind a notice
 saying to stop watching now and get ready for the event, with the event in full — its calendar,
@@ -352,9 +355,13 @@ title, start and end, description and link — and a countdown to its start. Any
 media playing is force-stopped, and a short audio alert sounds once per stop. If an event is taking
 place right now, the stop screen shows it with a countdown to when it's over (of several, the one
 that ends first); when a countdown reaches zero the page checks again at once instead of waiting
-for the next poll. The feed itself is still served, so once the event is over the page switches
+for the next poll. The feed stays stopped until every event whose stop time has come is over,
+including one whose lead time begins before then, such as lunch right after a meeting: the stop
+screen then shows the meeting and, as up next, lunch, and the status line says "Stopped until 13:30
+for “Meeting”, then “Lunch”". The feed itself is still served, so once the event is over the page switches
 straight back to the feed with nothing rebuilt. While a stop time is in effect the page polls every
-10 seconds, so the stop firing and the feed returning are both noticed promptly.
+10 seconds, and the page checks again just after each change it knows is coming (the stop time,
+the feed returning, a mode's event ending), so these show within a second or so.
 
 ## Tags
 

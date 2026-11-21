@@ -34,6 +34,7 @@ class CalendarPost(TypedDict):
     calendar_uid: str
     priority: int | None  # PRIORITY 1 (highest) to 9 (lowest); None if undefined
     free: bool  # an event marked free (TRANSP:TRANSPARENT) rather than busy; such events don't stop watching
+    all_day: bool  # an event on whole days (DTSTART is a date), such as a birthday; these don't stop watching either
 
 
 WINDOW_BEFORE = 86400  # repeating items are expanded from a day ago...
@@ -165,6 +166,7 @@ def _post(component, source, resource_url) -> CalendarPost | None:
         "published": published, "calendar_kind": kind, "calendar_start": start,
         "deadline": deadline, "calendar_uid": uid, "priority": priority,
         "free": kind == "event" and _text(component, "TRANSP").upper() == "TRANSPARENT",
+        "all_day": kind == "event" and start_value is not None and not isinstance(start_value, datetime),
     }
 
 
@@ -220,7 +222,7 @@ def parse_calendar_data(body, resource_url):
 MAX_ENTRIES = 1000  # tasks, and separately events, kept per calendar
 # Saved with each calendar read ("parser"). Raise it whenever a change here would read calendars
 # differently: at startup, calendars last read with another version are read again (see server.py).
-PARSER_VERSION = 3  # 2: read with icalendar and recurring-ical-events; 3: events marked free
+PARSER_VERSION = 4  # 2: read with icalendar and recurring-ical-events; 3: events marked free; 4: all-day events
 
 
 def calendar_result(entries: list[CalendarPost], title: str | None, url: str) -> dict:
