@@ -40,10 +40,10 @@ class SimilaritySettingsTests(unittest.TestCase):
             self.assertEqual(ranking.TERMS['similar_base_percent'], base)
 
     def test_relative_weights_round_trip_including_zero_and_fractional_values(self):
-        for publish, length, title in [(1, 1, 1), (0.25, 0.75, 0.5), (0, 1, 0), (0, 0, 1), (0, 0, 0)]:
-            with self.subTest(publish=publish, length=length, title=title):
+        for publish, length in [(1, 1), (0.25, 0.75), (0, 1), (1, 0), (0, 0)]:
+            with self.subTest(publish=publish, length=length):
                 terms = dict(ranking.DEFAULT_TERMS, similar_publish_weight=publish,
-                               similar_length_weight=length, similar_title_weight=title)
+                               similar_length_weight=length)
                 self.assertIsNone(server.save_settings(terms))
                 self.assertEqual(json.loads(self.path.read_text())['terms'], terms)
                 ranking.TERMS.update(ranking.DEFAULT_TERMS)
@@ -54,21 +54,21 @@ class SimilaritySettingsTests(unittest.TestCase):
         terms = dict(ranking.DEFAULT_TERMS, similar_days=7, similar_penalty=60)
         del terms['similar_publish_weight']
         del terms['similar_length_weight']
-        del terms['similar_title_weight']
+        terms['similar_title_weight'] = 2  # a setting that no longer exists is dropped
         self.path.write_text(json.dumps({'terms': terms}))
         server.load_settings()
         self.assertEqual(ranking.TERMS['similar_days'], 7)
         self.assertEqual(ranking.TERMS['similar_penalty'], 60)
         self.assertEqual(ranking.TERMS['similar_publish_weight'], 1)
         self.assertEqual(ranking.TERMS['similar_length_weight'], 0)
-        self.assertEqual(ranking.TERMS['similar_title_weight'], 0)
+        self.assertNotIn('similar_title_weight', ranking.TERMS)
 
     def test_invalid_weights_leave_saved_and_active_settings_unchanged(self):
         original = dict(ranking.DEFAULT_TERMS)
         self.assertIsNone(server.save_settings(original))
         saved = self.path.read_text()
         version = server.state_version
-        for key in ['similar_publish_weight', 'similar_length_weight', 'similar_title_weight']:
+        for key in ['similar_publish_weight', 'similar_length_weight']:
             self.assertIsNotNone(server.save_settings(dict(original, **{key: -1})))
             self.assertEqual(ranking.TERMS, original)
             self.assertEqual(self.path.read_text(), saved)
@@ -131,12 +131,6 @@ class SimilaritySettingsTests(unittest.TestCase):
                 # Previewing changes neither the saved settings nor the next normal result.
                 self.assertEqual(request('/api/settings')['terms'], equal)
                 self.assertEqual(candidate()['similar']['percent'], 69)
-                title_only = dict(equal, similar_publish_weight=0, similar_length_weight=0, similar_title_weight=1)
-                query = '?terms=' + urllib.parse.quote(json.dumps(title_only))
-                self.assertEqual(candidate(query)['similar']['percent'], 88)
-                all_three = dict(equal, similar_title_weight=1)
-                query = '?terms=' + urllib.parse.quote(json.dumps(all_three))
-                self.assertEqual(candidate(query)['similar']['percent'], 75)
                 self.assertEqual(request('/api/settings')['terms'], equal)
                 invalid = dict(equal, similar_length_weight=-1)
                 with self.assertRaises(urllib.error.HTTPError) as error:
@@ -157,15 +151,10 @@ class SimilaritySettingsTests(unittest.TestCase):
                 with urllib.request.urlopen(base + '/settings.js', timeout=5) as response:
                     self.assertEqual(response.headers['Content-Type'], 'text/javascript; charset=utf-8')
                     html = response.read().decode()  # the score panel's settings
-                self.assertIn('label: "Publish time similarity"', html)
-                self.assertIn('label: "Content length similarity"', html)
-                self.assertIn('label: "Title similarity"', html)
-                self.assertNotIn('key: "event_bonus"', html)
-                self.assertNotIn('past_event_penalty', html)
-                self.assertIn('key: "event_lead_minutes", label: "Event lead time"', html)
-                self.assertNotIn('event_urgency_bonus', html)
-                self.assertIn('key: "task_bonus", label: "Task"', html)
-                self.assertIn('term: "similarity"', html)
+                for key in ranking.DEFAULT_TERMS:  # every setting is in the panel, once
+                    self.assertEqual(html.count(f'key: "{key}"'), 1, key)
+                for gone in ('similar_title_weight', 'event_bonus', 'past_event_penalty', 'event_urgency_bonus'):
+                    self.assertNotIn(gone, html)
                 with urllib.request.urlopen(base + '/subscriptions', timeout=5) as response:
                     self.assertIn(f'ContentFeed · v{server.VERSION}', response.read().decode())
                 with urllib.request.urlopen(base + '/post?url=' + urllib.parse.quote(posts[0]['url']), timeout=5) as response:

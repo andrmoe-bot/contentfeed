@@ -26,7 +26,7 @@ def brute_force(items, terms):
         best = None
         total = 0
         matches = 0
-        if terms["similar_penalty"] and (terms["similar_base_percent"] or terms["similar_series_percent"] or terms["similar_publish_weight"] or terms["similar_length_weight"] or terms["similar_title_weight"]):
+        if terms["similar_penalty"] and (terms["similar_base_percent"] or terms["similar_series_percent"] or terms["similar_publish_weight"] or terms["similar_length_weight"]):
             for other in recent:
                 percent, why = ranking.similarity(it, other, terms)
                 hours = ranking.hours_since(NOW, other["last_viewed"])

@@ -4,8 +4,6 @@ import copy
 from fractions import Fraction
 import math
 import random
-import re
-import unicodedata
 import unittest
 from unittest.mock import patch
 
@@ -28,15 +26,6 @@ def reference_similarity(first, second, terms):
     if all(isinstance(n, (int, float)) and not isinstance(n, bool) and math.isfinite(n) and n > 0 for n in (a, b)):
         total += length * Fraction(str(min(a, b))) / Fraction(str(max(a, b)))
         normalizer += length
-    title_weight = Fraction(str(terms['similar_title_weight']))
-    def words(title):
-        if not isinstance(title, str):
-            return set()
-        return set(re.findall(r"[^\W_]+", unicodedata.normalize('NFKC', title).casefold())) - ranking.TITLE_STOP_WORDS
-    first_words, second_words = words(first.get('title')), words(second.get('title'))
-    if first_words and second_words:
-        total += title_weight * Fraction(2 * len(first_words & second_words), len(first_words) + len(second_words))
-        normalizer += title_weight
     base = Fraction(str(terms['similar_base_percent']))
     if set(first.get('series_ids') or ()) & set(second.get('series_ids') or ()):
         base = max(base, Fraction(str(terms['similar_series_percent'])))
@@ -49,7 +38,7 @@ def greedy_reference(items, terms):
     positions = {it['url']: i for i, it in enumerate(items)}
     remaining, out = copy.deepcopy(base), []
     amount = terms['above_similarity_penalty']
-    if not (terms['similar_base_percent'] or terms['similar_series_percent'] or terms['similar_publish_weight'] or terms['similar_length_weight'] or terms['similar_title_weight']):
+    if not (terms['similar_base_percent'] or terms['similar_series_percent'] or terms['similar_publish_weight'] or terms['similar_length_weight']):
         amount = 0
     while remaining:
         candidates = []

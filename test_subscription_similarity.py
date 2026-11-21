@@ -33,7 +33,7 @@ class SubscriptionSimilarityTests(unittest.TestCase):
 
     def test_base_alone_works_without_available_components(self):
         terms = dict(ranking.DEFAULT_TERMS, similar_publish_weight=0,
-                       similar_length_weight=0, similar_title_weight=0)
+                       similar_length_weight=0)
         first, second = self.pair(365)
         first['last_viewed'] = NOW - 12 * 3600
         ranking.similar_to_recent([first, second], NOW, terms)
@@ -56,14 +56,6 @@ class SubscriptionSimilarityTests(unittest.TestCase):
         self.assertEqual(match['percent'], 50)
         self.assertEqual(match['components'][0]['percent'], 0)
 
-    def test_full_base_does_not_highlight_zero_contribution_title_words(self):
-        first, second = self.pair()
-        first['title'] = second['title'] = 'CPU design'
-        terms = dict(ranking.DEFAULT_TERMS, similar_base_percent=100, similar_title_weight=1)
-        match = ranking.similarity_breakdown(first, second, terms)
-        self.assertEqual(match['percent'], 100)
-        self.assertTrue(all(not p['shared'] for p in match['title_parts']))
-
     def test_invalid_percentages_are_rejected(self):
         for value in [-1, 100.01, True, '50', float('nan'), float('inf')]:
             with self.subTest(value=value), self.assertRaises(ValueError):
@@ -82,8 +74,7 @@ class SubscriptionSimilarityTests(unittest.TestCase):
                           estimated_minutes=rng.choice([None, 5, 10, 20])) for i in range(14)]
             terms = dict(ranking.DEFAULT_TERMS, similar_base_percent=rng.choice([0, 12.5, 50, 100]),
                            similar_publish_weight=rng.choice([0, 1, 2]),
-                           similar_length_weight=rng.choice([0, 1, 2]),
-                           similar_title_weight=rng.choice([0, 1, 2]))
+                           similar_length_weight=rng.choice([0, 1, 2]))
             with self.subTest(seed=seed):
                 self.assertEqual(ranking.rank('score', posts, NOW, terms), greedy_reference(posts, terms))
 
