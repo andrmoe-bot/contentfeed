@@ -402,11 +402,11 @@ All scoring terms add their configured signed points; negative values subtract p
 - −40 × the **sum** over everything you opened recently of similarity × the fraction of the 24-hour window remaining since opening; each match contributes on its own, not just the strongest (see below)
 - 0 for its media type: video (YouTube, Jellyfin, NRK TV, pages with a video file), image (a link straight to a picture) or
   article (anything else). Each has its own setting, which may be negative, to favor or hold back that type.
-- 0 per **minute away from the target content length** by default. Content length adds `weight × |estimated minutes − target minutes|`. Set a negative weight to favor content near the target, or a positive weight to favor content farther away. The target defaults to 0 minutes, preserving existing scores; both the weight and target are configurable in Settings. Runtime metadata is used where available; text is estimated at 200 words per minute (at least one minute). Feed text may be only an excerpt, and page estimates can include surrounding text. Unknown lengths have no adjustment. When the site loads, the five highest-ranked posts with incomplete data are updated in the background, regardless of score weights. YouTube updates fetch runtime and exact publication time together. Change this count with “Update incomplete posts” in Settings (0–100; 0 disables it). Routine polling does not start additional batches; unavailable data stays unknown and recent attempts are skipped for six hours.
+- 0 per **minute away from the target content length** by default. Content length adds `weight × |estimated minutes − target minutes|`. Set a negative weight to favor content near the target, or a positive weight to favor content farther away. The target defaults to 0 minutes, preserving existing scores; both the weight and target are configurable in Settings. Runtime metadata is used where available; text is estimated at 200 words per minute (at least one minute). Feed text may be only an excerpt, and page estimates can include surrounding text. Unknown lengths have no adjustment. When the site loads, the five highest-ranked posts with incomplete data are updated in the background, regardless of score weights. YouTube updates fetch runtime and exact publication time together. Change this count with “Fetch details” in Settings (0–100; 0 disables it). Routine polling does not start additional batches; unavailable data stays unknown and recent attempts are skipped for six hours.
 - +10 if tagged "show again soon" (green), −50 if "maybe later" (white), −1000 if "don't show again" (red)
 - −15 × the **sum of similarities to posts above it**. A 100% match contributes −15,
   a 50% match contributes −7.5; two 50% matches contribute −15 together. It uses the same
-  publish-time, content-length and title weights as recent-view similarity, without a viewing-time fade.
+  publish-time and content-length weights as recent-view similarity, without a viewing-time fade.
   Different subscriptions do not match. “Similar posts above” replaces the fixed repeat penalty;
   existing saved repeat amounts are carried over to the new setting.
 
@@ -417,8 +417,8 @@ feed is newest first.
 
 The **Post limit** setting shows only that many of the highest-scoring posts, with no "Show more":
 1 gives one post at a time (tag or open it, reload, and the next one is there), and 0 an empty feed.
-Its highest value, 10 000 000, means no limit, which is the default; the setting is hidden in the
-panel until you add it. A subscription's page isn't limited.
+An empty box means no limit, which is the default (stored as the highest value, 10 000 000). A
+subscription's page isn't limited.
 
 For YouTube, subscribing imports the channel’s public playlists in the background alongside older
 videos. Existing channels are backfilled automatically. Each playlist defines a series in its saved
@@ -453,24 +453,18 @@ How alike two items are, from 0 to 100%:
   window (30 days by default). A week apart is 77%, two weeks 53%.
 - **Content length:** shorter minutes divided by longer minutes. Equal lengths are 100%;
   10 and 20 minutes are 50%.
-- **Title:** twice the shared meaningful words divided by the total words in both titles.
-  “Building a CPU, part 1” and “Building a CPU, part 2” are 75% alike. Unicode case and
-  punctuation are normalized, common English function words are removed, repeated words
-  count once, and numbers are kept. This measures word overlap, not semantic paraphrases.
-- The three similarities add according to their relative weights, then divide by the sum of
-  the available weights. A 50% publish-time match, 50% length match and 75% title match with
-  equal weights give 58.33% measured similarity, or 79% overall with the default base
-  (rounded once to whole percent). Scaling all component weights together leaves similarity unchanged.
-- Settings exposes the three weights and the publish-time window. Publish time defaults to
-  weight 1, content length and title to weight 0. Increase
-  **Title similarity** to include titles; set all three to 1 for an equal mix. The separate
-  Content length distance-from-target scoring is separate from similarity.
-- If either length is unknown/invalid or either title has no meaningful words, omit that
-  component and its weight. Use the remaining components; with no available component,
-  distinct same-subscription posts retain the subscription base.
-- Only posts from the same subscription match. Tags don't affect similarity. When length or title is
+- The two similarities add according to their relative weights, then divide by the sum of
+  the available weights. A 50% publish-time match and a 70% length match with equal weights
+  give 60% measured similarity, or 80% overall with the default base (rounded once to whole
+  percent). Scaling both weights together leaves similarity unchanged.
+- Settings exposes both weights and the publish-time window. Publish time defaults to
+  weight 1 and content length to weight 0. The Content length distance-from-target scoring is
+  separate from similarity.
+- If either length is unknown or invalid, length is left out along with its weight; with no
+  available component, distinct same-subscription posts keep the subscription base.
+- Only posts from the same subscription match. Tags don't affect similarity. When length is
   enabled, posts can still gain similarity beyond the subscription base outside the publish-time window.
-- Every item is 100% like itself, even without a known length or title. Set both bases and all three weights to 0 to disable the
+- Every item is 100% like itself, even without a known length. Set both bases and both weights to 0 to disable the
   similarity penalties entirely, including for opened items.
 
 The similarity penalty fades linearly to zero over 24 hours, updated in whole hours. Every
@@ -500,19 +494,14 @@ or `in a series starting “Making a CPU, part 1”, nothing before it opened �
 
 Change the numbers in the score panel: click "Settings" at the top of the feed. It opens
 beside the feed on a wide screen, or along the bottom on a narrow one, and stays open across reloads
-until you close it. Each setting comes with a slider and a box for an exact number:
-Next up, Seen, New subscription, Series, Similar posts above, Video, Image, Article, Content length, Age, Event lead time (Seen, Video, Image, Article, Content length and Age may be
-negative), Show again soon, Maybe later, Don't show again, Similar
-(which also has its number of hours), Publish time window (days), Publish time similarity and
-Content length similarity and Title similarity (relative weights), and Update incomplete posts (count). The
-sliders go in steps of 1, 1.5, 2, 3, 5 and 7 times a power of ten, so they cover both small and large
-numbers. Age defaults to 0 points per year since publication (or addition for links), counting fractional
-365-day years and updated in whole hours; negative values favor newer items and positive values favor older items. Future dates
-count as age 0. The feed reorders, showing its top, as
-you move a slider, and the setting is saved when you let go (or when you press Enter in the box).
-Settings that are 0 when the page loads are hidden, along with their part of the formula, to keep the
-panel short; add one back with "Add a term" below the others. Similar's hours come and go with Similar. The publish window and component weights stay visible
-whenever either similarity penalty is shown. Update incomplete posts always stays visible. The defaults are at the top of `ranking.py`. The other ranker,
+until you close it. The settings are in groups that fold away (Feed; Opened and next up; Tags; Kind,
+length and age; Stop time; Tasks; Similarity), and each group's heading says how many of its settings
+you've changed from the defaults. The browser remembers which groups you left open. Each setting has
+a box for an exact number and a slider; the sliders go in steps of 1, 1.5, 2, 3, 5 and 7 times a power
+of ten, so they cover both small and large numbers. Leave the post limit's box empty for no limit.
+Age counts fractional 365-day years since publication (or addition for links), updated in whole
+hours, and future dates count as age 0. The feed reorders, showing its top, as you move a slider,
+and the setting is saved when you let go (or when you press Enter in the box). The defaults are at the top of `ranking.py`. The other ranker,
 `chronological`, has no rules: everything scores 0 and the newest item is first. To add another ranker, register a
 function with `@ranker("name")`, then select it with `.venv/bin/python server.py --ranker name`, or try
 it without a restart at `/api/feed?ranker=name`.

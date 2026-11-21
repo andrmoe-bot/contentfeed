@@ -93,18 +93,25 @@ p { margin: 0; color: var(--muted); display: -webkit-box; -webkit-line-clamp: 3;
 .panel-head h2 { font-size: 16px; margin: 0; }
 #panel-close { padding: 2px 10px; font-size: 18px; line-height: 1.2; }
 #panel p { display: block; overflow: visible; -webkit-line-clamp: none; }
-#panel .hint, #formula { font-size: 13px; color: var(--muted); margin: 0; }
-#formula { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
-#settings { display: grid; gap: 18px; }
+#panel .hint { font-size: 13px; color: var(--muted); margin: 0; }
+#settings { display: grid; gap: 8px; }
+.group { border: 1px solid var(--border); border-radius: 10px; padding: 0 12px; }
+.group summary { display: flex; align-items: baseline; gap: 8px; padding: 10px 0; cursor: pointer; font-weight: 600; list-style: none; }
+.group summary::-webkit-details-marker { display: none; }
+.group summary::before { content: "▸"; color: var(--muted); width: 1em; transition: transform .15s; }
+.group[open] summary::before { transform: rotate(90deg); }
+.group[open] summary { border-bottom: 1px solid var(--border); margin-bottom: 12px; }
+.group .changed { margin-left: auto; font-size: 12px; font-weight: 400; color: var(--accent); }
+.group .setting { margin-bottom: 16px; }
 .setting { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; align-items: center; }
 .setting label { font-weight: 600; }
 .setting .num { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; }
-.setting input[type="number"] { flex: 0 0 auto; width: 7em; padding: 4px 8px; font-variant-numeric: tabular-nums; text-align: right; }
+.setting input[type="number"] { flex: 0 0 auto; width: 5.5em; padding: 4px 8px; font-variant-numeric: tabular-nums; text-align: right; }
 .setting input[type="number"]:invalid { border-color: var(--error); }
 .setting input[type="range"] { grid-column: 1 / -1; width: 100%; margin: 4px 0 0; padding: 0; border: 0; background: none; accent-color: var(--accent); }
 .setting .hint { grid-column: 1 / -1; }
-.setting[hidden], #add-term[hidden] { display: none; }
-#add-term { justify-self: start; padding: 6px 8px; font-size: 14px; }
+.setting .hint .default { white-space: nowrap; }
+.setting input[type="number"]::placeholder { color: var(--muted); }
 .panel-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 #panel-status { margin: 0; font-size: 13px; color: var(--muted); }
 #panel-status.error { color: var(--error); }

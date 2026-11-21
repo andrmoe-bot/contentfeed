@@ -1,66 +1,72 @@
-// The score settings panel. Each setting has a slider and a box for an exact number. The sliders go
-// in steps of 1, 1.5, 2, 3, 5 and 7 times a power of ten, so one slider covers small and huge numbers.
-// A setting with a term only changes how that term's points are worked out, such as Similar's days,
-// so it's shown and hidden with it.
+// The score settings panel, in groups that fold away. Each setting has a box for an exact number and
+// a slider. The sliders go in steps of 1, 1.5, 2, 3, 5 and 7 times a power of ten, so one slider covers
+// small and huge numbers. A group's heading says how many of its settings differ from the defaults.
+const GROUPS = [
+  { id: "feed", title: "Feed", open: true },
+  { id: "opened", title: "Opened and next up", open: true },
+  { id: "tags", title: "Tags", open: true },
+  { id: "kind", title: "Kind, length and age" },
+  { id: "stop", title: "Stop time" },
+  { id: "tasks", title: "Tasks" },
+  { id: "similarity", title: "Similarity" },
+];
 const SETTINGS = [
-  { key: "enrich_count", label: "Update incomplete posts", before: "", after: "posts on page load",
-    hint: "Fetch missing runtime or exact publication time for this many highest-ranked incomplete posts when you open the site. 0 turns this off. This does not add score points." },
-  { key: "post_limit", label: "Post limit", before: "show at most", after: "posts",
-    hint: "The feed shows only this many of its highest-scoring posts, without “Show more”. 1 shows one post at a time; 0 an empty feed. The highest value, 10 000 000, means no limit. A subscription's page isn't limited." },
-  { key: "next_up_bonus", label: "Next up", before: "", after: "points",
-    hint: "Next up is the post after the one you opened most recently in a subscription: the next part of its series, or else the next published. Not for subscriptions tagged “latest”." },
-  { key: "seen_bonus", label: "Seen", before: "", after: "points",
-    hint: "For items you've opened. Below 0: they go under things you haven't opened. Tagging an item doesn't count as opening it." },
-  { key: "new_sub_bonus", label: "New subscription", before: "", after: "points",
-    hint: "For posts from a subscription you've never opened anything from, such as one you just subscribed to." },
-  { key: "series_penalty", label: "Series", before: "", after: "points",
-    hint: "Added to a later part of a series when you haven't opened anything before it. YouTube series use imported channel playlists in playlist order. Other posts follow another from their subscription when their titles have the same numbers but one, 1 higher, such as “part 2” after “part 1”; Jellyfin and NRK TV episodes go in episode order. Not for subscriptions tagged “latest”." },
-  { key: "above_similarity_penalty", label: "Similar posts above", before: "", after: "points per 100% similarity",
-    hint: "Adds signed points for similarity to each post already above it, using the publish-time, content-length and title similarity weights below. Two 50% matches add up to the full configured points. Negative points penalize similarity. Different subscriptions do not match. No viewing-time fade." },
-  { key: "event_lead_minutes", label: "Event lead time", before: "stop watching", after: "minutes before an event",
-    hint: "Every event that hasn't ended acts as a stop time this many minutes before it starts: while it's the earliest stop in effect, posts that would run past it get the Past the stop time points, so you can get to the event in time. 0 stops exactly when the event starts. The stop timer at the top can set an earlier time; the earliest stop wins. Events aren't feed items, so they never appear as cards." },
-  { key: "past_stop_per_minute", label: "Past the stop time", before: "", after: "points per minute",
-    hint: "While a stop time is ahead (the timer, or an event's lead time), added for each minute a post's estimated length would run past it if you started it now. Below 0 pushes down posts you couldn't finish. The post you're viewing is exempt; unknown lengths and tasks get none. Worked out when the feed is shown." },
-  { key: "task_deadline_bonus", label: "Task urgency", before: "", after: "points at deadline",
-    hint: "Maximum points for a task due now. The bonus ramps from 0 to this amount during the final 30 days before its deadline. Tasks in the same calendar can also get the similar-posts-above penalty." },
-  { key: "task_bonus", label: "Task", before: "", after: "points",
-    hint: "Fixed points added to every task, independent of its deadline. Below 0: a penalty. Default: 0." },
-  { key: "task_priority_bonus", label: "Task priority", before: "", after: "points at priority 1",
-    hint: "Points for a task by its calendar priority: all of them at priority 1 (highest), scaling down by a ninth per level to a ninth of them at priority 9 (lowest). Many apps use 1 for high, 5 for medium and 9 for low. Tasks without a priority get none. Below 0: a penalty. Default: 0." },
-  { key: "video_bonus", label: "Video", before: "", after: "points",
-    hint: "For YouTube, Jellyfin and NRK TV videos. Below 0: a penalty." },
-  { key: "youtube_shorts_bonus", label: "YouTube Shorts", before: "", after: "points",
-    hint: "Extra points for YouTube Shorts links, added alongside Video points. Below 0: a penalty." },
-  { key: "image_bonus", label: "Image", before: "", after: "points",
-    hint: "For links straight to a picture. Below 0: a penalty." },
-  { key: "article_bonus", label: "Article", before: "", after: "points",
-    hint: "For everything else: articles, blog posts and other pages. Below 0: a penalty." },
-  { key: "length_per_minute", label: "Content length", before: "", after: "points per minute away from",
-    extra: { key: "length_target_minutes", type: "number", after: "target minutes" },
-    hint: "Weight × absolute distance from the target runtime or reading time at 200 words per minute. Negative favors content near the target; positive favors content farther away. Unknown lengths have no adjustment. Weight and target default to 0." },
-  { key: "age_per_year", label: "Age", before: "", after: "points per year",
-    hint: "Fractional 365-day years since publication for posts, or since addition for links, updated in whole hours. Negative favors newer items; positive favors older items. Future dates count as age 0. Default: 0." },
-  { key: "green_points", label: "Show again soon (green)", before: "", after: "points",
-    hint: "For items you tagged with the green dot. Only adds these points; it doesn't count as opening the item. Default: +10." },
-  { key: "white_points", label: "Maybe later (white)", before: "", after: "points",
-    hint: "For items you tagged with the white dot. Only adds these points; it doesn't count as opening the item. Default: −50." },
-  { key: "red_points", label: "Don't show again (red)", before: "", after: "points",
-    hint: "For items you tagged with the red dot. Only adds these points; it doesn't count as opening the item. Default: −1000." },
-  { key: "similar_penalty", label: "Similar", before: "", after: "points at 100% alike, within",
-    extra: { key: "similar_hours", type: "number", after: "hours" },
-    hint: "Added to items alike to something you opened, in proportion: 50% alike adds half the configured points. Negative points penalize similarity. The adjustment fades linearly to zero over this many hours, updated in whole hours. Only the strongest remaining penalty counts. 0 points or 0 hours: off." },
-  { key: "similar_base_percent", term: "similarity", label: "Subscription base similarity", before: "", after: "%",
-    hint: "Same-subscription posts start at this similarity. Other components fill the remainder: 50% base + 50% × 60% measured = 80%. Different subscriptions do not match. 0 restores similarity from components alone." },
-  { key: "similar_series_percent", term: "similarity", label: "Series base similarity", before: "", after: "%",
-    hint: "Posts in the same series of a subscription (a YouTube playlist, a Jellyfin or NRK TV show, or numbered titles) start at this similarity instead, if it's higher than the subscription base. Other components fill the remainder." },
-  { key: "similar_days", term: "similarity", label: "Publish time window", before: "alike within", after: "days",
-    hint: "Publish-time similarity is 100% for posts published together, falling evenly to 0% this many days apart. Only posts from the same subscription are compared." },
-  { key: "similar_publish_weight", term: "similarity", label: "Publish time similarity", before: "", after: "weight",
-    hint: "How much publish time contributes compared with content length and titles. Equal weights give components equal influence; only their ratios matter. Set both bases and all three weights to 0 to turn both similarity penalties off." },
-  { key: "similar_title_weight", term: "similarity", label: "Title similarity", before: "", after: "weight",
-    hint: "Twice the shared meaningful title words divided by the total words in both titles. Ignores case, punctuation and common English words; keeps numbers. Adds to publish-time and length similarity, normalized by the available weights. Empty titles are left out. Comparisons stay within the same subscription." },
-  { key: "similar_length_weight", term: "similarity", label: "Content length similarity", before: "", after: "weight",
-    hint: "Length similarity is shorter minutes divided by longer minutes: equal lengths are 100%, 10 and 20 minutes are 50%. Its contribution adds to publish time and is normalized by the weights. Unknown lengths are left out of the weighted average. Every item is 100% similar to itself." },
+  { group: "feed", key: "post_limit", label: "Post limit", before: "show at most", after: "posts", blankIsMax: true,
+    hint: "0 empties the feed; 1 shows one post at a time. Leave empty for no limit." },
+  { group: "feed", key: "enrich_count", label: "Fetch details", after: "posts on load",
+    hint: "Fetch missing lengths and dates for this many top posts. Adds no points." },
+
+  { group: "opened", key: "seen_bonus", label: "Opened", after: "points",
+    hint: "For posts you've opened. Tagging doesn't count as opening." },
+  { group: "opened", key: "next_up_bonus", label: "Next up", after: "points",
+    hint: "For the post after the one you last opened in a subscription." },
+  { group: "opened", key: "new_sub_bonus", label: "New subscription", after: "points",
+    hint: "For posts from a subscription you've never opened anything from." },
+  { group: "opened", key: "series_penalty", label: "Unstarted series", after: "points",
+    hint: "For a later part of a series when you haven't opened an earlier one." },
+
+  { group: "tags", key: "green_points", label: "Show again soon (green)", after: "points" },
+  { group: "tags", key: "white_points", label: "Maybe later (white)", after: "points" },
+  { group: "tags", key: "red_points", label: "Don't show again (red)", after: "points" },
+
+  { group: "kind", key: "video_bonus", label: "Video", after: "points",
+    hint: "YouTube, Jellyfin, NRK TV and other video pages." },
+  { group: "kind", key: "youtube_shorts_bonus", label: "YouTube Shorts", after: "points",
+    hint: "Added on top of Video." },
+  { group: "kind", key: "image_bonus", label: "Image", after: "points",
+    hint: "Links straight to a picture." },
+  { group: "kind", key: "article_bonus", label: "Article", after: "points",
+    hint: "Everything else." },
+  { group: "kind", key: "length_per_minute", label: "Length", after: "points per minute from",
+    extra: { key: "length_target_minutes", after: "minutes" },
+    hint: "Below 0 favors posts near the target length. Unknown lengths get none." },
+  { group: "kind", key: "age_per_year", label: "Age", after: "points per year",
+    hint: "Below 0 favors newer posts." },
+
+  { group: "stop", key: "event_lead_minutes", label: "Event lead time", after: "minutes before an event",
+    hint: "Each calendar event is a stop time this long before it starts." },
+  { group: "stop", key: "past_stop_per_minute", label: "Past the stop time", after: "points per minute",
+    hint: "For each minute a post would run past the stop time. The post you're viewing is exempt." },
+
+  { group: "tasks", key: "task_deadline_bonus", label: "Deadline", after: "points when due",
+    hint: "Ramps up over the last 30 days before a task's deadline." },
+  { group: "tasks", key: "task_priority_bonus", label: "Priority", after: "points at priority 1",
+    hint: "A ninth less per level, down to priority 9." },
+  { group: "tasks", key: "task_bonus", label: "Every task", after: "points" },
+
+  { group: "similarity", key: "similar_penalty", label: "Like something opened", after: "points, fading over",
+    extra: { key: "similar_hours", after: "hours" },
+    hint: "Per 100% similarity to each post you opened recently." },
+  { group: "similarity", key: "above_similarity_penalty", label: "Like posts above", after: "points",
+    hint: "Per 100% similarity to each post above it, to mix up the feed." },
+  { group: "similarity", key: "similar_base_percent", label: "Same subscription", after: "% alike",
+    hint: "Where similarity starts for posts from one subscription; the weights below fill the rest. Other subscriptions never match." },
+  { group: "similarity", key: "similar_series_percent", label: "Same series", after: "% alike",
+    hint: "Used instead for posts in one series, when higher." },
+  { group: "similarity", key: "similar_days", label: "Publish window", before: "alike within", after: "days" },
+  { group: "similarity", key: "similar_publish_weight", label: "Publish time weight", after: "" },
+  { group: "similarity", key: "similar_length_weight", label: "Length weight", after: "",
+    hint: "Relative to the publish time weight. Unknown lengths are left out." },
 ];
 // Every setting, including the second box some have, such as Similar's hours
 const KEYS = SETTINGS.flatMap(({ key, extra }) => (extra ? [key, extra.key] : [key]));
@@ -68,7 +74,6 @@ let limits = {};  // each term's {min, max, integer}, from the server
 let saved = {};  // as saved on the server
 let draft = {};  // as shown in the panel
 let defaults = {};
-const shownTerms = new Set();  // terms in the panel and the formula; ones that are 0 start hidden
 
 // Slider positions: 0, then 1, 1.5, 2, 3, 5, 7 times each power of ten from 10^lo up to 10^hi,
 // mirrored below 0 for terms that may be negative.
@@ -91,120 +96,110 @@ function nearestStep(list, value) {
   return best;
 }
 
-const fmt = (n) => Number(n).toLocaleString("en-US", { maximumFractionDigits: 3 }).replaceAll(",", "\u202f").replace("-", "−");
-const plus = (n) => (n < 0 ? ` − ${fmt(-n)}` : ` + ${fmt(n)}`);  // " + 5" or " − 5", for adding a term to a sum
+const fmt = (n) => Number(n).toLocaleString("en-US", { maximumFractionDigits: 3 }).replaceAll(",", " ").replace("-", "−");
 const sameTerms = (a, b) => KEYS.every((key) => a[key] === b[key]);
 const inRange = (key, v) => Number.isFinite(v) && v >= limits[key].min && v <= limits[key].max && (!limits[key].integer || Number.isInteger(v));
 const controls = {};
+const groupEls = {};
+
+// The group headings' fold state stays as you left it, in this browser.
+function groupOpen(group) {
+  try {
+    const stored = JSON.parse(localStorage.getItem("settingsGroups") || "{}");
+    if (group.id in stored) return stored[group.id];
+  } catch {}
+  return !!group.open;
+}
+function rememberGroup(id, open) {
+  try {
+    const stored = JSON.parse(localStorage.getItem("settingsGroups") || "{}");
+    localStorage.setItem("settingsGroups", JSON.stringify({ ...stored, [id]: open }));
+  } catch {}
+}
+
+// A number box's value: a blank post limit means no limit (the maximum).
+function boxValue(box, key, blankIsMax) {
+  if (box.value.trim() === "") return blankIsMax ? limits[key].max : NaN;
+  return Number(box.value);
+}
+function showBox(box, key, value, blankIsMax) {
+  if (document.activeElement === box) return;
+  box.value = blankIsMax && value === limits[key].max ? "" : value;
+}
+
+function settingRow({ key, label, before, after, extra, hint, blankIsMax }) {
+  const { min, max } = limits[key];
+  const list = key === "post_limit" ? POST_LIMIT_STEPS
+    : max <= 100 ? Array.from({ length: max + 1 }, (_, i) => i) : min < 0 ? SIGNED_STEPS : BONUS_STEPS;
+  const num = el("input", { type: "number", id: `w-${key}`, step: "any", inputmode: "decimal", min, max,
+    ...(blankIsMax ? { placeholder: "none" } : { required: "" }) });
+  const slider = el("input", { type: "range", min: 0, max: list.length - 1, step: 1, "aria-label": `${label} slider` });
+  const def = el("span", { class: "default" });
+  controls[key] = { num, slider, list, def, blankIsMax };
+  slider.addEventListener("input", () => {
+    showBox(num, key, list[slider.value], blankIsMax);
+    change(key, list[slider.value]);
+  });
+  num.addEventListener("input", () => {
+    const v = boxValue(num, key, blankIsMax);
+    if (!inRange(key, v)) return;
+    slider.value = nearestStep(list, v);
+    change(key, v);
+  });
+  slider.addEventListener("change", save);  // when you let go of the slider
+  num.addEventListener("change", save);  // when you press Enter or leave the box
+  // A second box, such as how many hours count as recent, without a slider
+  let second = [];
+  if (extra) {
+    const box = el("input", { type: "number", id: `w-${extra.key}`, step: "any", inputmode: "decimal", required: "",
+      min: limits[extra.key].min, max: limits[extra.key].max, "aria-label": `${label} ${extra.after}` });
+    controls[extra.key] = { num: box };
+    box.addEventListener("input", () => {
+      const v = boxValue(box, extra.key, false);
+      if (inRange(extra.key, v)) change(extra.key, v);
+    });
+    box.addEventListener("change", save);
+    second = [box, extra.after];
+  }
+  return el("div", { class: "setting" },
+    el("label", { for: `w-${key}` }, label),
+    el("span", { class: "num" }, before || "", num, after || "", ...second),
+    slider,
+    el("p", { class: "hint" }, hint ? `${hint} ` : "", def));
+}
 
 function buildSettings() {
-  document.getElementById("settings").replaceChildren(...SETTINGS.map(({ key, term, label, before, after, extra, hint }) => {
-    const { min, max } = limits[key];
-    const list = key === "post_limit" ? POST_LIMIT_STEPS
-      : max <= 100 ? Array.from({ length: max + 1 }, (_, i) => i) : min < 0 ? SIGNED_STEPS : BONUS_STEPS;
-    const num = el("input", { type: "number", id: `w-${key}`, step: "any", inputmode: "decimal", required: "", min, max });
-    const slider = el("input", { type: "range", min: 0, max: list.length - 1, step: 1, "aria-label": `${label} slider` });
-    const def = el("span");
-    controls[key] = { num, slider, list, def };
-    slider.addEventListener("input", () => {
-      num.value = list[slider.value];
-      change(key, list[slider.value]);
-    });
-    num.addEventListener("input", () => {
-      const v = num.value.trim() === "" ? NaN : Number(num.value);
-      if (!inRange(key, v)) return;
-      slider.value = nearestStep(list, v);
-      change(key, v);
-    });
-    slider.addEventListener("change", save);  // when you let go of the slider
-    num.addEventListener("change", save);  // when you press Enter or leave the box
-    // A second box, such as how many hours count as recent, without a slider
-    let second = [];
-    if (extra) {
-      const box = el("input", { type: "number", id: `w-${extra.key}`, step: "any", inputmode: "decimal", required: "",
-        min: limits[extra.key].min, max: limits[extra.key].max, "aria-label": `${label} ${extra.after}` });
-      controls[extra.key] = { num: box };
-      const value = () => (box.value.trim() === "" ? NaN : Number(box.value));
-      box.addEventListener("input", () => {
-        if (inRange(extra.key, value())) change(extra.key, value());
-      });
-      box.addEventListener("change", save);
-      second = [box, extra.after || ""];
-    }
-    return el("div", { class: "setting", "data-term": term || key },
-      el("label", { for: `w-${key}` }, label),
-      el("span", { class: "num" }, before, num, after, ...second),
-      slider,
-      el("p", { class: "hint" }, `${hint} `, def));
+  document.getElementById("settings").replaceChildren(...GROUPS.map((group) => {
+    const count = el("span", { class: "changed" });
+    const details = el("details", { class: "group" },
+      el("summary", {}, group.title, count),
+      ...SETTINGS.filter((s) => s.group === group.id).map(settingRow));
+    details.open = groupOpen(group);
+    details.addEventListener("toggle", () => rememberGroup(group.id, details.open));
+    groupEls[group.id] = { details, count };
+    return details;
   }));
 }
 
 function showSettings(w) {
   for (const { key, extra } of SETTINGS) {
-    const { num, slider, list } = controls[key];
-    if (document.activeElement !== num) num.value = w[key];
+    const { num, slider, list, blankIsMax } = controls[key];
+    showBox(num, key, w[key], blankIsMax);
     slider.value = nearestStep(list, w[key]);
-    if (extra && document.activeElement !== controls[extra.key].num) controls[extra.key].num.value = w[extra.key];
+    if (extra) showBox(controls[extra.key].num, extra.key, w[extra.key], false);
   }
-  showFormula();
+  showChanged();
 }
 
-// Hide the terms that are 0 when the page loads, and the post limit when there is none; "Add a term"
-// brings them back.
-function hideZeroTerms(w) {
-  for (const { key, term } of SETTINGS) {
-    if (term) continue;
-    if (key === "post_limit" ? w[key] < limits[key].max : key === "enrich_count" || w[key] !== 0) shownTerms.add(key);
+// Each group's heading counts its settings that differ from the defaults, so you can see where
+// you've changed something without opening every group. The dots on the cards show the tag points.
+function showChanged() {
+  for (const group of GROUPS) {
+    const n = SETTINGS.filter((s) => s.group === group.id
+      && [s.key, s.extra?.key].some((k) => k && draft[k] !== defaults[k])).length;
+    groupEls[group.id].count.textContent = n ? `${n} changed` : "";
   }
-  showTerms();
-}
-
-function showTerms() {
-  for (const row of document.querySelectorAll(".setting")) row.hidden = row.dataset.term === "similarity"
-    ? !(shownTerms.has("similar_penalty") || shownTerms.has("above_similarity_penalty"))
-    : !shownTerms.has(row.dataset.term);
-  const hidden = SETTINGS.filter(({ key, term }) => !term && !shownTerms.has(key));
-  const select = document.getElementById("add-term");
-  select.replaceChildren(el("option", { value: "" }, "Add a term…"),
-    ...hidden.map(({ key, label }) => el("option", { value: key }, label)));
-  select.hidden = !hidden.length;
-  showFormula();
-}
-
-document.getElementById("add-term").addEventListener("change", (e) => {
-  const key = e.target.value;
-  if (!key) return;
-  shownTerms.add(key);
-  showTerms();
-  controls[key].num.focus();
-});
-
-function showFormula() {
-  const w = draft;
-  const terms = [
-    ["new_sub_bonus", `${plus(w.new_sub_bonus)} if nothing opened from its subscription`],
-    ["series_penalty", `${plus(w.series_penalty)} if nothing opened before it in its series`],
-    ["similar_penalty", `${plus(w.similar_penalty)} × similarity (${fmt(w.similar_base_percent)}% base, ${fmt(Math.max(w.similar_base_percent, w.similar_series_percent))}% in a series; publish time ${fmt(w.similar_publish_weight)} : length ${fmt(w.similar_length_weight)} : title ${fmt(w.similar_title_weight)}) × time remaining (fades to zero over ${fmt(w.similar_hours)} hours; strongest match)`],
-    ["video_bonus", `${plus(w.video_bonus)} if video`],
-    ["youtube_shorts_bonus", `${plus(w.youtube_shorts_bonus)} if YouTube Shorts`],
-    ["image_bonus", `${plus(w.image_bonus)} if image`],
-    ["article_bonus", `${plus(w.article_bonus)} if article`],
-    ["length_per_minute", `${plus(w.length_per_minute)} × |estimated minutes − ${fmt(w.length_target_minutes)} target minutes|`],
-    ["age_per_year", `${plus(w.age_per_year)} × age in years`],
-    ["past_stop_per_minute", `${plus(w.past_stop_per_minute)} × minutes past the stop time`],
-    ["green_points", `${plus(w.green_points)} if tagged “show again soon”`],
-    ["white_points", `${plus(w.white_points)} if tagged “maybe later”`],
-    ["red_points", `${plus(w.red_points)} if tagged “don't show again”`],
-    ["above_similarity_penalty", `${plus(w.above_similarity_penalty)} × summed similarity to posts above`],
-    ["task_deadline_bonus", `${plus(w.task_deadline_bonus)} × task urgency (ramps over the final 30 days)`],
-    ["task_bonus", `${plus(w.task_bonus)} if task`],
-    ["task_priority_bonus", `${plus(w.task_priority_bonus)} × (10 − task priority) / 9`],
-  ].filter(([key]) => shownTerms.has(key)).map(([, text]) => text).join("");
-  const next = shownTerms.has("next_up_bonus") ? `next up: ${fmt(w.next_up_bonus)} · ` : "";
-  const opened = shownTerms.has("seen_bonus") ? `opened: ${fmt(w.seen_bonus)} · ` : "";
-  if (typeof relabelDots === "function") relabelDots();  // the dots on the cards show these points
-  const most = shownTerms.has("post_limit") && w.post_limit < limits.post_limit.max ? ` · top ${fmt(w.post_limit)} shown` : "";
-  document.getElementById("formula").textContent = `${next}${opened}all:${terms || " 0"}${most}`;
+  if (typeof relabelDots === "function") relabelDots();
 }
 
 function panelSay(text, isError = false) {
@@ -216,7 +211,7 @@ function panelSay(text, isError = false) {
 // A setting moved: show the feed in its new order right away, from the top.
 function change(key, value) {
   draft = { ...draft, [key]: value };
-  showFormula();
+  showChanged();
   panelSay("");
   load({ reorder: true });
 }
@@ -259,12 +254,12 @@ async function loadSettings() {
   limits = data.limits;
   buildSettings();
   showStopTimer(data.stop_at);
-  for (const { key, extra } of SETTINGS) {
+  for (const { key, extra, blankIsMax } of SETTINGS) {
+    const value = blankIsMax && defaults[key] === limits[key].max ? "no limit" : fmt(defaults[key]);
     const second = extra ? ` and ${fmt(defaults[extra.key])} ${extra.after}` : "";
-    controls[key].def.textContent = `Default: ${fmt(defaults[key])}${second}.`;
+    controls[key].def.textContent = `Default ${value}${second}.`;
   }
   showSettings(draft);
-  hideZeroTerms(saved);
 }
 
 document.getElementById("reset").addEventListener("click", async () => {

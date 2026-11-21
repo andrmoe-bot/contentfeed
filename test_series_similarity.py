@@ -65,8 +65,7 @@ class SeriesSimilarityTests(unittest.TestCase):
                 if rng.random() < 0.3:
                     p['last_viewed'] = NOW - rng.randrange(24) * 3600
             terms = self.terms(base=rng.choice([0, 25, 50]), series_base=rng.choice([0, 40, 75, 100]),
-                               similar_publish_weight=rng.choice([0, 1]), similar_length_weight=rng.choice([0, 1]),
-                               similar_title_weight=rng.choice([0, 1]))
+                               similar_publish_weight=rng.choice([0, 1]), similar_length_weight=rng.choice([0, 1]))
             with self.subTest(seed=seed):
                 for first in posts:
                     for second in posts:

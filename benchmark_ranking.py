@@ -34,10 +34,8 @@ def fixture(count=10_000, subscriptions=50, span_days=365, recent=True):
 
 def terms(module, mode):
     values = dict(module.DEFAULT_TERMS, green_bonus_points=20, length_per_minute=-0.1)
-    values['similar_length_weight'] = 1 if mode in ('mixed', 'length', 'all') else 0
-    values['similar_publish_weight'] = 0 if mode in ('length', 'title') else 1
-    if 'similar_title_weight' in values:
-        values['similar_title_weight'] = 1 if mode in ('title', 'all') else 0
+    values['similar_length_weight'] = 1 if mode in ('mixed', 'length') else 0
+    values['similar_publish_weight'] = 0 if mode == 'length' else 1
     if mode == 'disabled':
         values['above_similarity_penalty' if 'above_similarity_penalty' in values else 'repeat_per_post'] = 0
     return values
@@ -68,7 +66,7 @@ def main():
     parser.add_argument('--items', type=int, default=10_000)
     parser.add_argument('--subs', type=int, default=50)
     parser.add_argument('--runs', type=int, default=5)
-    parser.add_argument('--cases', nargs='+', help='run only named cases, such as publish mixed title all')
+    parser.add_argument('--cases', nargs='+', help='run only named cases, such as publish mixed length')
     args = parser.parse_args()
     baseline = None
     if args.baseline:
@@ -79,14 +77,13 @@ def main():
     print('case                  old full  old page  new full  new page  page/old')
     for mode, span, recent in [('publish', 365, True), ('publish-dense', 7, True),
                                ('mixed', 365, True), ('length', 365, True),
-                               ('publish-no-views', 365, False), ('disabled', 365, True),
-                               ('title', 365, True), ('all', 365, True)]:
+                               ('publish-no-views', 365, False), ('disabled', 365, True)]:
         if args.cases and mode not in args.cases:
             continue
         items = fixture(args.items, args.subs, span, recent)
         seconds = measure(ranking, items, mode, args.runs)
         page = measure(ranking, items, mode, args.runs, first_page=True)
-        if baseline and (mode not in ('title', 'all') or 'similar_title_weight' in baseline.DEFAULT_TERMS):
+        if baseline:
             old = measure(baseline, items, mode, args.runs)
             old_page = measure(baseline, items, mode, args.runs, first_page=True) if hasattr(baseline, 'RankedItems') else old
             print(f'{mode:22s} {old:8.4f}  {old_page:8.4f}  {seconds:8.4f}  {page:8.4f}  {page / old_page:8.2f}x')
