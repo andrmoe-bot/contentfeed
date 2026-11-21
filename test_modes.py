@@ -80,7 +80,8 @@ class ModeTests(unittest.TestCase):
         self.assertIsNone(server.choose_mode(None))
         now = time.time()
         self.set_events(event("focus", now - 60, now + 3600, free=True, title="Focus time"))
-        self.assertEqual(server.feed("score")["mode"], {"name": "Work", "source": "calendar", "event": "Focus time"})
+        self.assertEqual(server.feed("score")["mode"], {"name": "Work", "source": "calendar", "event": "Focus time",
+                                                        "until": now + 3600})
         self.assertTrue(server.set_mode_pattern("Work", "(").startswith("the pattern isn't a valid regular expression"))
         self.assertEqual(server.set_mode_pattern("Work", 5), "the pattern must be text")
         self.assertEqual(server.set_mode_pattern("Work", "x" * 501), "the pattern can be at most 500 characters")
@@ -93,9 +94,10 @@ class ModeTests(unittest.TestCase):
         self.assertIsNone(server.choose_mode(None))
         now = time.time()
         self.set_events(event("work", now + 600, now + 3600, free=True, title="Work block"))
-        self.assertEqual(server.feed("score")["mode"], {"name": "Normal", "source": "default", "event": None})
+        self.assertEqual(server.feed("score")["mode"], {"name": "Normal", "source": "default", "event": None, "until": None})
         self.set_events(event("work", now - 60, now + 3600, free=True, title="Work block"))
-        self.assertEqual(server.feed("score")["mode"], {"name": "Work", "source": "calendar", "event": "Work block"})
+        self.assertEqual(server.feed("score")["mode"], {"name": "Work", "source": "calendar", "event": "Work block",
+                                                        "until": now + 3600})
         # A busy event with the name doesn't, as it stops watching instead.
         self.set_events(event("work", now - 60, now + 3600, title="Work block"))
         self.assertEqual(server.feed("score")["mode"]["name"], "Normal")
@@ -115,7 +117,7 @@ class ModeTests(unittest.TestCase):
         ranking.TERMS["video_bonus"] = 5
         self.assertIsNone(server.add_mode(" Work ", "Normal"))
         self.assertEqual(server.settings()["modes"], [{"name": "Work", "pattern": r"\bWork\b", "terms": dict(ranking.TERMS)}])
-        self.assertEqual(server.settings()["mode"], {"name": "Work", "source": "chosen", "event": None})
+        self.assertEqual(server.settings()["mode"], {"name": "Work", "source": "chosen", "event": None, "until": None})
         now = time.time()
         self.set_events(event("work", now - 60, now + 3600, free=True, title="Work"))
         self.assertIsNone(server.choose_mode("Normal"))

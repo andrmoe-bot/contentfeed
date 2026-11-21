@@ -843,21 +843,22 @@ def matches_pattern(title: str, pattern: str) -> bool:
 
 
 def active_mode(events: list[dict], now: float) -> dict:
-    """The mode in effect: {"name", "source", "event"}. The mode you chose in the panel, if any
-    ("source": "chosen"); else the first mode whose pattern matches the title of a free (not busy)
-    calendar event taking place now ("calendar", with the event's title); else Normal ("default"). Free events
+    """The mode in effect: {"name", "source", "event", "until"}. The mode you chose in the panel, if
+    any ("source": "chosen"); else the first mode whose pattern matches the title of a free (not busy)
+    calendar event taking place now ("calendar", with the event's title and its end as until); else
+    Normal ("default"). Free events
     don't stop watching (see ranking.effective_stop); they turn modes on instead. Call with lock held."""
     chosen = mode_choice.get("name")
     if chosen == NORMAL or (chosen and find_mode(chosen)):
-        return {"name": chosen, "source": "chosen", "event": None}
+        return {"name": chosen, "source": "chosen", "event": None, "until": None}
     ongoing = [e for e in events if e.get("calendar_kind") == "event" and e.get("free")
                and e.get("calendar_start") is not None and e.get("deadline") is not None
                and e["calendar_start"] <= now < e["deadline"]]
     for mode in modes:
         event = next((e for e in ongoing if matches_pattern(e.get("title") or "", mode["pattern"])), None)
         if event:
-            return {"name": mode["name"], "source": "calendar", "event": event.get("title")}
-    return {"name": NORMAL, "source": "default", "event": None}
+            return {"name": mode["name"], "source": "calendar", "event": event.get("title"), "until": event["deadline"]}
+    return {"name": NORMAL, "source": "default", "event": None, "until": None}
 
 
 def write_settings():
