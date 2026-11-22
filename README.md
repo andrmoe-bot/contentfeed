@@ -405,12 +405,8 @@ exempt, so reloading while you watch doesn't push it down. Posts without an esti
 tasks get no points, and neither does anything while you've picked a mode, as it doesn't change. To
 leave posts out altogether, use the post limit (see Ranking).
 
-One setting is the same in every mode, under **All modes** in the panel: **Fetch details**. Changing
-it in one mode changes it for all, and it applies when no mode is on. Reset only resets the shown
-mode's own settings.
-
 When no mode is on, the feed is empty and says so, as does the status line ("No mode on"), and the
-panel shows only the settings for all modes until you pick a mode. A subscription's page and a
+panel shows no settings until you pick a mode. A subscription's page and a
 post's page still list posts then, ranked with the default settings, and events stop watching with
 their lead times as usual.
 
@@ -423,8 +419,7 @@ work block ends Work then if a mode for busy events is higher in the list. When 
 such as when a work block starts, the feed is shown again from the top. Remove deletes the mode
 shown and its settings. Modes are saved in `settings.json`.
 Settings saved before Normal was a mode become the Normal mode, at the bottom of the list, on in
-free time; settings saved before Fetch details was the same in every mode take it from the Normal
-mode, else the first mode, and each mode keeps the lead time it had; modes saved with the earlier title patterns are on during free events, unless the
+free time; each mode keeps the lead time it had; the old global Fetch details setting is ignored; modes saved with the earlier title patterns are on during free events, unless the
 pattern was empty; and a mode's Past the stop time points, from before they were for the mode change,
 become its Past the mode change points.
 
@@ -448,7 +443,7 @@ All scoring terms add their configured signed points; negative values subtract p
 - 0 (off) × the **sum** over everything you opened recently of similarity × the fraction of the 24-hour window remaining since opening; each match contributes on its own, not just the strongest (see below)
 - 0 for its media type: video (YouTube, Jellyfin, NRK TV, pages with a video file), image (a link straight to a picture) or
   article (anything else). Each has its own setting, which may be negative, to favor or hold back that type.
-- 0 per **minute away from the target content length** by default. Content length adds `weight × |estimated minutes − target minutes|`. Set a negative weight to favor content near the target, or a positive weight to favor content farther away. The target defaults to 0 minutes, preserving existing scores; both the weight and target are configurable in Settings. Runtime metadata is used where available; text is estimated at 200 words per minute (at least one minute). Feed text may be only an excerpt, and page estimates can include surrounding text. Unknown lengths have no adjustment. When the site loads, the highest-ranked posts with incomplete data can be updated in the background, regardless of score weights; this is off by default. YouTube updates fetch runtime and exact publication time together. Set how many with “Fetch details” in Settings, the same in every mode (0–100; 0, the default, turns it off). Routine polling does not start additional batches; unavailable data stays unknown and recent attempts are skipped for six hours.
+- 0 per **minute away from the target content length** by default. Content length adds `weight × |estimated minutes − target minutes|`. Set a negative weight to favor content near the target, or a positive weight to favor content farther away. The target defaults to 0 minutes, preserving existing scores; both the weight and target are configurable in Settings. Runtime metadata is used where available; text is estimated at 200 words per minute (at least one minute). Feed text may be only an excerpt, and page estimates can include surrounding text. Unknown lengths have no adjustment. When the site loads, the posts it shows with incomplete data are updated in the background, regardless of score weights, at most one request at a time per host. YouTube updates fetch runtime and exact publication time together. Routine polling does not start additional batches; unavailable data stays unknown and recent attempts are skipped for six hours.
 - +10 if tagged "show again soon" (green), −50 if "maybe later" (white), −1000 if "don't show again" (red)
 - 0 (off) × the **sum of similarities to posts above it**. At −15, a 100% match contributes −15,
   a 50% match contributes −7.5, and two 50% matches contribute −15 together. It uses the same
@@ -532,8 +527,7 @@ Cards show the number of matches and the total similarity, such as “similarity
 100% total −15”.
 
 Ranking is computed only as far as the requested page needs, then resumed from cached state for
-“Show more”. Page-load enrichment can extend that prefix to find the configured number of
-incomplete posts; if none are eligible, it does not rank the tail looking for them.
+“Show more”.
 
 Each card's "Score" shows its points, such as
 `88% like “Egyptian Fractions”, opened 2 hours ago (same subscription, published 7 days apart), 91.67% penalty remaining −32.27`

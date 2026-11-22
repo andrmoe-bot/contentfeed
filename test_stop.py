@@ -153,7 +153,6 @@ class StopServerTests(unittest.TestCase):
         self.stack.enter_context(patch.object(server, "pending", set()))
         self.stack.enter_context(patch.object(server, "state_version", 0))
         self.stack.enter_context(patch.object(ranking, "TERMS", dict(LEAD_30)))
-        self.stack.enter_context(patch.object(server, "global_terms", ranking.split_terms(LEAD_30)[1]))
         # Meeting, on during busy events, and Normal, on otherwise, both with the settings ranking.TERMS,
         # so the calendar changes the mode when a busy event begins (its start minus the lead time).
         self.stack.enter_context(patch.object(server, "modes", [

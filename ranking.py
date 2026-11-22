@@ -89,7 +89,6 @@ DEFAULT_TERMS = {
     "video_bonus": 0,  # for each media type (see media_type); below 0 is a penalty
     "image_bonus": 0,
     "article_bonus": 0,
-    "enrich_count": 0,  # highest-ranked incomplete posts to enrich on page load
     "length_per_minute": 0,  # signed points per minute away from the target length
     "length_target_minutes": 0,  # target runtime or reading time; 0 preserves the original linear score
     "age_per_year": 0,  # signed points per fractional 365-day year since publication (or addition for links)
@@ -97,15 +96,6 @@ DEFAULT_TERMS = {
     "post_limit": 10_000_000,  # most posts the feed shows; the maximum (LIMIT) means no limit, 0 an empty feed
 }
 TERMS = dict(DEFAULT_TERMS)
-# Terms that apply whatever the mode: how many posts to fetch details for. The rest belong to each mode
-# (see server.modes).
-GLOBAL_TERMS = frozenset({"enrich_count"})
-
-
-def split_terms(terms: dict) -> tuple[dict, dict]:
-    """(a mode's terms, the global terms) of a set of terms (see GLOBAL_TERMS)."""
-    return ({k: v for k, v in terms.items() if k not in GLOBAL_TERMS},
-            {k: v for k, v in terms.items() if k in GLOBAL_TERMS})
 # Every scoring coefficient is signed; windows, similarity parameters and counts are not.
 SIGNED = {
     "next_up_bonus", "seen_bonus", "new_sub_bonus", "series_penalty", "similar_penalty",
@@ -119,8 +109,8 @@ LIMIT = 10_000_000
 TAGS = {"green": "show again soon", "white": "maybe later", "red": "don't show again"}
 # Each term's allowed values, which the score panel also gets, to check what you type.
 TERM_LIMITS = {key: {"min": -LIMIT if key in SIGNED else 0,
-                     "max": 100 if key in ("similar_base_percent", "similar_series_percent", "enrich_count") else LIMIT,
-                     "integer": key in ("enrich_count", "post_limit")}
+                     "max": 100 if key in ("similar_base_percent", "similar_series_percent") else LIMIT,
+                     "integer": key == "post_limit"}
                for key in DEFAULT_TERMS}
 
 
@@ -655,25 +645,12 @@ class RankedItems:
         self.total = len(source)
         self.lock = threading.Lock()
 
-    def read(self, limit: int, extra_count: int = 0, match_key=None) -> tuple[list[dict], list[dict]]:
-        """Extend to the page size and, optionally, the highest-ranked eligible matches.
-
-        Count eligible source keys first so a page with no missing metadata never consumes
-        the whole ranking just to discover there is nothing to enrich.
-        """
+    def read(self, limit: int) -> list[dict]:
+        """The first limit items, extending the cached prefix as needed."""
         with self.lock:
-            matched = set()
-            target = 0
-            if extra_count and match_key:
-                possible = {key for it in self.source if (key := match_key(it)) is not None}
-                target = min(extra_count, len(possible))
-                matched = {key for it in self.items if (key := match_key(it)) is not None}
-            while len(self.items) < min(limit, self.total) or len(matched) < target:
-                it = next(self.iterator)
-                self.items.append(it)
-                if target and (key := match_key(it)) is not None:
-                    matched.add(key)
-            return self.items[:limit], list(self.items) if extra_count else []
+            while len(self.items) < min(limit, self.total):
+                self.items.append(next(self.iterator))
+            return self.items[:limit]
 
 
 def rank(name: str, items: list[dict], now: float, terms: dict | None = None,

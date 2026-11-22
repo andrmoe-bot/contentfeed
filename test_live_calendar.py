@@ -41,7 +41,6 @@ class LiveCalendarTests(unittest.TestCase):
         self.stack.enter_context(patch.object(server, "pending", set()))
         self.stack.enter_context(patch.object(server, "state_version", 0))
         self.stack.enter_context(patch.object(ranking, "TERMS", dict(ranking.DEFAULT_TERMS, event_lead_minutes=30)))
-        self.stack.enter_context(patch.object(server, "global_terms", ranking.split_terms(ranking.DEFAULT_TERMS)[1]))
         # One mode, on whatever the calendar holds, whose settings are ranking.TERMS.
         self.stack.enter_context(patch.object(server, "modes", [{"name": "Normal", "when": dict.fromkeys(server.SITUATIONS, True),
                                                       "terms": ranking.TERMS}]))

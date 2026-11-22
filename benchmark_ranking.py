@@ -50,7 +50,7 @@ def measure(module, items, mode, runs, first_page=False):
         start = time.perf_counter()
         if first_page:
             ranked = module.rank('score', items, NOW, settings, lazy=True)
-            result, _ = ranked.read(300)
+            result = ranked.read(300)
         else:
             result = module.rank('score', items, NOW, settings)
         samples.append(time.perf_counter() - start)

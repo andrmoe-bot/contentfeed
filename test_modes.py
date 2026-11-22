@@ -12,7 +12,7 @@ import server
 from test_caldav import calendar_data
 from test_ranking import NOW, item
 
-OWN, GLOBAL = ranking.split_terms(ranking.DEFAULT_TERMS)  # a mode's own default settings, and the global ones
+OWN = dict(ranking.DEFAULT_TERMS)  # a mode's default settings
 
 
 def event(name, start, end, free=False, title=None):
@@ -66,7 +66,6 @@ class ServerTestCase(unittest.TestCase):
         self.stack.enter_context(patch.object(server, "pending", set()))
         self.stack.enter_context(patch.object(server, "state_version", 0))
         self.stack.enter_context(patch.object(ranking, "TERMS", dict(ranking.DEFAULT_TERMS)))
-        self.stack.enter_context(patch.object(server, "global_terms", ranking.split_terms(ranking.DEFAULT_TERMS)[1]))
         self.stack.enter_context(patch.object(server, "schedule", return_value=None))
         self.stack.enter_context(patch.object(server, "schedule_subscription", return_value=None))
         self.feed_url, self.cal_url = "https://example.com/feed", "https://example.com/cal.ics"
@@ -278,7 +277,7 @@ class ModeTests(ServerTestCase):
 
 
 
-class GlobalTermsTests(ServerTestCase):
+class ModeSettingsTests(ServerTestCase):
     """Fetch details is the same in every mode, and applies with none on."""
 
     def setUp(self):
@@ -290,105 +289,59 @@ class GlobalTermsTests(ServerTestCase):
     def save(self, mode=None, **changes):
         return server.save_settings(dict(ranking.DEFAULT_TERMS, **changes), mode)
 
-    def test_the_only_global_setting_is_fetch_details(self):
-        self.assertEqual(ranking.GLOBAL_TERMS, {"enrich_count"})
-        self.assertEqual((set(OWN) | set(GLOBAL), set(OWN) & set(GLOBAL)), (set(ranking.DEFAULT_TERMS), set()))
-        self.assertIn("event_lead_minutes", OWN)
+    def test_every_setting_belongs_to_a_mode(self):
         data = server.settings()
-        self.assertEqual(data["global"], {"enrich_count": 0})
+        self.assertNotIn("global", data)
         for mode in data["modes"]:
-            self.assertEqual(mode["terms"], OWN)  # modes don't have it
-
-    def test_saving_in_one_mode_changes_it_for_every_mode(self):
-        self.assertIsNone(self.save("Work", enrich_count=3, video_bonus=4))
-        self.assertEqual(server.global_terms, {"enrich_count": 3})
+            self.assertEqual(mode["terms"], OWN)
+        self.assertIsNone(self.save("Work", video_bonus=4))
         self.assertEqual(server.mode_terms("Work")["video_bonus"], 4)
-        self.assertEqual(server.mode_terms("Play"), OWN)  # the mode's own settings stay its own
-        for name in ("Work", "Play", None):
-            self.assertEqual(server.terms_for(name)["enrich_count"], 3, name)
-        self.assertIsNone(self.save("Play", enrich_count=7))
-        self.assertEqual(server.terms_for("Work")["enrich_count"], 7)
-        self.assertEqual(server.terms_for("Work")["video_bonus"], 4)
+        self.assertEqual(server.mode_terms("Play"), OWN)
 
-    def test_fetch_details_applies_whatever_the_mode(self):
-        self.assertIsNone(self.save("Play", enrich_count=4))
+    def test_with_no_mode_on_nothing_is_saved(self):
+        self.assertIsNone(server.choose_mode(None))
+        self.assertIsNone(server.feed("score")["mode"]["name"])
+        before = [dict(m["terms"]) for m in server.modes]
+        self.assertIsNotNone(self.save(video_bonus=99))
+        self.assertEqual([m["terms"] for m in server.modes], before)
+
+    def test_invalid_settings_change_nothing(self):
+        for bad in ({"video_bonus": "x"}, {"event_lead_minutes": -1}, {"post_limit": 1.5}):
+            self.assertIsNotNone(self.save("Work", **bad), bad)
+            self.assertEqual(server.mode_terms("Work"), OWN)
+        self.assertIsNotNone(server.save_settings(dict(OWN, enrich_count=5), "Work"))  # no longer a setting
+        missing = {k: v for k, v in OWN.items() if k != "video_bonus"}
+        self.assertIsNotNone(server.save_settings(missing, "Work"))
+        self.assertEqual(self.save("Gone", video_bonus=9), "there's no mode called Gone")
+
+    def test_the_old_global_fetch_details_is_ignored(self):
+        self.load({"version": 5, "global": {"enrich_count": 6},
+                   "modes": [{"name": "Work", "when": {}, "terms": dict(OWN, enrich_count=3, video_bonus=2)}]})
+        self.assertEqual(server.mode_terms("Work"), dict(OWN, video_bonus=2))
+        self.assertIsNone(self.save("Work", video_bonus=2))
+        saved = json.loads(server.SETTINGS_FILE.read_text())
+        self.assertEqual(saved["version"], server.SETTINGS_VERSION)
+        self.assertNotIn("global", saved)
+
+    def test_details_are_fetched_for_the_page_whatever_the_mode(self):
         for choice in ("Work", "Play", None):
             server.choose_mode(choice)
             with patch.object(server, "enrich_posts") as enrich:
                 server.feed("score", enrich=True, subscription_url=self.feed_url)
-            self.assertEqual(enrich.call_args.args[1], 4, choice)
-
-    def test_with_no_mode_on_only_the_global_settings_are_saved(self):
-        self.assertIsNone(server.choose_mode(None))
-        self.assertIsNone(server.feed("score")["mode"]["name"])
-        before = [dict(m["terms"]) for m in server.modes]
-        self.assertIsNone(self.save(enrich_count=5, video_bonus=99, event_lead_minutes=1))
-        self.assertEqual(server.global_terms, {"enrich_count": 5})
-        self.assertEqual([m["terms"] for m in server.modes], before)
-        self.assertEqual(json.loads(server.SETTINGS_FILE.read_text())["global"], {"enrich_count": 5})
-
-    def test_invalid_settings_change_nothing(self):
-        self.assertIsNone(self.save("Work", enrich_count=2))
-        for bad in ({"enrich_count": -1}, {"enrich_count": 1.5}, {"enrich_count": 101}, {"video_bonus": "x"},
-                    {"event_lead_minutes": -1}):
-            self.assertIsNotNone(self.save("Work", **{"enrich_count": 2, **bad}), bad)
-            self.assertEqual(server.global_terms, {"enrich_count": 2})
-            self.assertEqual(server.mode_terms("Work"), OWN)
-        missing = {k: v for k, v in ranking.DEFAULT_TERMS.items() if k != "enrich_count"}
-        self.assertIsNotNone(server.save_settings(missing, "Work"))
-        self.assertEqual(self.save("Gone", enrich_count=9), "there's no mode called Gone")
-        self.assertEqual(server.global_terms["enrich_count"], 2)  # not saved for a mode that isn't there
-
-    def test_new_and_removed_modes_leave_it_alone(self):
-        self.assertIsNone(self.save("Work", enrich_count=2))
-        self.assertIsNone(server.add_mode("Copy", "Work"))
-        self.assertNotIn("enrich_count", server.find_mode("Copy")["terms"])
-        for name in ("Work", "Play", "Copy"):
-            self.assertIsNone(server.remove_mode(name))
-        self.assertEqual(server.global_terms, {"enrich_count": 2})
-        self.assertIsNone(server.add_mode("Again"))
-        self.assertEqual(server.terms_for("Again")["enrich_count"], 2)
-
-    def test_it_is_saved_once_and_loaded(self):
-        self.assertIsNone(self.save("Work", enrich_count=6, video_bonus=2, event_lead_minutes=10))
-        saved = json.loads(server.SETTINGS_FILE.read_text())
-        self.assertEqual(saved["version"], server.SETTINGS_VERSION)
-        self.assertEqual(saved["global"], {"enrich_count": 6})
-        for mode in saved["modes"]:
-            self.assertNotIn("enrich_count", mode["terms"])
-        server.global_terms.update(GLOBAL)
-        server.modes.clear()
-        server.load_settings()
-        self.assertEqual(server.global_terms, {"enrich_count": 6})
-        self.assertEqual(server.mode_terms("Work"), dict(OWN, video_bonus=2, event_lead_minutes=10))
-        self.assertEqual(server.terms_for("Play")["enrich_count"], 6)
+            enrich.assert_called_once()
 
     def load(self, data):
         server.SETTINGS_FILE.write_text(json.dumps(data))
         server.load_settings()
-        return dict(server.global_terms)
 
-    def test_settings_saved_before_global_ones_take_it_from_normal_else_the_first_mode(self):
+    def test_older_settings_keep_each_modes_lead_time(self):
         mode = lambda name, **terms: {"name": name, "when": {"free_time": True}, "terms": dict(ranking.DEFAULT_TERMS, **terms)}
-        # Version 3: from the Normal mode, wherever it is in the list; each mode keeps its own lead time.
-        self.assertEqual(self.load({"version": 3, "modes": [mode("Work", enrich_count=1, event_lead_minutes=5),
-                                                            mode("Normal", enrich_count=7, event_lead_minutes=50)]}),
-                         {"enrich_count": 7})
+        self.load({"version": 3, "modes": [mode("Work", enrich_count=1, event_lead_minutes=5),
+                                           mode("Normal", enrich_count=7, event_lead_minutes=50)]})
         self.assertEqual([m["terms"] for m in server.modes], [dict(OWN, event_lead_minutes=5), dict(OWN, event_lead_minutes=50)])
-        # Without a Normal mode, from the first; without modes, the default.
-        self.assertEqual(self.load({"version": 3, "modes": [mode("Work", enrich_count=4), mode("Play", enrich_count=9)]}),
-                         {"enrich_count": 4})
-        self.assertEqual(self.load({"version": 3, "modes": []}), GLOBAL)
-        # Before version 3, from the normal settings, which become the Normal mode, with their lead time.
-        self.assertEqual(self.load({"version": 2, "terms": dict(ranking.DEFAULT_TERMS, event_lead_minutes=40, enrich_count=2),
-                                    "modes": [mode("Work", enrich_count=5)]}), {"enrich_count": 2})
-        self.assertEqual(server.mode_terms("Normal")["event_lead_minutes"], 40)
-        self.assertEqual(self.load({"terms": dict(ranking.DEFAULT_TERMS, enrich_count=12)}), {"enrich_count": 12})
-        # Without saved settings, the default.
-        server.SETTINGS_FILE.unlink()
-        server.global_terms.update(enrich_count=99)
-        server.load_settings()
-        self.assertEqual(server.global_terms, GLOBAL)
+        # Before version 3, the normal settings become the Normal mode, with their lead time.
+        self.load({"version": 2, "terms": dict(ranking.DEFAULT_TERMS, event_lead_minutes=40, enrich_count=2), "modes": []})
+        self.assertEqual(server.mode_terms("Normal"), dict(OWN, event_lead_minutes=40))
 
     def test_the_past_stop_points_become_the_past_mode_change_points(self):
         old = {k: v for k, v in ranking.DEFAULT_TERMS.items() if k != "past_mode_change_per_minute"}
@@ -399,28 +352,12 @@ class GlobalTermsTests(ServerTestCase):
         self.load({"version": 2, "terms": dict(old, past_stop_per_minute=-3), "modes": []})
         self.assertEqual(server.mode_terms("Normal")["past_mode_change_per_minute"], -3)
 
-    def test_bad_or_partial_saved_global_settings(self):
-        modes = [{"name": "Work", "when": {}, "terms": dict(ranking.DEFAULT_TERMS, event_lead_minutes=15)}]
-        # Unknown settings and mode settings there are dropped: the lead time stays the mode's.
-        self.assertEqual(self.load({"version": 4, "global": {"enrich_count": 3, "event_lead_minutes": 99, "video_bonus": 5,
-                                                             "gone": 1}, "modes": modes}), {"enrich_count": 3})
-        self.assertEqual((server.terms_for("Work")["video_bonus"], server.terms_for("Work")["event_lead_minutes"]), (0, 15))
-        self.assertEqual(self.load({"version": 4, "global": {}, "modes": modes}), GLOBAL)  # missing: the default
-        with patch("builtins.print") as said:
-            self.assertEqual(self.load({"version": 4, "global": {"enrich_count": -5}, "modes": modes}), GLOBAL)
-        self.assertIn("Ignoring the global settings", said.call_args.args[0])
-        self.assertEqual(self.load({"version": 4, "global": "junk", "modes": modes}), GLOBAL)  # from Work, the first mode
-
-    def test_the_api_serves_and_saves_it(self):
-        body, code = server.settings_api({"terms": dict(ranking.DEFAULT_TERMS, enrich_count=8), "mode": "Play"})
-        self.assertEqual((code, body["global"]), (200, {"enrich_count": 8}))
-        self.assertTrue(all("enrich_count" not in m["terms"] for m in body["modes"]))
-        body, code = server.modes_api({"choose": None})
-        self.assertEqual((code, body["mode"]["name"], body["global"]["enrich_count"]), (200, None, 8))
-        body, code = server.settings_api({"terms": dict(ranking.DEFAULT_TERMS, enrich_count=1)})
-        self.assertEqual((code, body["global"]["enrich_count"]), (200, 1))
-        body, code = server.settings_api({"terms": dict(ranking.DEFAULT_TERMS, enrich_count=-1)})
-        self.assertEqual((code, body["global"]["enrich_count"]), (400, 1))
+    def test_the_api_saves_a_modes_settings(self):
+        body, code = server.settings_api({"terms": dict(ranking.DEFAULT_TERMS, video_bonus=8), "mode": "Play"})
+        self.assertEqual((code, next(m for m in body["modes"] if m["name"] == "Play")["terms"]["video_bonus"]), (200, 8))
+        self.assertNotIn("global", body)
+        body, code = server.settings_api({"terms": dict(ranking.DEFAULT_TERMS, enrich_count=1), "mode": "Play"})
+        self.assertEqual(code, 400)
 
 
 class LeadTimeTests(ServerTestCase):
@@ -452,7 +389,6 @@ class LeadTimeTests(ServerTestCase):
         self.mode("Meeting", {"busy"}, 30)
         self.mode("Focus", {"not_busy"}, 5)
         self.assertEqual((server.mode_terms("Meeting")["event_lead_minutes"], server.mode_terms("Focus")["event_lead_minutes"]), (30, 5))
-        self.assertNotIn("event_lead_minutes", server.global_terms)
         self.assertIsNone(server.save_settings(dict(ranking.DEFAULT_TERMS, event_lead_minutes=45), "Focus"))
         self.assertEqual(server.mode_terms("Meeting")["event_lead_minutes"], 30)
 

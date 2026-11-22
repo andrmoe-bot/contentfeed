@@ -23,7 +23,6 @@ class FeedCacheTests(unittest.TestCase):
         self.stack.enter_context(patch.object(server, "pending", set()))
         self.stack.enter_context(patch.object(server, "state_version", 0))
         self.stack.enter_context(patch.object(ranking, "TERMS", dict(ranking.DEFAULT_TERMS)))
-        self.stack.enter_context(patch.object(server, "global_terms", ranking.split_terms(ranking.DEFAULT_TERMS)[1]))
         # One mode, on whatever the calendar holds, whose settings are ranking.TERMS.
         self.stack.enter_context(patch.object(server, "modes", [{"name": "Normal", "when": dict.fromkeys(server.SITUATIONS, True),
                                                       "terms": ranking.TERMS}]))
@@ -256,7 +255,7 @@ class FeedCacheTests(unittest.TestCase):
         self.assertEqual((server.terms_for("Normal")["task_bonus"], server.terms_for("Normal")["task_deadline_bonus"]), (5, 200))
         limits = server.settings()["limits"]
         self.assertEqual(limits["seen_bonus"], {"min": -ranking.LIMIT, "max": ranking.LIMIT, "integer": False})
-        self.assertEqual(limits["enrich_count"], {"min": 0, "max": 100, "integer": True})
+        self.assertEqual(limits["post_limit"], {"min": 0, "max": ranking.LIMIT, "integer": True})
 
     def test_saved_settings_ignore_removed_tag_similarity(self):
         server.save_json(server.SETTINGS_FILE, {"terms": dict(ranking.DEFAULT_TERMS, tag_similarity=99)})
@@ -313,20 +312,17 @@ class FeedCacheTests(unittest.TestCase):
             self.assertEqual(next_page['total'], 20)
         rank.assert_called_once()
 
-    def test_enrichment_beyond_visible_prefix_keeps_highest_incomplete_selection(self):
-        server.global_terms["enrich_count"] = 5  # off by default
+    def test_enrichment_fetches_the_incomplete_posts_on_the_page(self):
         server.subscriptions[self.url]['items'] = [
-            dict(self.post, url=f'https://example.com/{i}', estimated_minutes=10 if i < 25 else None)
+            dict(self.post, url=f'https://example.com/{i}', estimated_minutes=10 if i % 2 else None)
             for i in range(40)]
         result = server.feed('score', limit=10, enrich=True)
         self.assertEqual(result['total'], 40)
-        self.assertEqual(len(result['items']), 10)
         cached = next(iter(server.ranked_cache.values())).ranked
-        self.assertEqual(len(cached.items), 30)
-        self.assertEqual([call.args[0] for call in server.schedule.call_args_list],
-                         [f'https://example.com/{i}' for i in range(25, 30)])
-
-
+        self.assertEqual(len(cached.items), 10)  # nothing past the page is ranked to find more
+        shown = [it['url'] for it in result['items'] if not it.get('estimated_minutes')]
+        self.assertEqual(len(shown), 5)
+        self.assertEqual([call.args[0] for call in server.schedule.call_args_list], shown)
 
 if __name__ == "__main__":
     unittest.main()
@@ -335,7 +331,6 @@ if __name__ == "__main__":
 class LengthEnrichmentTests(FeedCacheTests):
     def setUp(self):
         super().setUp()
-        server.global_terms["enrich_count"] = 5  # off by default
 
     def test_missing_subscription_length_is_scheduled_and_used(self):
         ranking.TERMS["length_per_minute"] = -2
@@ -419,30 +414,22 @@ class LengthEnrichmentTests(FeedCacheTests):
         schedule.assert_called_once_with('abc')
 
 
-    def test_load_enriches_only_highest_five_incomplete_posts(self):
+    def test_load_enriches_the_incomplete_posts_shown_highest_first(self):
         posts = [dict(self.post, url=f'https://example.com/{i}', published=100 + i,
                       estimated_minutes=10 if i == 9 else None) for i in range(10)]
         server.subscriptions[self.url]['items'] = posts
         server.feed('score', enrich=True)
         self.assertEqual([call.args[0] for call in server.schedule.call_args_list],
-                         [f'https://example.com/{i}' for i in (8, 7, 6, 5, 4)])
+                         [f'https://example.com/{i}' for i in range(8, -1, -1)])
         server.schedule.reset_mock()
         server.feed('score')
         server.schedule.assert_not_called()
 
-    def test_custom_count_and_zero_apply_on_cached_feed(self):
+    def test_only_when_asked_also_on_a_cached_feed(self):
         server.feed('score')
-        server.global_terms["enrich_count"] = 0
-        server.feed('score', enrich=True)
         server.schedule.assert_not_called()
-        server.global_terms["enrich_count"] = 1
         server.feed('score', enrich=True)
         server.schedule.assert_called_once_with(self.post['url'], force=True)
-
-    def test_update_count_requires_integer_in_range(self):
-        for invalid in [-1, 1.5, 101]:
-            with self.assertRaises(ValueError):
-                ranking.check_terms(dict(ranking.DEFAULT_TERMS, enrich_count=invalid))
 
 
 class GitVersionTests(unittest.TestCase):
