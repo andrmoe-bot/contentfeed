@@ -1417,6 +1417,11 @@ def feed(ranker: str, limit: int = MAX_ITEMS_SHOWN, terms: dict | None = None, *
         leading = with_leads(events, preview)
         original = {id(copy): event for copy, event in zip(leading, events)}  # calendar_name finds the originals
         stopping = stop_state(leading, now, terms, lambda event: calendar_name(original.get(id(event), event), all_subs))
+        if preview and mode["source"] == "calendar":
+            # A previewed lead time can move the next mode change too, such as by opening a gap
+            # between meetings, so the points for running past it follow the preview like the stop.
+            until, following = next_mode_change(leading, now, mode["name"])
+            mode = {**mode, "until": until, "next": following}
     stopping = {**stopping, "mode": mode,
                 "calendars_unreachable": unreachable_calendars(all_subs)}
     ranked = ranking_for(ranker, terms, entries, subs, search, post_url, mode["until"], now)

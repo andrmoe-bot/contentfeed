@@ -557,6 +557,25 @@ class LeadTimeTests(ServerTestCase):
         server.choose_mode("Play")
         self.assertEqual(server.feed("score", terms=dict(server.terms_for("Play"), event_lead_minutes=50))["stop_at"], self.at(30))
 
+    def test_previewing_the_lead_time_moves_the_mode_change_and_its_points(self):
+        # Back-to-back meetings: a 30-minute lead bridges the gap, so Meeting stays on until the second ends.
+        self.mode("Meeting", {"busy"}, 30)
+        self.mode("Normal", {"free_time"}, 0)
+        self.set_events(event("m1", self.at(-10), self.at(10)), event("m2", self.at(30), self.at(60)))
+        long = {"url": "https://example.com/long", "title": "Long", "first_seen": 1_000_000,
+                "published": 1_000_000, "estimated_minutes": 45}
+        server.subscriptions[self.feed_url]["items"].append(long)
+        past = lambda result: [r["label"] for it in result["items"] if it["url"] == long["url"]
+                               for r in it["reasons"] if "past the mode change" in r["label"]]
+        saved = server.feed("score")
+        self.assertEqual((saved["mode"]["until"], past(saved)), (self.at(60), []))
+        # A 10-minute lead opens a gap from 10 to 20 minutes from now: the mode changes at the first's end.
+        preview = server.feed("score", terms=dict(server.terms_for("Meeting"), event_lead_minutes=10))
+        self.assertEqual((preview["mode"]["until"], preview["mode"]["next"]), (self.at(10), "Normal"))
+        self.assertEqual(len(past(preview)), 1)
+        self.assertIn(past(preview)[0], ("runs 35 minutes past the mode change", "runs 36 minutes past the mode change"))
+        self.assertEqual(server.feed("score")["mode"]["until"], self.at(60))  # not saved
+
     def test_the_stop_screen_names_the_events_calendar(self):
         self.mode("Meeting", {"busy"}, 30)
         self.set_events(event("standup", self.at(10), self.at(40)))
