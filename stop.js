@@ -9,7 +9,7 @@
 
 // How long until the next check of the feed: soon while fetches are under way, every 10 seconds while
 // a stop time is in effect, else every 30, but always just after the next change the response
-// announces: the stop time, the feed returning, or the event that turned a mode on ending.
+// announces: the stop time, the feed returning, or the calendar situation that turned a mode on ending.
 function pollDelay(data) {
   if (!data) return 30000;
   const base = data.pending ? 1500 : data.stop_at ? 10000 : 30000;

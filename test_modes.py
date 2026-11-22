@@ -73,42 +73,68 @@ class ModeTests(unittest.TestCase):
     def set_events(self, *events):
         server.subscriptions[self.cal_url]["events"] = list(events)
 
-    def test_patterns_are_regular_expressions_ignoring_case(self):
-        self.assertTrue(server.matches_pattern("Deep work", r"\bwork\b"))
-        self.assertFalse(server.matches_pattern("Homework", r"\bwork\b"))
-        self.assertTrue(server.matches_pattern("Focus: thesis", r"^(focus|deep work)\b"))
-        self.assertFalse(server.matches_pattern("Anything", ""))  # empty: never on from the calendar
+    def test_calendar_situations(self):
+        busy = event("Meeting", NOW - 60, NOW + 1800)
+        free = event("Work block", NOW - 600, NOW + 3600, free=True)
+        later = event("Dinner", NOW + 7200, NOW + 9000)
+        birthday = dict(event("Birthday", NOW - 3600, NOW + 80000), all_day=True)
+        self.assertEqual(server.calendar_situations([busy, free, later, birthday], NOW),
+                         {"busy": ("Meeting", NOW + 1800), "not_busy": ("Work block", NOW + 3600), "free_time": None})
+        # All-day events don't count, so free time lasts until the next timed event starts.
+        self.assertEqual(server.calendar_situations([later, birthday], NOW),
+                         {"busy": None, "not_busy": None, "free_time": (None, NOW + 7200)})
+        self.assertEqual(server.calendar_situations([], NOW)["free_time"], (None, None))
 
-    def test_a_new_mode_matches_its_name_and_the_pattern_can_be_changed(self):
-        self.assertIsNone(server.add_mode("C++"))
-        self.assertEqual(server.modes[0]["pattern"], r"\bC\+\+\b")
+    def test_a_new_mode_is_off_until_a_situation_is_turned_on(self):
         self.assertIsNone(server.add_mode("Work"))
-        self.assertEqual(server.set_mode_pattern("work", r"^(work|focus)"), None)
-        self.assertEqual(server.modes[1]["pattern"], r"^(work|focus)")
+        self.assertEqual(server.modes[0]["when"], {"busy": False, "not_busy": False, "free_time": False})
         self.assertIsNone(server.choose_mode(None))
         now = time.time()
-        self.set_events(event("focus", now - 60, now + 3600, free=True, title="Focus time"))
-        self.assertEqual(server.feed("score")["mode"], {"name": "Work", "source": "calendar", "event": "Focus time",
-                                                        "until": now + 3600})
-        self.assertTrue(server.set_mode_pattern("Work", "(").startswith("the pattern isn't a valid regular expression"))
-        self.assertEqual(server.set_mode_pattern("Work", 5), "the pattern must be text")
-        self.assertEqual(server.set_mode_pattern("Work", "x" * 501), "the pattern can be at most 500 characters")
-        self.assertEqual(server.set_mode_pattern("Play", "x"), "there's no mode called Play")
-        self.assertIsNone(server.set_mode_pattern("Work", ""))
-        self.assertEqual(server.feed("score")["mode"]["name"], "Normal")
-
-    def test_a_free_event_naming_a_mode_turns_it_on_while_it_lasts(self):
-        self.assertIsNone(server.add_mode("Work"))
-        self.assertIsNone(server.choose_mode(None))
-        now = time.time()
-        self.set_events(event("work", now + 600, now + 3600, free=True, title="Work block"))
-        self.assertEqual(server.feed("score")["mode"], {"name": "Normal", "source": "default", "event": None, "until": None})
         self.set_events(event("work", now - 60, now + 3600, free=True, title="Work block"))
-        self.assertEqual(server.feed("score")["mode"], {"name": "Work", "source": "calendar", "event": "Work block",
-                                                        "until": now + 3600})
-        # A busy event with the name doesn't, as it stops watching instead.
-        self.set_events(event("work", now - 60, now + 3600, title="Work block"))
         self.assertEqual(server.feed("score")["mode"]["name"], "Normal")
+        self.assertIsNone(server.set_mode_when("work", {"not_busy": True}))
+        self.assertEqual(server.feed("score")["mode"], {"name": "Work", "source": "calendar", "situation": "not_busy",
+                                                        "event": "Work block", "until": now + 3600})
+        self.assertEqual(server.set_mode_when("Work", {"later": True}), "there's no situation called later")
+        self.assertEqual(server.set_mode_when("Work", {"busy": 1}), "each situation must be on (true) or off (false)")
+        self.assertEqual(server.set_mode_when("Work", {}), "expected the situations to turn on or off")
+        self.assertEqual(server.set_mode_when("Play", {"busy": True}), "there's no mode called Play")
+        self.assertIsNone(server.set_mode_when("Work", {"not_busy": False}))
+        self.assertEqual(server.feed("score")["mode"]["name"], "Normal")
+
+    def test_modes_turn_on_for_busy_events_free_events_or_free_time(self):
+        for name in ("Busy", "Free", "Idle"):
+            self.assertIsNone(server.add_mode(name))
+        server.set_mode_when("Busy", {"busy": True})
+        server.set_mode_when("Free", {"not_busy": True})
+        server.set_mode_when("Idle", {"free_time": True})
+        self.assertIsNone(server.choose_mode(None))
+        now = time.time()
+        mode = lambda: server.feed("score")["mode"]
+        self.set_events(event("dinner", now + 600, now + 3600))
+        self.assertEqual(mode(), {"name": "Idle", "source": "calendar", "situation": "free_time", "event": None,
+                                  "until": now + 600})
+        self.set_events(event("dinner", now - 60, now + 3600, title="Dinner"))
+        self.assertEqual((mode()["name"], mode()["event"]), ("Busy", "Dinner"))
+        self.set_events(event("work", now - 60, now + 3600, free=True))
+        self.assertEqual(mode()["name"], "Free")
+        # With both kinds taking place, the mode higher in the list wins.
+        self.set_events(event("work", now - 60, now + 3600, free=True), event("call", now - 60, now + 600))
+        self.assertEqual(mode()["name"], "Busy")
+        self.assertIsNone(server.move_mode("free", 0))
+        self.assertEqual([m["name"] for m in server.modes], ["Free", "Busy", "Idle"])
+        self.assertEqual(mode()["name"], "Free")
+
+    def test_moving_modes(self):
+        for name in ("A", "B", "C"):
+            self.assertIsNone(server.add_mode(name))
+        self.assertIsNone(server.move_mode("A", 2))
+        self.assertIsNone(server.move_mode("C", 0))
+        self.assertEqual([m["name"] for m in server.modes], ["C", "B", "A"])
+        self.assertEqual(json.loads(server.SETTINGS_FILE.read_text())["modes"][0]["name"], "C")
+        for to in (3, -1, "1", True, None):
+            self.assertEqual(server.move_mode("A", to), "the position must be a whole number from 0 to 2")
+        self.assertEqual(server.move_mode("D", 0), "there's no mode called D")
 
     def test_each_mode_ranks_with_its_own_settings(self):
         self.assertIsNone(server.add_mode("Work"))
@@ -124,8 +150,11 @@ class ModeTests(unittest.TestCase):
     def test_a_new_mode_copies_settings_and_a_chosen_mode_beats_the_calendar(self):
         ranking.TERMS["video_bonus"] = 5
         self.assertIsNone(server.add_mode(" Work ", "Normal"))
-        self.assertEqual(server.settings()["modes"], [{"name": "Work", "pattern": r"\bWork\b", "terms": dict(ranking.TERMS)}])
-        self.assertEqual(server.settings()["mode"], {"name": "Work", "source": "chosen", "event": None, "until": None})
+        self.assertEqual(server.settings()["modes"], [{"name": "Work", "when": dict.fromkeys(server.SITUATIONS, False),
+                                                        "terms": dict(ranking.TERMS)}])
+        self.assertEqual(server.settings()["mode"], {"name": "Work", "source": "chosen", "situation": None,
+                                                     "event": None, "until": None})
+        server.set_mode_when("Work", {"not_busy": True})
         now = time.time()
         self.set_events(event("work", now - 60, now + 3600, free=True, title="Work"))
         self.assertIsNone(server.choose_mode("Normal"))
@@ -146,11 +175,13 @@ class ModeTests(unittest.TestCase):
         saved = json.loads(server.SETTINGS_FILE.read_text())
         self.assertEqual(saved["mode_choice"], "Work")
         self.assertEqual(saved["modes"][0]["terms"]["task_bonus"], 100)
+        self.assertIsNone(server.set_mode_when("Work", {"free_time": True}))
         server.modes.clear()
         server.mode_choice.clear()
         server.load_settings()
         self.assertEqual(server.mode_terms("Work")["task_bonus"], 100)
         self.assertEqual(server.mode_choice, {"name": "Work"})
+        self.assertEqual(server.find_mode("Work")["when"], {"busy": False, "not_busy": False, "free_time": True})
         # Removing the chosen mode follows the calendar again.
         self.assertIsNone(server.remove_mode("work"))
         self.assertEqual((server.modes, server.mode_choice), ([], {}))
@@ -160,11 +191,14 @@ class ModeTests(unittest.TestCase):
         terms = {k: v for k, v in ranking.DEFAULT_TERMS.items() if k != "post_limit"}
         server.SETTINGS_FILE.write_text(json.dumps({"version": 2, "terms": ranking.DEFAULT_TERMS, "modes": [
             {"name": "Work", "terms": dict(terms, gone=1)}, {"name": "Bad", "terms": dict(terms, task_bonus="x")},
-            {"name": "Broken", "pattern": "(", "terms": terms}, {"name": "Focus", "pattern": "^focus", "terms": terms},
+            {"name": "Never", "pattern": "", "terms": terms}, {"name": "Focus", "pattern": "^focus", "terms": terms},
+            {"name": "Idle", "when": {"free_time": True, "busy": "yes", "gone": True}, "terms": terms},
             {"name": ""}, "junk"], "mode_choice": "Missing"}))
         server.load_settings()
-        self.assertEqual([(m["name"], m["pattern"]) for m in server.modes],
-                         [("Work", r"\bWork\b"), ("Broken", ""), ("Focus", "^focus")])
+        # Modes saved with a title pattern (or before patterns, matching their name) are on during free events.
+        on = lambda m: [s for s in server.SITUATIONS if m["when"][s]]
+        self.assertEqual([(m["name"], on(m)) for m in server.modes],
+                         [("Work", ["not_busy"]), ("Never", []), ("Focus", ["not_busy"]), ("Idle", ["free_time"])])
         self.assertEqual(server.mode_terms("Work"), ranking.DEFAULT_TERMS)
         self.assertEqual(server.mode_choice, {})
 
@@ -175,9 +209,13 @@ class ModeTests(unittest.TestCase):
         self.assertEqual((code, body["mode"]["source"]), (200, "default"))
         body, code = server.settings_api({"terms": dict(ranking.DEFAULT_TERMS, white_points=0), "mode": "Work"})
         self.assertEqual((code, body["modes"][0]["terms"]["white_points"]), (200, 0))
-        body, code = server.modes_api({"pattern": "^deep", "mode": "Work"})
-        self.assertEqual((code, body["modes"][0]["pattern"]), (200, "^deep"))
-        self.assertEqual(server.modes_api({"pattern": "[", "mode": "Work"})[1], 400)
+        body, code = server.modes_api({"when": {"busy": True}, "mode": "Work"})
+        self.assertEqual((code, body["modes"][0]["when"]), (200, {"busy": True, "not_busy": False, "free_time": False}))
+        self.assertEqual(server.modes_api({"when": {"busy": "no"}, "mode": "Work"})[1], 400)
+        server.add_mode("Play")
+        body, code = server.modes_api({"move": "Play", "to": 0})
+        self.assertEqual((code, [m["name"] for m in body["modes"]]), (200, ["Play", "Work"]))
+        server.remove_mode("Play")
         body, code = server.modes_api({"remove": "Work"})
         self.assertEqual((code, body["modes"]), (200, []))
         self.assertEqual(server.modes_api({})[1], 400)
