@@ -12,7 +12,7 @@ const GROUPS = [
   { id: "opened", title: "Opened and next up", open: true },
   { id: "tags", title: "Tags", open: true },
   { id: "kind", title: "Kind, length and age" },
-  { id: "stop", title: "Mode changes" },
+  { id: "modes", title: "Mode changes" },
   { id: "tasks", title: "Tasks" },
   { id: "similarity", title: "Similarity" },
 ];
@@ -47,9 +47,9 @@ const SETTINGS = [
   { group: "kind", key: "age_per_year", label: "Age", after: "points per year",
     hint: "Below 0 favors newer posts." },
 
-  { group: "stop", key: "event_lead_minutes", label: "Lead time", after: "minutes",
-    hint: "This mode turns on this long before an event it's on for, so you're ready when it starts; a busy event stops watching then too. Free time doesn't use it." },
-  { group: "stop", key: "past_mode_change_per_minute", label: "Past the mode change", after: "points per minute",
+  { group: "modes", key: "event_lead_minutes", label: "Lead time", after: "minutes",
+    hint: "This mode turns on this long before an event it's on for, so you're ready when it starts. Free time doesn't use it." },
+  { group: "modes", key: "past_mode_change_per_minute", label: "Past the mode change", after: "points per minute",
     hint: "For each minute a post would run past when the calendar next changes the mode. The post you're viewing is exempt." },
 
   { group: "tasks", key: "task_deadline_bonus", label: "Deadline", after: "points when due",

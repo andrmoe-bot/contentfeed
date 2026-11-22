@@ -41,13 +41,6 @@ class FreeEventTests(unittest.TestCase):
         posts = icalendar_parser.parse_calendar_resource(data.decode(), "https://calendar.test/cal/")
         self.assertEqual({p["title"]: p["all_day"] for p in posts}, {"Birthday": True, "Lunch": False, "Task": False})
 
-    def test_free_events_neither_stop_watching_nor_count_as_ongoing(self):
-        free = event("work", NOW - 60, NOW + 3600, free=True)
-        later = event("later", NOW + 600, NOW + 3600, free=True)
-        self.assertEqual(ranking.effective_stop([free, later], NOW, ranking.DEFAULT_TERMS), (None, None))
-        self.assertIsNone(ranking.ongoing_event([free], NOW))
-        busy = event("busy", NOW + 7200, NOW + 9000)
-        self.assertEqual(ranking.effective_stop([free, busy], NOW, ranking.DEFAULT_TERMS)[1], busy)
 
 
 class ServerTestCase(unittest.TestCase):
@@ -361,8 +354,7 @@ class ModeSettingsTests(ServerTestCase):
 
 
 class LeadTimeTests(ServerTestCase):
-    """A mode's lead time: the mode turns on that long before an event it's on for, and a busy event
-    stops watching then too."""
+    """A mode's lead time: the mode turns on that long before an event it's on for."""
 
     def setUp(self):
         super().setUp()
@@ -402,35 +394,20 @@ class LeadTimeTests(ServerTestCase):
         self.assertEqual(server.active_mode(server.calendar_events(list(server.subscriptions)), self.at(30))["event"], "Standup")
         self.assertEqual(self.follow(90), ("Normal", None, None))
 
-    def test_watching_stops_when_the_mode_begins(self):
+    def test_the_mode_changes_with_the_lead_time_of_the_mode_the_event_turns_on(self):
         self.mode("Meeting", {"busy"}, 30)
         self.mode("Normal", {"free_time"}, 0)
         self.set_events(event("standup", self.at(60), self.at(90)))
         result = server.feed("score")
-        self.assertEqual((result["mode"]["name"], result["stop_at"]), ("Normal", self.at(30)))
-        self.assertEqual(result["mode"]["until"], result["stop_at"])
-        # It's the lead time of the mode the meeting turns on, whatever mode is in effect.
-        server.choose_mode("Normal")
-        self.assertEqual(server.feed("score")["stop_at"], self.at(30))
+        self.assertEqual((result["mode"]["name"], result["mode"]["until"]), ("Normal", self.at(30)))
         self.assertIsNone(server.save_settings(dict(ranking.DEFAULT_TERMS, event_lead_minutes=10), "Meeting"))
-        self.assertEqual(server.feed("score")["stop_at"], self.at(50))
+        self.assertEqual(self.follow(), ("Normal", self.at(50), "Meeting"))
         self.assertIsNone(server.save_settings(dict(ranking.DEFAULT_TERMS, event_lead_minutes=120), "Normal"))
-        self.assertEqual(server.feed("score")["stop_at"], self.at(50))  # Normal isn't on during busy events
+        self.assertEqual(self.follow(), ("Normal", self.at(50), "Meeting"))  # Normal isn't on during busy events
 
-    def test_while_stopped_in_the_lead_time_the_meeting_is_up_next(self):
-        self.mode("Meeting", {"busy"}, 30)
-        self.set_events(event("standup", self.at(20), self.at(50), title="Standup"))
-        result = server.feed("score")
-        self.assertTrue(result["stopped"])
-        self.assertEqual((result["stopped_until"], result["next_event"]["title"], result["ongoing_event"]),
-                         (self.at(50), "Standup", None))
-        self.assertEqual(result["stop_event"]["title"], "Standup")
-        self.assertNotIn("begins", result["stop_event"])  # the event as it is, not the copy with its lead
-
-    def test_an_event_with_no_mode_for_it_stops_watching_at_its_start(self):
+    def test_an_event_with_no_mode_for_it_ends_free_time_at_its_start(self):
         self.mode("Normal", {"free_time"}, 30)  # free time doesn't use the lead time
         self.set_events(event("dentist", self.at(60), self.at(120)))
-        self.assertEqual(server.feed("score")["stop_at"], self.at(60))
         self.assertEqual(self.follow(), ("Normal", self.at(60), None))
 
     def test_the_highest_mode_on_for_the_event_sets_the_lead_time(self):
@@ -438,19 +415,16 @@ class LeadTimeTests(ServerTestCase):
         self.mode("Calls", {"busy"}, 45)
         self.mode("Normal", {"free_time"}, 0)
         self.set_events(event("call", self.at(60), self.at(90)))
-        self.assertEqual(server.feed("score")["stop_at"], self.at(45))
         self.assertEqual(self.follow(), ("Normal", self.at(45), "Meeting"))
         server.move_mode("Calls", 0)
-        self.assertEqual(server.feed("score")["stop_at"], self.at(15))
         self.assertEqual(self.follow(), ("Normal", self.at(15), "Calls"))
 
-    def test_free_events_turn_their_mode_on_early_but_dont_stop_watching(self):
+    def test_free_events_turn_their_mode_on_early(self):
         self.mode("Focus", {"not_busy"}, 10)
         self.mode("Normal", {"free_time"}, 0)
         self.set_events(event("deep work", self.at(30), self.at(90), free=True))
         self.assertEqual(self.follow(), ("Normal", self.at(20), "Focus"))
         self.assertEqual(self.follow(20)[0], "Focus")
-        self.assertIsNone(server.feed("score")["stop_at"])
 
     def test_a_lower_mode_still_wins_by_priority_during_the_lead_time(self):
         # Normal above Meeting: free time ends when the meeting's lead time begins, so Meeting takes over.
@@ -472,26 +446,11 @@ class LeadTimeTests(ServerTestCase):
         self.assertEqual(server.mode_terms("Meeting")["event_lead_minutes"], 0)
         self.set_events(event("standup", self.at(60), self.at(90)))
         self.assertEqual(self.follow(), (None, self.at(60), "Meeting"))
-        self.assertEqual(server.feed("score")["stop_at"], self.at(60))
 
     def test_lead_time_zero_starts_the_mode_with_the_event(self):
         self.mode("Meeting", {"busy"}, 0)
         self.set_events(event("standup", self.at(60), self.at(90)))
         self.assertEqual(self.follow(), (None, self.at(60), "Meeting"))
-        self.assertEqual(server.feed("score")["stop_at"], self.at(60))
-
-    def test_previewing_the_lead_time_of_the_mode_in_effect(self):
-        self.mode("Meeting", {"busy"}, 30)
-        self.mode("Play", set(), 0)
-        self.set_events(event("standup", self.at(60), self.at(90)))
-        server.choose_mode("Meeting")
-        preview = dict(server.terms_for("Meeting"), event_lead_minutes=50)
-        self.assertEqual(server.feed("score", terms=preview)["stop_at"], self.at(10))
-        self.assertEqual(server.mode_terms("Meeting")["event_lead_minutes"], 30)  # not saved
-        self.assertEqual(server.feed("score")["stop_at"], self.at(30))
-        # Previewing another mode's lead time doesn't change the meeting's.
-        server.choose_mode("Play")
-        self.assertEqual(server.feed("score", terms=dict(server.terms_for("Play"), event_lead_minutes=50))["stop_at"], self.at(30))
 
     def test_previewing_the_lead_time_moves_the_mode_change_and_its_points(self):
         # Back-to-back meetings: a 30-minute lead bridges the gap, so Meeting stays on until the second ends.
@@ -512,10 +471,6 @@ class LeadTimeTests(ServerTestCase):
         self.assertIn(past(preview)[0], ("runs 35 minutes past the mode change", "runs 36 minutes past the mode change"))
         self.assertEqual(server.feed("score")["mode"]["until"], self.at(60))  # not saved
 
-    def test_the_stop_screen_names_the_events_calendar(self):
-        self.mode("Meeting", {"busy"}, 30)
-        self.set_events(event("standup", self.at(10), self.at(40)))
-        self.assertEqual(server.feed("score")["stop_event"]["calendar"], "Calendar")
 
 
 class NextModeChangeTests(unittest.TestCase):

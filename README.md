@@ -116,10 +116,8 @@ It can also be a blog or news page without a feed (see Pages without a feed), a 
 (see NRK TV), an author on arXiv or Google Scholar (see Authors), the papers citing a paper (see Citations)
 or a Jellyfin server (see Jellyfin).
 Incomplete tasks appear as cards; events don't — they take place when scheduled, not whenever the
-feed happens to show them, so they only stop watching (see Stop watching):
-every busy event that hasn't ended acts as a stop time when it begins, at its start minus the lead
-time of the mode it turns on (see Modes), so posts you couldn't finish before then are pushed down. Events marked free
-(not busy) and all-day events don't stop watching; events can turn a mode on (see Modes). The score panel
+feed happens to show them, so they only turn modes on (see Modes), such as a mode with a post limit
+of 0 during busy events to stop watching for meetings. The score panel
 controls task urgency during the final 30 days before a deadline. Tasks also get the
 similar-posts-above penalty against other tasks in the same calendar, and the fixed Task term
 adds points to every task (default 0). The Task priority term gives a task points by its
@@ -325,39 +323,9 @@ viewed it.
 The feed's order changes only when you load the page, change a setting or the mode, or
 search, and then the page shows the top of the feed; "Show more" adds the next posts below the ones
 shown. Otherwise nothing moves while you're watching: the page checks the server in the background
-and updates each card's score, tag and viewed time (and the status line and stop state) in place.
+and updates each card's score, tag and viewed time (and the status line) in place.
 New posts and new scores take effect in the order the next time you reload. Playing a video stops
 the one playing in another card.
-
-## Stop watching
-
-Calendar events stop watching. Every busy event that hasn't ended has a stop time when it begins:
-at its start minus the **Lead time** of the mode it turns on, the highest mode on during busy events
-(see Modes), or at its start if no mode is (0 minutes by default). The earliest stop counts. So with
-dinner at 19:00 and a Meeting mode on during busy events with a lead time of 30 minutes, Meeting mode
-turns on at 18:30 and the stop time is 18:30. Events marked free (not busy) don't stop watching, though they can turn a mode on (see
-Modes). All-day events, such as birthdays and holidays, don't stop watching either, as they would
-stop the feed for the whole day. Events never appear as feed cards, and ended events don't stop
-watching anymore.
-
-The status line shows the stop time, the event and how long is left, such as "Stopping at 18:30
-for “Dinner” (in 2 h 15 min)"; times on another day say which ("tomorrow 08:30"). Posts that would
-run past the stop are pushed down only when the mode changes then, as it does when a mode is on
-during busy events (see Modes).
-
-When the stop time runs out, the page shows the stop screen: the feed is hidden behind a notice
-saying to stop watching now and get ready for the event, with the event in full — its calendar,
-title, start and end, description and link — and a countdown to its start. Any video or other
-media playing is force-stopped, and a short audio alert sounds once per stop. If an event is taking
-place right now, the stop screen shows it with a countdown to when it's over (of several, the one
-that ends first); when a countdown reaches zero the page checks again at once instead of waiting
-for the next poll. The feed stays stopped until every event whose stop time has come is over,
-including one whose lead time begins before then, such as lunch right after a meeting: the stop
-screen then shows the meeting and, as up next, lunch, and the status line says "Stopped until 13:30
-for “Meeting”, then “Lunch”". The feed itself is still served, so once the event is over the page switches
-straight back to the feed with nothing rebuilt. While a stop time is in effect the page polls every
-10 seconds, and the page checks again just after each change it knows is coming (the stop time,
-the feed returning, the mode changing), so these show within a second or so.
 
 ## Tags
 
@@ -373,8 +341,8 @@ next up. Items start untagged; click the dot of an item's tag again to remove th
 
 ## Modes
 
-The feed's settings belong to modes, such as Work with a post limit of 0 for an empty page, or one
-with points for tasks. At first there's one, Normal, with the default settings, on in free time. It's
+The feed's settings belong to modes, such as Meeting, on during busy events with a post limit of 0
+for an empty page, or one with points for tasks. At first there's one, Normal, with the default settings, on in free time. It's
 an ordinary mode: change, move or remove it like any other. The Mode list
 at the top of the settings panel shows Auto and your modes; **New mode…** adds one, starting as a
 copy of the settings shown (or the defaults), and you change it like any other. Picking a mode in the
@@ -391,7 +359,8 @@ down with the ↑ and ↓ buttons.
 
 Each mode's **Lead time** (under **Mode changes**, 0 by default) turns it on that long before
 an event it's on for starts, so you're ready when it does: a Meeting mode with a lead time of 30
-minutes turns on at 09:30 for a 10:00 meeting, and as meetings are busy, watching stops then too. An
+minutes turns on at 09:30 for a 10:00 meeting; with a post limit of 0, the feed empties then, which
+also stops a video playing in it. An
 event's lead time is that of the highest mode on during events of its kind, busy or free, and free
 time ends when it begins. Free time itself doesn't use a lead time.
 
@@ -407,13 +376,11 @@ leave posts out altogether, use the post limit (see Ranking).
 
 When no mode is on, the feed is empty and says so, as does the status line ("No mode on"), and the
 panel shows no settings until you pick a mode. A subscription's page and a
-post's page still list posts then, ranked with the default settings, and events stop watching with
-their lead times as usual.
+post's page still list posts then, ranked with the default settings.
 
 The panel always shows and changes the settings of the mode in effect, and the status line names
 it. Following the calendar, the status line says when the mode next changes and to what ("Work
-mode until 17:00, then Busy", or "No mode on until 09:00"), looking a week ahead, and leaves out a
-stop time that comes after that. A change is when the mode in effect becomes another, not just when
+mode until 17:00, then Busy", or "No mode on until 09:00"), looking a week ahead; the page checks again just after then. A change is when the mode in effect becomes another, not just when
 an event starts or ends: back-to-back work blocks count as one, and a meeting starting during a
 work block ends Work then if a mode for busy events is higher in the list. When the mode changes,
 such as when a work block starts, the feed is shown again from the top. Remove deletes the mode
@@ -536,7 +503,7 @@ or `in a series starting “Making a CPU, part 1”, nothing before it opened �
 Change the numbers in the score panel: click "Settings" at the top of the feed. It opens
 beside the feed on a wide screen, or along the bottom on a narrow one, and stays open across reloads
 until you close it. The settings are in groups that fold away (Feed; Opened and next up; Tags; Kind,
-length and age; Stop time; Tasks; Similarity), and each group's heading says how many of its settings
+length and age; Mode changes; Tasks; Similarity), and each group's heading says how many of its settings
 you've changed from the defaults. The browser remembers which groups you left open. Each setting has
 a box for an exact number and a slider; the sliders go in steps of 1, 1.5, 2, 3, 5 and 7 times a power
 of ten, so they cover both small and large numbers. Leave the post limit's box empty for no limit.

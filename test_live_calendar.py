@@ -41,9 +41,10 @@ class LiveCalendarTests(unittest.TestCase):
         self.stack.enter_context(patch.object(server, "pending", set()))
         self.stack.enter_context(patch.object(server, "state_version", 0))
         self.stack.enter_context(patch.object(ranking, "TERMS", dict(ranking.DEFAULT_TERMS, event_lead_minutes=30)))
-        # One mode, on whatever the calendar holds, whose settings are ranking.TERMS.
-        self.stack.enter_context(patch.object(server, "modes", [{"name": "Normal", "when": dict.fromkeys(server.SITUATIONS, True),
-                                                      "terms": ranking.TERMS}]))
+        # Meeting, on during busy events, and Normal, on otherwise, both with the settings ranking.TERMS.
+        self.stack.enter_context(patch.object(server, "modes", [
+            {"name": "Meeting", "when": dict.fromkeys(server.SITUATIONS, False) | {"busy": True}, "terms": ranking.TERMS},
+            {"name": "Normal", "when": dict.fromkeys(server.SITUATIONS, True) | {"busy": False}, "terms": ranking.TERMS}]))
         self.stack.enter_context(patch.object(server, "schedule", return_value=None))
         self.stack.enter_context(patch.object(server, "schedule_subscription", return_value=None))
         self.stack.enter_context(patch.object(server.caldav, "read_logins", return_value=({}, None)))
@@ -75,39 +76,31 @@ class LiveCalendarTests(unittest.TestCase):
         for state in server.calendar_checks.values():
             state["checked"] -= seconds
 
+    def meeting(self, result):
+        """Whether the dinner has turned Meeting on: within its lead time, or taking place."""
+        return result["mode"]["name"] == "Meeting"
+
     def test_unchanged_calendar_is_not_read_again(self):
-        self.assertTrue(server.feed("score")["stopped"])
+        self.assertTrue(self.meeting(server.feed("score")))
         self.assertEqual(self.reads, 0)
 
     def test_a_change_reaches_the_next_feed_request(self):
-        self.assertTrue(server.feed("score")["stopped"])
+        self.assertTrue(self.meeting(server.feed("score")))
         self.version, self.events = "v2", [self.dinner(120)]  # dinner moved two hours later
         self.age_checks(server.CALENDAR_CHECK_GAP)
         result = server.feed("score")
         self.assertEqual(self.reads, 1)
-        self.assertFalse(result["stopped"])
+        self.assertFalse(self.meeting(result))
         self.assertEqual(server.subscriptions[CAL]["version"], "v2")
         self.version, self.events = "v3", []  # deleted
         self.age_checks(server.CALENDAR_CHECK_GAP)
-        self.assertIsNone(server.feed("score")["stop_at"])
+        self.assertIsNone(server.feed("score")["mode"]["until"])
 
-    def test_events_are_reported_with_their_calendar_and_details(self):
-        # Dinner starts in ten minutes: within its lead time, so it stops watching but isn't ongoing.
+    def test_the_mode_names_the_event_that_turned_it_on(self):
+        # Dinner starts in ten minutes: within its lead time, so Meeting is on until it ends.
         result = server.feed("score")
-        self.assertTrue(result["stopped"])
-        self.assertIsNone(result["ongoing_event"])
-        self.assertEqual(result["stop_event"], {
-            "url": CAL + "#dinner", "title": "Dinner", "description": None, "calendar_kind": "event",
-            "calendar_start": self.events[0]["calendar_start"], "deadline": self.events[0]["deadline"],
-            "calendar": "Home"})
-        dinner = dict(self.dinner(-10), description="At Kari's")
-        server.subscriptions[CAL]["events"] = [dinner]
-        result = server.feed("score")
-        self.assertTrue(result["stopped"])
-        self.assertEqual(result["ongoing_event"], {
-            "url": CAL + "#dinner", "title": "Dinner", "description": "At Kari's", "calendar_kind": "event",
-            "calendar_start": dinner["calendar_start"], "deadline": dinner["deadline"], "calendar": "Home"})
-        self.assertEqual(result["stop_event"], result["ongoing_event"])
+        self.assertEqual((result["mode"]["name"], result["mode"]["event"]), ("Meeting", "Dinner"))
+        self.assertAlmostEqual(result["mode"]["until"], self.events[0]["deadline"], places=3)
 
     def test_calendars_read_with_an_older_parser_are_read_again(self):
         server.subscriptions["https://example.com/feed"] = {"title": "Feed", "source": "feed", "items": []}
@@ -126,7 +119,7 @@ class LiveCalendarTests(unittest.TestCase):
     def test_unreachable_calendar_keeps_its_events_and_says_so(self):
         self.version = caldav.CalDAVError("couldn't fetch calendar: timed out")
         result = server.feed("score")
-        self.assertTrue(result["stopped"])  # the events from the last read still stop the feed
+        self.assertTrue(self.meeting(result))  # the events from the last read are still in use
         self.assertEqual([c["title"] for c in result["calendars_unreachable"]], ["Home"])
         with patch.object(server.caldav, "version", side_effect=AssertionError("checked too soon")):
             self.age_checks(server.CALENDAR_CHECK_GAP)
@@ -135,7 +128,7 @@ class LiveCalendarTests(unittest.TestCase):
         self.age_checks(server.CALENDAR_RETRY)
         result = server.feed("score")
         self.assertEqual(result["calendars_unreachable"], [])
-        self.assertIsNone(result["stop_at"])
+        self.assertFalse(self.meeting(result))
 
     def test_calendar_without_a_version_is_read_again_after_a_minute(self):
         self.version = None

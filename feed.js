@@ -29,7 +29,7 @@ let pollTimer;
 const cards = new Map();  // section + URL -> cached card; one post can appear in several feeds
 // The feed's order changes only when you load the page, change a setting or the mode, or search;
 // "Show more" adds the next posts below. The page still checks the server in the background, for
-// the stop time and each card's score, tag and viewed time, but nothing moves away while you watch.
+// the mode and each card's score, tag and viewed time, but nothing moves away while you watch.
 let shown = [];  // items as last shown
 let playingCard = null;
 
@@ -252,7 +252,6 @@ function render() {
   if (subscriptionPage) return renderSubscription();
   shown = items;
   renderList(feedEl, items, "feed");
-  renderStopNotice();
 }
 
 function renderSubscription() {
@@ -293,7 +292,6 @@ function renderSubscription() {
       renderList(section.children[2], group.items, group.id);
     }
   }
-  renderStopNotice();
 }
 
 function renderList(container, list, prefix) {
@@ -362,7 +360,6 @@ function renderPost() {
     if (!group.items.length) container.replaceChildren(...(group.id === "similar" ? [el("p", { class: "section-note" }, "No similar posts found with the current similarity settings.")] : []));
   }
   for (const [id, c] of cards) if (!ids.has(c.prefix)) cards.delete(id);
-  renderStopNotice();
 }
 
 const fmtPoints = (n) => (n > 0 ? "+" : n < 0 ? "−" : "±") + Math.round(Math.abs(n) * 100) / 100;
@@ -479,7 +476,7 @@ function why(item) {
 
 // One request at a time: calls while one is running (such as from a slider being dragged) are
 // combined into a single request after it, with the newest settings. load() on its own is a check:
-// it updates the status line, the stop state and each card's score, tag and viewed time, but keeps
+// it updates the status line, the mode and each card's score, tag and viewed time, but keeps
 // the cards where they are. { reorder: true } shows the feed in its new order from the top, as after
 // changing a setting; { more: true } adds posts not shown yet below the ones that are.
 let loading = null;
@@ -501,6 +498,16 @@ function load(how = {}) {
   return loading;
 }
 
+// How long until the next check of the feed: soon while fetches are under way, else every 30 seconds,
+// but always just after the calendar next changes the mode (including turning one on when none is).
+function pollDelay(data) {
+  if (!data) return 30000;
+  const base = data.pending ? 1500 : 30000;
+  const until = data.mode?.until - Date.now() / 1000;
+  return until > 0 ? Math.min(base, until * 1000 + 500) : base;
+}
+
+let lastData = null;  // the last feed response
 let enrichOnLoad = true;
 let shownTag = null;  // the ETag of the feed as shown: the server answers "not modified" if it's still the same
 let checkTag = null;  // the ETag of the last answer, for checks
@@ -522,7 +529,7 @@ async function fetchFeed({ reorder = false, more = false } = {}) {
     if (res.ok || res.status === 304) enrichOnLoad = false;
     if (res.status === 304) {
       if (reorder) window.scrollTo(0, 0);
-      pollTimer = setTimeout(load, pollDelay(lastStop));
+      pollTimer = setTimeout(load, pollDelay(lastData));
       return;
     }
     const data = await res.json();
@@ -537,8 +544,7 @@ async function fetchFeed({ reorder = false, more = false } = {}) {
       throw new Error(data.error);
     }
     checkTag = res.headers.get("ETag");
-    lastStop = data;
-    forceStop(data);
+    lastData = data;
     syncMode(data.mode);
     // A mode turning on or off changes the settings, so the feed is shown again from the top.
     const modeChanged = !!data.mode && shownMode !== null && data.mode.name !== shownMode;
@@ -556,7 +562,6 @@ async function fetchFeed({ reorder = false, more = false } = {}) {
       if (postPage) showStatus(data, "");
       else if (subscriptionPage) showSubscription(data, "none");
       else showRanked(data);
-      renderStopNotice();  // the stop screen comes and goes with the stop state, not with the order
     }
     pollTimer = setTimeout(load, pollDelay(data));
   } catch (error) {
@@ -585,17 +590,14 @@ function appendNew(list, fresh) {
 }
 
 // The status line: calendars that didn't answer, the mode (or that none is on), with when the calendar
-// next changes it and to what, the stop time, if any, then text, then how many fetches are under way.
-// While the calendar has a mode on, a stop time after the mode changes is left out: the change is
-// what's next.
+// next changes it and to what, then text, then how many fetches are under way.
 function showStatus(data, text) {
   const unreachable = (data.calendars_unreachable || []).map((c) =>
     `Calendar “${c.title}” isn't answering; using its events from ${c.fetched ? clock(c.fetched) : "before"}`);
   const mode = data.mode?.name ? data.mode : null;
   const change = data.mode?.until ? ` until ${when(data.mode.until)}${mode ? `, then ${data.mode.next ?? "no mode"}` : ""}` : "";
   const modeNote = mode ? `${mode.name} mode${change}` : data.mode ? `No mode on${change}` : "";
-  const stopLater = mode?.until && data.stop_at && !data.stopped && data.stop_at > mode.until;
-  statusEl.textContent = [...unreachable, modeNote, stopLater ? "" : stopNote(data), text, data.pending ? `fetching ${data.pending}…` : ""]
+  statusEl.textContent = [...unreachable, modeNote, text, data.pending ? `fetching ${data.pending}…` : ""]
     .filter(Boolean).join(" · ");
 }
 
@@ -612,7 +614,7 @@ function showRanked(data) {
 function showFeed(data, more = false) {
   items = more ? appendNew(items, data.items) : data.items;
   render();
-  if (!items.length) feedEl.replaceChildren(el("p", {}, searchEl.value.trim() ? "No posts match your search." : data.mode && !data.mode.name && data.post_limit === 0 ? "No mode is on, so the feed is empty. Pick one in Settings, or choose there when the calendar turns one on." : data.post_limit === 0 && data.total ? `The post limit is 0${data.mode?.name ? ` in ${data.mode.name} mode` : ""}, so the feed is empty. Change it in Settings.` : data.stopped ? "Stopped: the stop time has passed." : "No posts in your feed yet."));
+  if (!items.length) feedEl.replaceChildren(el("p", {}, searchEl.value.trim() ? "No posts match your search." : data.mode && !data.mode.name && data.post_limit === 0 ? "No mode is on, so the feed is empty. Pick one in Settings, or choose there when the calendar turns one on." : data.post_limit === 0 && data.total ? `The post limit is 0${data.mode?.name ? ` in ${data.mode.name} mode` : ""}, so the feed is empty. Change it in Settings.` : "No posts in your feed yet."));
   showRanked(data);
 }
 

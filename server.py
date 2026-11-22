@@ -109,7 +109,7 @@ CONTENT_TYPES = {".html": "text/html; charset=utf-8", ".css": "text/css; charset
 PAGES = {  # request path -> file
     "/": "index.html", "/subscription": "index.html", "/subscription/next-up": "index.html", "/post": "index.html",
     "/subscriptions": "subscriptions.html",
-    **{"/" + name: name for name in ("style.css", "common.js", "feed.css", "feed.js", "stop.js", "settings.js",
+    **{"/" + name: name for name in ("style.css", "common.js", "feed.css", "feed.js", "settings.js",
                                      "subscriptions.css", "subscriptions.js")},
 }
 MAX_BYTES = 1_000_000
@@ -828,7 +828,7 @@ def terms_for(name: str | None) -> dict:
 
 # The calendar situations a mode can be on in (its toggles, all off for a new mode): during a busy
 # event, during a free (not busy) event, and in free time, when no event takes place. All-day events,
-# such as birthdays, don't count, as for stopping watching (see ranking.stops_watching).
+# such as birthdays, don't count (see is_timed).
 SITUATIONS = ("busy", "not_busy", "free_time")
 
 
@@ -875,8 +875,8 @@ def event_lead(event: dict, preview: tuple[str, dict] | None = None) -> float:
 
 def with_leads(events: list[dict], preview: tuple[str, dict] | None = None) -> list[dict]:
     """The events, with each timed one (see is_timed) beginning its lead time early (see event_lead):
-    a copy with "begins", its start minus the lead. The mode it turns on is on from then, it stops
-    watching from then if busy (see ranking._stops), and free time ends then. Call with lock held."""
+    a copy with "begins", its start minus the lead. The mode it turns on is on from then, and free
+    time ends then. Call with lock held."""
     return [dict(e, begins=e["calendar_start"] - event_lead(e, preview)) if is_timed(e) else e for e in events]
 
 
@@ -930,9 +930,7 @@ def active_mode(events: list[dict], now: float) -> dict:
     in the panel, if any ("source": "chosen"); else the mode the calendar turns on (see calendar_mode;
     "calendar", with the situation and the event's title, if any); else none ("name": None, "source":
     "none"), and the feed is empty. Following the calendar, until is when the mode next changes and
-    next the mode then (see next_mode_change); a chosen mode stays until you choose another. Free events
-    don't stop watching (see ranking.effective_stop), but busy ones do, so a mode on during them
-    applies while watching is stopped. Events begin their lead time early (see with_leads). Call with
+    next the mode then (see next_mode_change); a chosen mode stays until you choose another. Events begin their lead time early (see with_leads). Call with
     lock held."""
     chosen = mode_choice.get("name")
     if chosen and find_mode(chosen):
@@ -1242,26 +1240,6 @@ def enrich_posts(ranked: list[dict]):
             schedule(post["url"], force=True)
 
 
-def stop_state(events: list[dict], now: float, terms: dict, calendar_of=lambda event: None) -> dict:
-    """The stop-watching state for a feed response: the effective stop time, whether it has run out
-    (stopped), stop_event, the event that causes it, ongoing_event, the event taking place now, if
-    any, and while stopped, stopped_until, when the feed returns, and next_event, the next event to
-    get ready for, if any (see ranking.stopped_until). The events come with all their details and
-    calendar_of(event), their calendar's name, for the stop screen to show with a countdown to the
-    start or the end."""
-    effective, event = ranking.effective_stop(events, now, terms)
-    ongoing = ranking.ongoing_event(events, now)
-    until, upcoming = ranking.stopped_until(events, now, terms)
-    details = lambda e: ({**{k: e.get(k) for k in ("url", "title", "description", "calendar_kind", "calendar_start", "deadline")},
-                          "calendar": calendar_of(e)} if e is not None else None)
-    return {"stop_at": effective,
-            "stopped": effective is not None and now >= effective,
-            "stop_event": details(event),
-            "ongoing_event": details(ongoing),
-            "stopped_until": until,
-            "next_event": details(upcoming)}
-
-
 ARXIV_AUTHOR_TITLE = re.compile(r"^(.+?)(?:'s articles)? on arXiv$")
 
 
@@ -1386,27 +1364,21 @@ def feed(ranker: str, limit: int = MAX_ITEMS_SHOWN, terms: dict | None = None, *
     sync_calendars(all_subs)
     now = time.time()
     with lock:
-        # Every subscribed calendar's events stop watching, on every page, not only their own subscription's.
+        # Every subscribed calendar's events turn modes on, on every page, not only their own subscription's.
         events = calendar_events(all_subs)
         mode = active_mode(events, now)
-        # With no mode on, the main feed is empty; other pages rank with the default settings. Busy
-        # events stop watching when they begin, with the lead time of the mode they turn on, or the
-        # previewed one if that's the mode in effect.
+        # With no mode on, the main feed is empty; other pages rank with the default settings.
         preview = (mode["name"], terms) if terms and mode["name"] else None
         terms = terms or terms_for(mode["name"])
-        leading = with_leads(events, preview)
-        original = {id(copy): event for copy, event in zip(leading, events)}  # calendar_name finds the originals
-        stopping = stop_state(leading, now, terms, lambda event: calendar_name(original.get(id(event), event), all_subs))
         if preview and mode["source"] == "calendar":
-            # A previewed lead time can move the next mode change too, such as by opening a gap
-            # between meetings, so the points for running past it follow the preview like the stop.
-            until, following = next_mode_change(leading, now, mode["name"])
+            # A previewed lead time can move the next mode change, such as by opening a gap between
+            # meetings, so the points for running past it follow the preview.
+            until, following = next_mode_change(with_leads(events, preview), now, mode["name"])
             mode = {**mode, "until": until, "next": following}
-    stopping = {**stopping, "mode": mode,
-                "calendars_unreachable": unreachable_calendars(all_subs)}
+    context = {"mode": mode, "calendars_unreachable": unreachable_calendars(all_subs)}
     ranked = ranking_for(ranker, terms, entries, subs, search, post_url, mode["until"], now)
     if post_url is not None:
-        return {**post_details(ranked.source, post_url, ranker, limit, terms, now, enrich=enrich, search=search), **stopping}
+        return {**post_details(ranked.source, post_url, ranker, limit, terms, now, enrich=enrich, search=search), **context}
     # The post limit applies to the main feed, not to a subscription's page, where you browse its posts.
     post_limit = terms["post_limit"] if subscription_url is None and terms["post_limit"] < ranking.LIMIT else None
     if subscription_url is None and mode["name"] is None:
@@ -1415,7 +1387,7 @@ def feed(ranker: str, limit: int = MAX_ITEMS_SHOWN, terms: dict | None = None, *
         limit = min(limit, post_limit)
     visible = ranked.read(limit)
     result = {"items": ranking.explain_similarities(visible, ranked.source, terms, now),
-              "total": ranked.total, "post_limit": post_limit, "pending": pending_count(), "ranker": ranker, **stopping}
+              "total": ranked.total, "post_limit": post_limit, "pending": pending_count(), "ranker": ranker, **context}
     if subscription_url is not None:
         next_up = sorted((p for p in ranked.source if p.get("next_after")), key=ranking.order, reverse=True)
         if enrich:
@@ -1564,15 +1536,6 @@ def migrate_calendar_events() -> bool:
 def calendar_events(subs) -> list[dict]:
     """The subscriptions' calendar events. Call with lock held."""
     return [event for url in subs for event in subscriptions.get(url, {}).get("events", [])]
-
-
-def calendar_name(event: dict, subs) -> str | None:
-    """The name of the subscribed calendar that has the event. Call with lock held."""
-    for url in subs:
-        subscription = subscriptions.get(url, {})
-        if any(e is event for e in subscription.get("events", [])):
-            return subscription.get("title") or url
-    return None
 
 
 # CalDAV calendars are kept in step on every feed request, not only on the subscription timer: each
