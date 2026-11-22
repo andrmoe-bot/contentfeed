@@ -101,7 +101,7 @@ class ModeTests(ServerTestCase):
         self.assertEqual(server.feed("score")["mode"]["name"], None)
         self.assertIsNone(server.set_mode_when("work", {"not_busy": True}))
         self.assertEqual(server.feed("score")["mode"], {"name": "Work", "source": "calendar", "situation": "not_busy",
-                                                        "event": "Work block", "until": now + 3600})
+                                                        "event": "Work block", "until": now + 3600, "next": None})
         self.assertEqual(server.set_mode_when("Work", {"later": True}), "there's no situation called later")
         self.assertEqual(server.set_mode_when("Work", {"busy": 1}), "each situation must be on (true) or off (false)")
         self.assertEqual(server.set_mode_when("Work", {}), "expected the situations to turn on or off")
@@ -120,7 +120,7 @@ class ModeTests(ServerTestCase):
         mode = lambda: server.feed("score")["mode"]
         self.set_events(event("dinner", now + 600, now + 3600))
         self.assertEqual(mode(), {"name": "Idle", "source": "calendar", "situation": "free_time", "event": None,
-                                  "until": now + 600})
+                                  "until": now + 600, "next": "Busy"})
         self.set_events(event("dinner", now - 60, now + 3600, title="Dinner"))
         self.assertEqual((mode()["name"], mode()["event"]), ("Busy", "Dinner"))
         self.set_events(event("work", now - 60, now + 3600, free=True))
@@ -154,10 +154,10 @@ class ModeTests(ServerTestCase):
 
     def test_with_no_mode_on_the_feed_is_empty(self):
         result = server.feed("score")
-        self.assertEqual((result["mode"], result["items"], result["post_limit"], result["total"]), ({"name": None, "source": "none", "situation": None, "event": None, "until": None}, [], 0, 1))
+        self.assertEqual((result["mode"], result["items"], result["post_limit"], result["total"]), ({"name": None, "source": "none", "situation": None, "event": None, "until": None, "next": None}, [], 0, 1))
         # A subscription's page still lists its posts, ranked with the default settings.
         self.assertEqual(len(server.feed("score", subscription_url=self.feed_url)["items"]), 1)
-        self.assertEqual(server.settings()["mode"], {"name": None, "source": "none", "situation": None, "event": None, "until": None})
+        self.assertEqual(server.settings()["mode"], {"name": None, "source": "none", "situation": None, "event": None, "until": None, "next": None})
 
     def test_each_mode_ranks_with_its_own_settings(self):
         self.assertIsNone(server.add_mode("Work"))
@@ -184,7 +184,7 @@ class ModeTests(ServerTestCase):
                                                          "terms": dict(OWN, video_bonus=5)})
         self.assertEqual(server.mode_terms("Fresh"), OWN)
         self.assertEqual(server.settings()["mode"], {"name": "Fresh", "source": "chosen", "situation": None,
-                                                     "event": None, "until": None})
+                                                     "event": None, "until": None, "next": None})
         server.set_mode_when("Work", {"not_busy": True})
         now = time.time()
         self.set_events(event("work", now - 60, now + 3600, free=True, title="Work"))
@@ -434,6 +434,92 @@ class GlobalTermsTests(ServerTestCase):
         self.assertEqual((code, body["global"]["event_lead_minutes"]), (200, 35))
         body, code = server.settings_api({"terms": dict(ranking.DEFAULT_TERMS, event_lead_minutes=-1)})
         self.assertEqual((code, body["global"]["event_lead_minutes"]), (400, 35))
+class NextModeChangeTests(unittest.TestCase):
+    """Following the calendar, until is when the mode next changes, and next the mode then."""
+
+    def setUp(self):
+        self.stack = contextlib.ExitStack()
+        self.addCleanup(self.stack.close)
+        self.stack.enter_context(patch.object(server, "modes", []))
+        self.stack.enter_context(patch.object(server, "mode_choice", {}))
+
+    def use(self, *spec):
+        """Modes, highest priority first, as (name, situations it's on in)."""
+        server.modes[:] = [{"name": name, "when": {s: s in on for s in server.SITUATIONS}, "terms": {}}
+                           for name, on in spec]
+
+    def change(self, events, now=NOW):
+        mode = server.active_mode(events, now)
+        return mode["name"], mode["until"], mode["next"]
+
+    def test_a_higher_priority_mode_starting_during_an_event_ends_the_mode_then(self):
+        self.use(("Busy", {"busy"}), ("Work", {"not_busy"}))
+        events = [event("Work block", NOW - 60, NOW + 7200, free=True), event("Meeting", NOW + 1800, NOW + 3600)]
+        self.assertEqual(self.change(events), ("Work", NOW + 1800, "Busy"))
+        # During the meeting, Work comes back when it ends; at its very start, Busy is on.
+        self.assertEqual(self.change(events, NOW + 1800), ("Busy", NOW + 3600, "Work"))
+        self.assertEqual(self.change(events, NOW + 3600), ("Work", NOW + 7200, None))
+
+    def test_a_lower_priority_event_starting_changes_nothing(self):
+        self.use(("Busy", {"busy"}), ("Work", {"not_busy"}))
+        events = [event("Meeting", NOW - 60, NOW + 3600), event("Work block", NOW + 1800, NOW + 7200, free=True)]
+        self.assertEqual(self.change(events), ("Busy", NOW + 3600, "Work"))
+
+    def test_with_no_mode_on_until_is_when_one_turns_on(self):
+        self.use(("Work", {"not_busy"}))
+        events = [event("Work block", NOW + 1200, NOW + 7200, free=True)]
+        self.assertEqual(self.change(events), (None, NOW + 1200, "Work"))
+        self.assertEqual(server.active_mode(events, NOW)["source"], "none")
+        self.assertEqual(self.change([]), (None, None, None))
+
+    def test_a_mode_on_across_events_has_no_change(self):
+        self.use(("Normal", {"free_time", "busy"}))
+        self.assertEqual(self.change([event("Meeting", NOW + 3600, NOW + 5400)]), ("Normal", None, None))
+        self.use(("Normal", {"free_time", "busy", "not_busy"}))
+        self.assertEqual(self.change([event("Meeting", NOW + 3600, NOW + 5400),
+                                      event("Work", NOW + 5400, NOW + 9000, free=True)]), ("Normal", None, None))
+
+    def test_back_to_back_events_turning_on_the_same_mode_count_as_one(self):
+        self.use(("Work", {"not_busy"}))
+        events = [event("A", NOW - 60, NOW + 3600, free=True), event("B", NOW + 3600, NOW + 7200, free=True),
+                  event("C", NOW + 7000, NOW + 9000, free=True)]
+        self.assertEqual(self.change(events), ("Work", NOW + 9000, None))
+
+    def test_free_time_ends_at_the_next_event_only_if_the_mode_changes(self):
+        self.use(("Normal", {"free_time"}))
+        self.assertEqual(self.change([event("Work block", NOW + 3600, NOW + 7200, free=True)]), ("Normal", NOW + 3600, None))
+        self.use(("Normal", {"free_time"}), ("Focus", {"not_busy"}))
+        self.assertEqual(self.change([event("Work block", NOW + 3600, NOW + 7200, free=True)]), ("Normal", NOW + 3600, "Focus"))
+        # At the end of the block, free time again: Normal comes back.
+        self.assertEqual(self.change([event("Work block", NOW + 3600, NOW + 7200, free=True)], NOW + 3600),
+                         ("Focus", NOW + 7200, "Normal"))
+
+    def test_all_day_events_tasks_and_events_without_an_end_are_left_out(self):
+        self.use(("Normal", {"free_time"}), ("Busy", {"busy"}))
+        birthday = dict(event("Birthday", NOW + 600, NOW + 86400), all_day=True)
+        task = dict(event("Task", NOW + 600, NOW + 1200), calendar_kind="task")
+        call = event("Call", NOW + 900, None)
+        self.assertEqual(self.change([birthday, task, call]), ("Normal", None, None))
+        self.assertEqual(self.change([birthday, task, call, event("Meeting", NOW + 1800, NOW + 3600)]),
+                         ("Normal", NOW + 1800, "Busy"))
+
+    def test_changes_are_looked_for_a_week_ahead(self):
+        self.use(("Normal", {"free_time"}), ("Busy", {"busy"}))
+        week = server.MODE_LOOKAHEAD
+        self.assertEqual(self.change([event("Trip", NOW + week, NOW + week + 3600)]), ("Normal", NOW + week, "Busy"))
+        self.assertEqual(self.change([event("Trip", NOW + week + 1, NOW + week + 3600)]), ("Normal", None, None))
+
+    def test_a_chosen_mode_doesnt_change(self):
+        self.use(("Work", {"not_busy"}), ("Play", set()))
+        server.mode_choice["name"] = "Play"
+        self.assertEqual(self.change([event("Work block", NOW + 600, NOW + 3600, free=True)]), ("Play", None, None))
+
+    def test_the_feed_and_settings_report_it(self):
+        with patch.object(server, "calendar_events", return_value=[event("Work block", time.time() + 600, time.time() + 3600, free=True)]):
+            self.use(("Work", {"not_busy"}))
+            mode = server.settings()["mode"]
+        self.assertEqual((mode["name"], mode["next"]), (None, "Work"))
+        self.assertAlmostEqual(mode["until"], time.time() + 600, delta=5)
 
 
 if __name__ == "__main__":

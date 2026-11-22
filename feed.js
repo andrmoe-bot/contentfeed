@@ -589,15 +589,15 @@ function appendNew(list, fresh) {
 }
 
 // The status line: calendars that didn't answer, the mode (or that none is on), with when the calendar
-// situation that turned it on ends (an event, or free time), the stop time, if any, then text, then how
-// many fetches are under way. While the calendar has a mode on, a stop time after the situation ends is
-// left out: the end is what's next.
+// next changes it and to what, the stop time, if any, then text, then how many fetches are under way.
+// While the calendar has a mode on, a stop time after the mode changes is left out: the change is
+// what's next.
 function showStatus(data, text) {
   const unreachable = (data.calendars_unreachable || []).map((c) =>
     `Calendar “${c.title}” isn't answering; using its events from ${c.fetched ? clock(c.fetched) : "before"}`);
   const mode = data.mode?.name ? data.mode : null;
-  const modeNote = mode ? `${mode.name} mode${mode.until ? ` until ${when(mode.until)}` : ""}`
-    : data.mode ? "No mode on" : "";
+  const change = data.mode?.until ? ` until ${when(data.mode.until)}${mode ? `, then ${data.mode.next ?? "no mode"}` : ""}` : "";
+  const modeNote = mode ? `${mode.name} mode${change}` : data.mode ? `No mode on${change}` : "";
   const stopLater = mode?.until && data.stop_at && !data.stopped && data.stop_at > mode.until;
   statusEl.textContent = [...unreachable, modeNote, stopLater ? "" : stopNote(data), text, data.pending ? `fetching ${data.pending}…` : ""]
     .filter(Boolean).join(" · ");
