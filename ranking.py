@@ -78,7 +78,7 @@ DEFAULT_TERMS = {
     "similar_days": 30,  # posts from the same subscription are alike if published within this many days
     "series_penalty": -30,  # added to a later part of a series when you haven't opened anything before it
     "above_similarity_penalty": 0,  # added per 100% similarity to each post above it
-    "event_lead_minutes": 30,  # an upcoming event stops watching this many minutes before it starts
+    "event_lead_minutes": 0,  # a mode turns on, and watching stops, this many minutes before an event it's on for
     "task_deadline_bonus": 200,  # maximum points for a task due now
     "task_bonus": 0,  # fixed points added to every task
     "task_priority_bonus": 0,  # points for a priority-1 task, scaled down to 1/9 of them at priority 9
@@ -97,9 +97,9 @@ DEFAULT_TERMS = {
     "post_limit": 10_000_000,  # most posts the feed shows; the maximum (LIMIT) means no limit, 0 an empty feed
 }
 TERMS = dict(DEFAULT_TERMS)
-# Terms that apply whatever the mode: how many posts to fetch details for, and how long before an event
-# watching stops. The rest belong to each mode (see server.modes).
-GLOBAL_TERMS = frozenset({"enrich_count", "event_lead_minutes"})
+# Terms that apply whatever the mode: how many posts to fetch details for. The rest belong to each mode
+# (see server.modes).
+GLOBAL_TERMS = frozenset({"enrich_count"})
 
 
 def split_terms(terms: dict) -> tuple[dict, dict]:
@@ -180,8 +180,9 @@ def stops_watching(event: dict) -> bool:
 
 def _stops(events: list[dict], now: float, terms: dict) -> list[tuple[float, float, dict]]:
     """(stop, end, event) for each event that stops watching and hasn't ended, earliest stop first.
-    An event stops watching at its start minus the event lead time setting: you need the lead time to
-    get to it. An event without an end ends when it starts."""
+    An event stops watching when it begins: at "begins", where the server puts the start minus the
+    lead time of the mode the event turns on (see server.with_leads), else at its start minus the
+    lead time setting in terms. An event without an end ends when it starts."""
     lead = terms["event_lead_minutes"] * 60
     out = []
     for it in events:
@@ -190,7 +191,7 @@ def _stops(events: list[dict], now: float, terms: dict) -> list[tuple[float, flo
         start = it["calendar_start"]
         end = it.get("deadline") or start
         if end > now:  # ended events don't stop watching anymore
-            out.append((start - lead, end, it))
+            out.append((it.get("begins", start - lead), end, it))
     return sorted(out, key=lambda s: s[0])
 
 

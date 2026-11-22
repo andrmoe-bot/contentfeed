@@ -853,19 +853,50 @@ def when_error(when) -> str | None:
     return None
 
 
+def is_timed(event: dict) -> bool:
+    """Whether a calendar item is an event at a time of day, with a start and an end: the events that
+    turn modes on. All-day events, such as birthdays, and tasks don't."""
+    return (event.get("calendar_kind") == "event" and not event.get("all_day")
+            and event.get("calendar_start") is not None and event.get("deadline") is not None)
+
+
+def begins(event: dict) -> float:
+    """When an event begins: its start, or earlier by a mode's lead time (see with_leads)."""
+    return event.get("begins", event["calendar_start"])
+
+
+def event_lead(event: dict, preview: tuple[str, dict] | None = None) -> float:
+    """An event's lead time, in seconds: that of the first mode in the list on during events of its
+    kind, busy or free (not busy), which the event turns on; 0 if no mode is. With preview, (a mode's
+    name, terms to use for it instead of its own), such as while you move a slider. Call with lock held."""
+    situation = "not_busy" if event.get("free") else "busy"
+    mode = next((m for m in modes if m["when"][situation]), None)
+    if mode is None:
+        return 0
+    terms = preview[1] if preview and preview[0] == mode["name"] else mode["terms"]
+    return terms.get("event_lead_minutes", ranking.DEFAULT_TERMS["event_lead_minutes"]) * 60
+
+
+def with_leads(events: list[dict], preview: tuple[str, dict] | None = None) -> list[dict]:
+    """The events, with each timed one (see is_timed) beginning its lead time early (see event_lead):
+    a copy with "begins", its start minus the lead. The mode it turns on is on from then, it stops
+    watching from then if busy (see ranking._stops), and free time ends then. Call with lock held."""
+    return [dict(e, begins=e["calendar_start"] - event_lead(e, preview)) if is_timed(e) else e for e in events]
+
+
 def calendar_situations(events: list[dict], now: float) -> dict:
     """What takes place now: {situation: (event title or None, until) or None} for each of SITUATIONS.
-    For an event, until is its end (of several, the one ending first); for free time, the start of the
-    next event, or None if there's none. Only events at a time of day with a start and an end count."""
-    timed = [e for e in events if e.get("calendar_kind") == "event" and not e.get("all_day")
-             and e.get("calendar_start") is not None and e.get("deadline") is not None]
-    ongoing = [e for e in timed if e["calendar_start"] <= now < e["deadline"]]
+    An event takes place from when it begins (see begins, with_leads) until its end. For an event, until
+    is its end (of several, the one ending first); for free time, when the next event begins, or None if
+    there's none. Only timed events count (see is_timed)."""
+    timed = [e for e in events if is_timed(e)]
+    ongoing = [e for e in timed if begins(e) <= now < e["deadline"]]
     out = {}
     for situation, free in (("busy", False), ("not_busy", True)):
         matching = [e for e in ongoing if bool(e.get("free")) == free]
         event = min(matching, key=lambda e: e["deadline"]) if matching else None
         out[situation] = (event.get("title"), event["deadline"]) if event else None
-    later = [e["calendar_start"] for e in timed if e["calendar_start"] > now]
+    later = [begins(e) for e in timed if begins(e) > now]
     out["free_time"] = None if ongoing else (None, min(later) if later else None)
     return out
 
@@ -887,11 +918,10 @@ MODE_LOOKAHEAD = 7 * 86400  # how far ahead to look for the next mode change, in
 
 def next_mode_change(events: list[dict], now: float, name: str | None) -> tuple[float | None, str | None]:
     """When the calendar next turns on a mode other than name (None: no mode), and which (None: none),
-    within MODE_LOOKAHEAD; (None, None) if it doesn't. The mode can only change when an event starts
-    or ends, so those are the times to check. Call with lock held."""
-    times = sorted({t for e in events if e.get("calendar_kind") == "event" and not e.get("all_day")
-                    and e.get("calendar_start") is not None and e.get("deadline") is not None
-                    for t in (e["calendar_start"], e["deadline"]) if now < t <= now + MODE_LOOKAHEAD})
+    within MODE_LOOKAHEAD; (None, None) if it doesn't. The mode can only change when an event begins
+    (see begins) or ends, so those are the times to check. Call with lock held."""
+    times = sorted({t for e in events if is_timed(e)
+                    for t in (begins(e), e["deadline"]) if now < t <= now + MODE_LOOKAHEAD})
     for t in times:
         mode = calendar_mode(events, t)[0]
         if (mode and mode["name"]) != name:
@@ -906,10 +936,12 @@ def active_mode(events: list[dict], now: float) -> dict:
     "none"), and the feed is empty. Following the calendar, until is when the mode next changes and
     next the mode then (see next_mode_change); a chosen mode stays until you choose another. Free events
     don't stop watching (see ranking.effective_stop), but busy ones do, so a mode on during them
-    applies while watching is stopped. Call with lock held."""
+    applies while watching is stopped. Events begin their lead time early (see with_leads). Call with
+    lock held."""
     chosen = mode_choice.get("name")
     if chosen and find_mode(chosen):
         return {"name": chosen, "source": "chosen", "situation": None, "event": None, "until": None, "next": None}
+    events = with_leads(events)
     mode, situation, on = calendar_mode(events, now)
     name = mode["name"] if mode else None
     until, following = next_mode_change(events, now, name)
@@ -1375,9 +1407,14 @@ def feed(ranker: str, limit: int = MAX_ITEMS_SHOWN, terms: dict | None = None, *
         # Every subscribed calendar's events stop watching, on every page, not only their own subscription's.
         events = calendar_events(all_subs)
         mode = active_mode(events, now)
-        # With no mode on, the main feed is empty; other pages rank with the default settings.
+        # With no mode on, the main feed is empty; other pages rank with the default settings. Busy
+        # events stop watching when they begin, with the lead time of the mode they turn on, or the
+        # previewed one if that's the mode in effect.
+        preview = (mode["name"], terms) if terms and mode["name"] else None
         terms = terms or terms_for(mode["name"])
-        stopping = stop_state(events, now, terms, lambda event: calendar_name(event, all_subs))
+        leading = with_leads(events, preview)
+        original = {id(copy): event for copy, event in zip(leading, events)}  # calendar_name finds the originals
+        stopping = stop_state(leading, now, terms, lambda event: calendar_name(original.get(id(event), event), all_subs))
     stopping = {**stopping, "mode": mode,
                 "calendars_unreachable": unreachable_calendars(all_subs)}
     ranked = ranking_for(ranker, terms, entries, subs, search, post_url, stopping, now)

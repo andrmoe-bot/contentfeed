@@ -276,7 +276,7 @@ class FeedCacheTests(unittest.TestCase):
         self.assertEqual(server.terms_for("Normal")["task_deadline_bonus"], 60)
         self.assertEqual(server.terms_for("Normal")["task_bonus"], 0)
         self.assertNotIn("event_urgency_bonus", server.terms_for("Normal"))
-        self.assertEqual(server.terms_for("Normal")["event_lead_minutes"], 30)
+        self.assertEqual(server.terms_for("Normal")["event_lead_minutes"], 0)
 
     def test_state_changed_during_ranking_is_not_cached(self):
         original_rank = ranking.rank

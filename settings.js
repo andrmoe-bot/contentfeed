@@ -6,14 +6,14 @@
 // only shape the two similarity penalties, so they're shown whenever either penalty is.
 // Each mode has its own settings. The panel shows and changes the active mode's: the one you picked
 // in its Mode list, or with Auto, the mode the calendar turns on (see server.active_mode). With no
-// mode on, the feed is empty and only the settings for all modes are shown: fetch details and the
-// event lead time, which are the same in every mode (see ranking.GLOBAL_TERMS).
+// mode on, the feed is empty and only the settings for all modes are shown: fetch details, which is the
+// same in every mode (see ranking.GLOBAL_TERMS), and always shown.
 const GROUPS = [
   { id: "feed", title: "Feed", open: true },
   { id: "opened", title: "Opened and next up", open: true },
   { id: "tags", title: "Tags", open: true },
   { id: "kind", title: "Kind, length and age" },
-  { id: "stop", title: "Stop time" },
+  { id: "stop", title: "Lead and stop time" },
   { id: "tasks", title: "Tasks" },
   { id: "similarity", title: "Similarity" },
   { id: "global", title: "All modes", open: true, hint: "The same in every mode, and used when none is on." },
@@ -50,6 +50,8 @@ const SETTINGS = [
   { group: "kind", key: "age_per_year", label: "Age", after: "points per year",
     hint: "Below 0 favors newer posts." },
 
+  { group: "stop", key: "event_lead_minutes", label: "Lead time", after: "minutes",
+    hint: "This mode turns on this long before an event it's on for, so you're ready when it starts; a busy event stops watching then too. Free time doesn't use it." },
   { group: "stop", key: "past_stop_per_minute", label: "Past the stop time", after: "points per minute",
     hint: "For each minute a post would run past the stop time. The post you're viewing is exempt." },
 
@@ -73,8 +75,6 @@ const SETTINGS = [
   { group: "similarity", measure: true, key: "similar_length_weight", label: "Length weight", after: "",
     hint: "Relative to the publish time weight. Unknown lengths are left out." },
 
-  { group: "global", key: "event_lead_minutes", label: "Event lead time", after: "minutes",
-    hint: "Each calendar event is a stop time this long before it starts." },
   { group: "global", key: "enrich_count", label: "Fetch details", after: "posts on load",
     hint: "Fetch missing lengths and dates for this many top posts. Adds no points." },
 ];
@@ -229,6 +229,7 @@ const shownTerms = new Set();
 const contributes = (key, w) => (key === "post_limit" ? w[key] < limits[key].max : w[key] !== 0);
 function hideUnusedTerms(w) {
   for (const { key, measure } of SETTINGS) if (!measure && contributes(key, w)) shownTerms.add(key);
+  for (const key of GLOBAL_KEYS) shownTerms.add(key);  // the settings for all modes, always
   showTerms();
 }
 

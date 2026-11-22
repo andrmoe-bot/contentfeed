@@ -117,8 +117,8 @@ It can also be a blog or news page without a feed (see Pages without a feed), a 
 or a Jellyfin server (see Jellyfin).
 Incomplete tasks appear as cards; events don't — they take place when scheduled, not whenever the
 feed happens to show them, so they only stop watching (see Stop watching):
-every busy event that hasn't ended acts as a stop time at its start minus the Event lead time setting,
-so posts you couldn't finish before you need to leave for it are pushed down. Events marked free
+every busy event that hasn't ended acts as a stop time when it begins, at its start minus the lead
+time of the mode it turns on (see Modes), so posts you couldn't finish before then are pushed down. Events marked free
 (not busy) and all-day events don't stop watching; events can turn a mode on (see Modes). The score panel
 controls task urgency during the final 30 days before a deadline. Tasks also get the
 similar-posts-above penalty against other tasks in the same calendar, and the fixed Task term
@@ -331,10 +331,11 @@ the one playing in another card.
 
 ## Stop watching
 
-Calendar events stop watching. Every busy event that hasn't ended has a stop time at its start
-minus the **Event lead time** setting, which is the same in every mode (30 minutes by default; 0 stops exactly at the event's
-start), and the earliest one counts. So with dinner at 19:00 and the default lead, the stop time is
-18:30. Events marked free (not busy) don't stop watching, though they can turn a mode on (see
+Calendar events stop watching. Every busy event that hasn't ended has a stop time when it begins:
+at its start minus the **Lead time** of the mode it turns on, the highest mode on during busy events
+(see Modes), or at its start if no mode is (0 minutes by default). The earliest stop counts. So with
+dinner at 19:00 and a Meeting mode on during busy events with a lead time of 30 minutes, Meeting mode
+turns on at 18:30 and the stop time is 18:30. Events marked free (not busy) don't stop watching, though they can turn a mode on (see
 Modes). All-day events, such as birthdays and holidays, don't stop watching either, as they would
 stop the feed for the whole day. Events never appear as feed cards, and ended events don't stop
 watching anymore.
@@ -393,14 +394,20 @@ several modes could be on, such as two ticking the same situation, or one for bu
 for free events while both kinds take place, the one highest in the list wins; move modes up and
 down with the ↑ and ↓ buttons.
 
-Two settings are the same in every mode, under **All modes** in the panel: **Event lead time** and
-**Fetch details**. Changing them in one mode changes them for all, and they apply when no mode is on.
-Reset only resets the shown mode's own settings.
+Each mode's **Lead time** (under **Lead and stop time**, 0 by default) turns it on that long before
+an event it's on for starts, so you're ready when it does: a Meeting mode with a lead time of 30
+minutes turns on at 09:30 for a 10:00 meeting, and as meetings are busy, watching stops then too. An
+event's lead time is that of the highest mode on during events of its kind, busy or free, and free
+time ends when it begins. Free time itself doesn't use a lead time.
+
+One setting is the same in every mode, under **All modes** in the panel: **Fetch details**. Changing
+it in one mode changes it for all, and it applies when no mode is on. Reset only resets the shown
+mode's own settings.
 
 When no mode is on, the feed is empty and says so, as does the status line ("No mode on"), and the
 panel shows only the settings for all modes until you pick a mode. A subscription's page and a
-post's page still list posts then, ranked with the default settings, and the stop time uses the
-Event lead time as usual.
+post's page still list posts then, ranked with the default settings, and events stop watching with
+their lead times as usual.
 
 The panel always shows and changes the settings of the mode in effect, and the status line names
 it. Following the calendar, the status line says when the mode next changes and to what ("Work
@@ -411,8 +418,8 @@ work block ends Work then if a mode for busy events is higher in the list. When 
 such as when a work block starts, the feed is shown again from the top. Remove deletes the mode
 shown and its settings. Modes are saved in `settings.json`.
 Settings saved before Normal was a mode become the Normal mode, at the bottom of the list, on in
-free time; settings saved before the settings for all modes take those from the Normal mode, else the
-first mode; modes saved with the earlier title patterns are on during free events, unless the
+free time; settings saved before Fetch details was the same in every mode take it from the Normal
+mode, else the first mode, and each mode keeps the lead time it had; modes saved with the earlier title patterns are on during free events, unless the
 pattern was empty.
 
 ## Ranking

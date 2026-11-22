@@ -133,7 +133,7 @@ class SimilaritySettingsTests(unittest.TestCase):
                 self.assertEqual(defaults['similar_length_weight'], 0)
                 self.assertNotIn('event_bonus', defaults)  # events aren't feed items, so no event terms
                 self.assertEqual(defaults['task_bonus'], 0)
-                self.assertEqual(defaults['event_lead_minutes'], 30)
+                self.assertEqual(defaults['event_lead_minutes'], 0)
                 self.assertEqual(defaults['task_deadline_bonus'], 200)
                 for key in ('similar_penalty', 'above_similarity_penalty', 'enrich_count', 'task_priority_bonus'):
                     self.assertEqual(defaults[key], 0, key)  # off unless you turn them on
