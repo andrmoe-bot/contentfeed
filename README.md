@@ -359,8 +359,7 @@ down with the ↑ and ↓ buttons.
 
 Each mode's **Lead time** (under **Mode changes**, 0 by default) turns it on that long before
 an event it's on for starts, so you're ready when it does: a Meeting mode with a lead time of 30
-minutes turns on at 09:30 for a 10:00 meeting; with a post limit of 0, the feed empties then, which
-also stops a video playing in it. An
+minutes turns on at 09:30 for a 10:00 meeting; with a post limit of 0, the feed empties then. An
 event's lead time is that of the highest mode on during events of its kind, busy or free, and free
 time ends when it begins. Free time itself doesn't use a lead time.
 
@@ -383,7 +382,9 @@ it. Following the calendar, the status line says when the mode next changes and 
 mode until 17:00, then Busy", or "No mode on until 09:00"), looking a week ahead; the page checks again just after then. A change is when the mode in effect becomes another, not just when
 an event starts or ends: back-to-back work blocks count as one, and a meeting starting during a
 work block ends Work then if a mode for busy events is higher in the list. When the mode changes,
-such as when a work block starts, the feed is shown again from the top. Remove deletes the mode
+such as when a work block starts, the feed is shown again from the top, any video or other media
+playing is stopped, and a short alert sounds, on every page; changing the mode yourself in the panel
+does neither. Remove deletes the mode
 shown and its settings. Modes are saved in `settings.json`.
 Settings saved before Normal was a mode become the Normal mode, at the bottom of the list, on in
 free time; each mode keeps the lead time it had; the old global Fetch details setting is ignored; modes saved with the earlier title patterns are on during free events, unless the

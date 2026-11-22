@@ -382,6 +382,7 @@ async function modeRequest(body) {
   }
   panelSay("");
   showMode(data);
+  modeChosen(data.mode.name);
   load({ reorder: true });
 }
 
@@ -414,6 +415,7 @@ for (const box of whenBoxes) {
     }
     panelSay("Saved.");
     showMode(data);
+    modeChosen(data.mode.name);
     load({ reorder: true });
   });
 }

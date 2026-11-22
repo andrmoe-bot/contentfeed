@@ -95,17 +95,44 @@ function colorDots(item) {
   }));
 }
 
+// Rebuilding the playing card replaces its player with the play button, which stops playback.
+function stopPlayback() {
+  if (!playingCard) return;
+  for (const c of cards.values()) if (c.el === playingCard) {
+    const replacement = card(c.item);
+    showViewState(replacement, latest(c.item));
+    c.el.replaceWith(replacement);
+    c.el = replacement;
+  }
+  playingCard = null;
+}
+
 function activatePlayer(item, button) {
   const article = button.closest("article");
-  if (playingCard && playingCard !== article) {
-    for (const c of cards.values()) if (c.el === playingCard) {
-      const replacement = card(c.item);
-      showViewState(replacement, latest(c.item));
-      c.el.replaceWith(replacement);
-      c.el = replacement;
-    }
-  }
+  if (playingCard !== article) stopPlayback();
   playingCard = article;
+}
+
+// When the calendar changes the mode, playback stops and three short beeps sound, on every page,
+// such as when a meeting's lead time begins. Changes you make in the panel don't (see modeChosen).
+function alertSound() {
+  try {
+    const ctx = alertSound.ctx || (alertSound.ctx = new (window.AudioContext || window.webkitAudioContext)());
+    if (ctx.state === "suspended") ctx.resume().catch(() => {});
+    const t0 = ctx.currentTime;
+    for (let i = 0; i < 3; i++) {
+      const osc = ctx.createOscillator(), gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.value = 880;
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      const t = t0 + i * 0.3;
+      gain.gain.setValueAtTime(0.25, t);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.25);
+      osc.start(t);
+      osc.stop(t + 0.28);
+    }
+  } catch {}
 }
 
 // YouTube: show the thumbnail and only load the player when clicked, so a feed full of videos stays fast.
@@ -512,7 +539,12 @@ let enrichOnLoad = true;
 let shownTag = null;  // the ETag of the feed as shown: the server answers "not modified" if it's still the same
 let checkTag = null;  // the ETag of the last answer, for checks
 let firstLoad = true;
-let shownMode = null;  // the mode the feed shown was ranked for
+let shownMode;  // the mode the feed shown was ranked for (null: none); undefined until the first feed
+
+// A mode change you made in the panel, which the next feed shows without stopping playback or the alert.
+function modeChosen(name) {
+  shownMode = name ?? null;
+}
 
 async function fetchFeed({ reorder = false, more = false } = {}) {
   clearTimeout(pollTimer);
@@ -547,7 +579,11 @@ async function fetchFeed({ reorder = false, more = false } = {}) {
     lastData = data;
     syncMode(data.mode);
     // A mode turning on or off changes the settings, so the feed is shown again from the top.
-    const modeChanged = !!data.mode && shownMode !== null && data.mode.name !== shownMode;
+    const modeChanged = !!data.mode && shownMode !== undefined && data.mode.name !== shownMode;
+    if (modeChanged) {
+      stopPlayback();
+      alertSound();
+    }
     if (show || modeChanged) {
       shownMode = data.mode?.name ?? null;
       shownTag = checkTag;
