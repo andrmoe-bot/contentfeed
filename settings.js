@@ -79,8 +79,8 @@ let limits = {};  // each term's {min, max, integer}, from the server
 let saved = {};  // as saved on the server
 let draft = {};  // as shown in the panel
 let defaults = {};
-let modeList = [];  // [{name, terms}], the modes besides Normal
-let mode = { name: "Normal", source: "default", event: null };  // the active mode, whose settings the panel shows
+let modeList = [];  // [{name, when, terms}], the modes besides Normal, highest priority first
+let mode = { name: "Normal", source: "default", situation: null, event: null };  // the active mode, whose settings the panel shows
 const termsOf = (name, data) => (name === "Normal" ? data.terms : data.modes.find((m) => m.name === name)?.terms || data.terms);
 
 // Slider positions: 0, then 1, 1.5, 2, 3, 5, 7 times each power of ten from 10^lo up to 10^hi,
@@ -322,21 +322,50 @@ function showMode(data) {
   showModeBar();
 }
 
-const modeSelect = document.getElementById("mode");
+// The Mode list: Auto, Normal and the modes, highest priority first, each with a radio button to pick
+// it and the modes with buttons to move them up or down. Under Auto, the mode the calendar has on is
+// marked "on now".
+const modeListEl = document.getElementById("mode-list");
 function showModeBar() {
-  modeSelect.replaceChildren(
-    el("option", { value: "" }, mode.source === "chosen" ? "Auto: follow the calendar" : `Auto: ${mode.name}`),
-    ...["Normal", ...modeList.map((m) => m.name)].map((name) => el("option", { value: name }, name)),
-    el("option", { value: "+new" }, "New mode…"));
-  modeSelect.value = mode.source === "chosen" ? mode.name : "";
+  const picked = mode.source === "chosen" ? mode.name : "";
+  const row = (value, label, extra = []) => {
+    const radio = el("input", { type: "radio", name: "mode", value });
+    radio.checked = value === picked;
+    radio.addEventListener("change", () => modeRequest({ choose: value || null }));
+    const now = !picked && value === mode.name ? [el("span", { class: "now" }, "on now")] : [];
+    return el("div", { class: `mode-row${radio.checked ? " checked" : ""}` },
+      el("label", {}, radio, el("span", { class: "name" }, label), ...now), ...extra);
+  };
+  const move = (name, i, by) => {
+    const up = by < 0;
+    const button = el("button", { type: "button", class: "move", "data-move": name, "data-dir": up ? "up" : "down",
+                                  "aria-label": `Move ${name} ${up ? "up" : "down"}`, title: up ? "Higher priority" : "Lower priority" },
+                      up ? "↑" : "↓");
+    button.disabled = up ? i === 0 : i === modeList.length - 1;
+    button.addEventListener("click", () => moveMode(name, i + by, up ? "up" : "down"));
+    return button;
+  };
+  modeListEl.replaceChildren(
+    row("", "Auto: follow the calendar"),
+    row("Normal", "Normal"),
+    ...modeList.map((m, i) => row(m.name, m.name, [move(m.name, i, -1), move(m.name, i, 1)])));
+  document.getElementById("mode-order-hint").hidden = modeList.length < 2;
   document.getElementById("mode-remove").hidden = mode.name === "Normal";
-  document.getElementById("mode-pattern-row").hidden = mode.name === "Normal";
-  if (document.activeElement !== patternBox) patternBox.value = modeList.find((m) => m.name === mode.name)?.pattern ?? "";
+  document.getElementById("mode-remove").textContent = `Remove ${mode.name}`;
+  whenBox.hidden = mode.name === "Normal";
+  const toggles = modeList.find((m) => m.name === mode.name)?.when || {};
+  for (const box of whenBoxes) box.checked = !!toggles[box.dataset.situation];
   document.getElementById("mode-hint").textContent =
-    mode.source === "calendar" ? `These are ${mode.name}'s settings, on during “${mode.event}” until ${when(mode.until)}.`
+    mode.source === "calendar" ? `These are ${mode.name}'s settings, on ${situationText(mode)}.`
     : mode.source === "chosen" ? `These are ${mode.name}'s settings, until you pick Auto.`
-    : modeList.length ? "These are the normal settings. A mode is on during a free (not busy) calendar event that matches its pattern."
+    : modeList.length ? "These are the normal settings. A mode is on during the calendar situations ticked for it."
     : "Add a mode to use other settings, such as during free (not busy) calendar events for work.";
+}
+
+// Why the calendar turned a mode on, and until when, for the hint.
+function situationText({ situation, event, until }) {
+  const what = situation === "free_time" ? "in free time" : `during “${event || "an event"}”`;
+  return until ? `${what} until ${when(until)}` : what;
 }
 
 // Mode changes save what you were changing first, then show the new mode's settings and feed.
@@ -352,30 +381,37 @@ async function modeRequest(body) {
   load({ reorder: true });
 }
 
-modeSelect.addEventListener("change", () => {
-  const value = modeSelect.value;
-  if (value !== "+new") return modeRequest({ choose: value || null });
-  const name = prompt(`Name of the new mode. It starts with ${mode.name}'s settings. Free calendar events with the name in their title turn it on; you can change which below.`);
-  if (name === null || !name.trim()) return showModeBar();
-  modeRequest({ add: name.trim(), copy_from: mode.name });
+document.getElementById("mode-add").addEventListener("click", () => {
+  const name = prompt(`Name of the new mode. It starts with ${mode.name}'s settings. With Auto, you choose below when the calendar turns it on.`);
+  if (name !== null && name.trim()) modeRequest({ add: name.trim(), copy_from: mode.name });
 });
 
-// The pattern is saved when you press Enter or leave the box. It may turn the mode on or off, so the
-// feed is shown again. An invalid one stays in the box with the server's error, to fix.
-const patternBox = document.getElementById("mode-pattern");
-patternBox.addEventListener("change", async () => {
-  const shown = modeList.find((m) => m.name === mode.name);
-  if (!shown || patternBox.value === shown.pattern) return;
-  await saving;
-  const { ok, data } = await api("/api/modes", { pattern: patternBox.value, mode: mode.name });
-  if (!ok) return panelSay(data.error || "Couldn't save the pattern.", true);
-  panelSay("Saved the pattern.");
-  const focused = document.activeElement === patternBox;
-  if (focused) patternBox.blur();  // so showMode shows the pattern as saved
-  showMode(data);
-  if (focused) patternBox.focus();
-  load({ reorder: true });
-});
+// Moving a mode changes which wins when several could be on, so the feed may change too. The focus
+// stays on the button you pressed, or the other one when that's gone (at the top or bottom).
+async function moveMode(name, to, dir) {
+  await modeRequest({ move: name, to });
+  const other = dir === "up" ? "down" : "up";
+  const find = (d) => [...modeListEl.querySelectorAll("button.move")].find((b) => b.dataset.move === name && b.dataset.dir === d && !b.disabled);
+  (find(dir) || find(other))?.focus();
+}
+
+// Each toggle is saved when you tick or untick it. It may turn the mode on or off, so the feed is
+// shown again.
+const whenBox = document.getElementById("mode-when");
+const whenBoxes = [...whenBox.querySelectorAll("input[data-situation]")];
+for (const box of whenBoxes) {
+  box.addEventListener("change", async () => {
+    await saving;
+    const { ok, data } = await api("/api/modes", { when: { [box.dataset.situation]: box.checked }, mode: mode.name });
+    if (!ok) {
+      box.checked = !box.checked;
+      return panelSay(data.error || "Couldn't save that.", true);
+    }
+    panelSay("Saved.");
+    showMode(data);
+    load({ reorder: true });
+  });
+}
 
 document.getElementById("mode-remove").addEventListener("click", () => {
   if (confirm(`Remove the ${mode.name} mode and its settings?`)) modeRequest({ remove: mode.name });
@@ -386,7 +422,8 @@ document.getElementById("mode-remove").addEventListener("click", () => {
 let modeCheck = null;
 function syncMode(fresh) {
   if (!fresh || modeCheck || !Object.keys(limits).length) return;
-  if (fresh.name === mode.name && fresh.source === mode.source && fresh.event === mode.event) return;
+  if (fresh.name === mode.name && fresh.source === mode.source && fresh.situation === mode.situation
+      && fresh.event === mode.event && fresh.until === mode.until) return;
   modeCheck = api("/api/settings").then(({ ok, data }) => { if (ok) showMode(data); })
     .finally(() => { modeCheck = null; });
 }

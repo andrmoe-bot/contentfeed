@@ -124,7 +124,7 @@ added: dict[str, float] = {}  # url -> unix time the server first saw the link
 viewed: dict[str, float] = {}  # url -> unix time you last opened it
 colors: dict[str, str] = {}  # url -> the tag you gave it (see ranking.TAGS); most items have none
 # Modes, each with its own settings, saved in settings.json with the normal settings (ranking.TERMS):
-modes: list[dict] = []  # [{"name": str, "pattern": regex, "terms": dict}], in the order they were added
+modes: list[dict] = []  # [{"name": str, "when": {situation: bool}, "terms": dict}], highest priority first
 mode_choice: dict = {}  # {"name": mode}: the mode you chose in the panel; empty to follow the calendar
 subscriptions: dict[str, dict] = {}  # feeds.txt url -> resolved feed, its posts and fetch status
 pending: set[str] = set()
@@ -815,50 +815,63 @@ def mode_terms(name: str) -> dict:
     return mode["terms"] if mode else ranking.TERMS
 
 
-PATTERN_MAX = 500
+# The calendar situations a mode can be on in (its toggles, all off for a new mode): during a busy
+# event, during a free (not busy) event, and in free time, when no event takes place. All-day events,
+# such as birthdays, don't count, as for stopping watching (see ranking.stops_watching).
+SITUATIONS = ("busy", "not_busy", "free_time")
 
 
 def mode_data(mode: dict) -> dict:
     """A mode as saved and sent to the panel."""
-    return {"name": mode["name"], "pattern": mode["pattern"], "terms": dict(mode["terms"])}
+    return {"name": mode["name"], "when": dict(mode["when"]), "terms": dict(mode["terms"])}
 
 
-def pattern_error(pattern) -> str | None:
-    """Why this can't be a mode's calendar pattern, or None if it can."""
-    if not isinstance(pattern, str):
-        return "the pattern must be text"
-    if len(pattern) > PATTERN_MAX:
-        return f"the pattern can be at most {PATTERN_MAX} characters"
-    try:
-        re.compile(pattern)
-    except re.error as e:
-        return f"the pattern isn't a valid regular expression: {e}"
+def when_error(when) -> str | None:
+    """Why this can't change a mode's toggles ({situation: bool}, some or all), or None if it can."""
+    if not isinstance(when, dict) or not when:
+        return "expected the situations to turn on or off"
+    unknown = [k for k in when if k not in SITUATIONS]
+    if unknown:
+        return f"there's no situation called {unknown[0]}"
+    if not all(isinstance(v, bool) for v in when.values()):
+        return "each situation must be on (true) or off (false)"
     return None
 
 
-def matches_pattern(title: str, pattern: str) -> bool:
-    """Whether an event title matches a mode's pattern: a regular expression found anywhere in the
-    title, ignoring case. An empty pattern matches nothing, so the calendar never turns the mode on."""
-    return bool(pattern) and re.search(pattern, title, re.IGNORECASE) is not None
+def calendar_situations(events: list[dict], now: float) -> dict:
+    """What takes place now: {situation: (event title or None, until) or None} for each of SITUATIONS.
+    For an event, until is its end (of several, the one ending first); for free time, the start of the
+    next event, or None if there's none. Only events at a time of day with a start and an end count."""
+    timed = [e for e in events if e.get("calendar_kind") == "event" and not e.get("all_day")
+             and e.get("calendar_start") is not None and e.get("deadline") is not None]
+    ongoing = [e for e in timed if e["calendar_start"] <= now < e["deadline"]]
+    out = {}
+    for situation, free in (("busy", False), ("not_busy", True)):
+        matching = [e for e in ongoing if bool(e.get("free")) == free]
+        event = min(matching, key=lambda e: e["deadline"]) if matching else None
+        out[situation] = (event.get("title"), event["deadline"]) if event else None
+    later = [e["calendar_start"] for e in timed if e["calendar_start"] > now]
+    out["free_time"] = None if ongoing else (None, min(later) if later else None)
+    return out
 
 
 def active_mode(events: list[dict], now: float) -> dict:
-    """The mode in effect: {"name", "source", "event", "until"}. The mode you chose in the panel, if
-    any ("source": "chosen"); else the first mode whose pattern matches the title of a free (not busy)
-    calendar event taking place now ("calendar", with the event's title and its end as until); else
-    Normal ("default"). Free events
-    don't stop watching (see ranking.effective_stop); they turn modes on instead. Call with lock held."""
+    """The mode in effect: {"name", "source", "situation", "event", "until"}. The mode you chose in the
+    panel, if any ("source": "chosen"); else the first mode in the list (the highest priority) turned on
+    for a situation taking place now
+    (see calendar_situations; "calendar", with the situation, the event's title, if any, and when it
+    ends); else Normal ("default"). Free events don't stop watching (see ranking.effective_stop), but
+    busy ones do, so a mode on during them applies while watching is stopped. Call with lock held."""
     chosen = mode_choice.get("name")
     if chosen == NORMAL or (chosen and find_mode(chosen)):
-        return {"name": chosen, "source": "chosen", "event": None, "until": None}
-    ongoing = [e for e in events if e.get("calendar_kind") == "event" and e.get("free")
-               and e.get("calendar_start") is not None and e.get("deadline") is not None
-               and e["calendar_start"] <= now < e["deadline"]]
+        return {"name": chosen, "source": "chosen", "situation": None, "event": None, "until": None}
+    now_on = calendar_situations(events, now)
     for mode in modes:
-        event = next((e for e in ongoing if matches_pattern(e.get("title") or "", mode["pattern"])), None)
-        if event:
-            return {"name": mode["name"], "source": "calendar", "event": event.get("title"), "until": event["deadline"]}
-    return {"name": NORMAL, "source": "default", "event": None, "until": None}
+        situation = next((s for s in SITUATIONS if mode["when"][s] and now_on[s]), None)
+        if situation:
+            event, until = now_on[situation]
+            return {"name": mode["name"], "source": "calendar", "situation": situation, "event": event, "until": until}
+    return {"name": NORMAL, "source": "default", "situation": None, "event": None, "until": None}
 
 
 def write_settings():
@@ -901,29 +914,45 @@ def mode_name_error(name) -> str | None:
 
 def add_mode(name, copy_from: str = NORMAL) -> str | None:
     """Add a mode whose settings start as a copy of another mode's, and switch to it, so the panel
-    shows its settings to change. Its calendar pattern starts as its name, as a whole word. Returns an
-    error message, or None."""
+    shows its settings to change. The calendar doesn't turn it on until you turn on a situation (see
+    set_mode_when). Returns an error message, or None."""
     with lock:
         error = mode_name_error(name)
         if error:
             return error
         name = name.strip()
-        modes.append({"name": name, "pattern": rf"\b{re.escape(name)}\b", "terms": dict(mode_terms(copy_from))})
+        modes.append({"name": name, "when": dict.fromkeys(SITUATIONS, False), "terms": dict(mode_terms(copy_from))})
         mode_choice["name"] = name
     write_settings()
     return None
 
 
-def set_mode_pattern(name, pattern) -> str | None:
-    """Set the regular expression for the calendar events that turn a mode on. Returns an error, or None."""
-    error = pattern_error(pattern)
+def set_mode_when(name, when) -> str | None:
+    """Turn the calendar situations in which a mode is on on or off ({situation: bool}, see SITUATIONS).
+    Returns an error, or None."""
+    error = when_error(when)
     if error:
         return error
     with lock:
         mode = find_mode(name) if isinstance(name, str) else None
         if mode is None:
             return f"there's no mode called {name}"
-        mode["pattern"] = pattern
+        mode["when"].update(when)
+    write_settings()
+    return None
+
+
+def move_mode(name, to) -> str | None:
+    """Move a mode to position to in the list (0 is the top). When several modes could be on, the
+    highest wins (see active_mode). Returns an error, or None."""
+    with lock:
+        mode = find_mode(name) if isinstance(name, str) else None
+        if mode is None:
+            return f"there's no mode called {name}"
+        if not isinstance(to, int) or isinstance(to, bool) or not 0 <= to < len(modes):
+            return f"the position must be a whole number from 0 to {len(modes) - 1}"
+        modes.remove(mode)
+        modes.insert(to, mode)
     write_settings()
     return None
 
@@ -990,6 +1019,16 @@ def complete_terms(terms: dict) -> dict:
     return ranking.check_terms({**ranking.DEFAULT_TERMS, **terms})
 
 
+def saved_when(mode: dict) -> dict:
+    """A saved mode's toggles (see SITUATIONS). Modes saved with a title pattern instead, which matched
+    free events, are on during free events, unless the pattern was empty (never on)."""
+    when = mode.get("when")
+    if isinstance(when, dict):
+        return {s: when.get(s) is True for s in SITUATIONS}
+    pattern = mode.get("pattern", True)  # modes saved before patterns matched their name
+    return dict(dict.fromkeys(SITUATIONS, False), not_busy=bool(pattern))
+
+
 def load_settings():
     data = load_json(SETTINGS_FILE)
     terms = migrate_terms(data)
@@ -1005,12 +1044,8 @@ def load_settings():
             if not isinstance(mode, dict) or mode_name_error(mode.get("name")):
                 continue
             mode_terms_saved = migrate_terms({"version": data.get("version", 0), "terms": mode.get("terms")})
-            pattern = mode.get("pattern", rf"\b{re.escape(mode['name'].strip())}\b")
-            if pattern_error(pattern):
-                print(f"Ignoring mode {mode['name']}'s calendar pattern in {SETTINGS_FILE}: {pattern_error(pattern)}")
-                pattern = ""
             try:
-                modes.append({"name": mode["name"].strip(), "pattern": pattern,
+                modes.append({"name": mode["name"].strip(), "when": saved_when(mode),
                               "terms": complete_terms(mode_terms_saved or {})})
             except ValueError as e:
                 print(f"Ignoring mode {mode['name']} in {SETTINGS_FILE}: {e}")
@@ -1755,17 +1790,20 @@ def settings_api(body):
 
 def modes_api(body):
     """{"add": name, "copy_from": mode}, {"remove": name}, {"choose": name, or null to follow the
-    calendar} or {"pattern": regex, "mode": name}."""
+    calendar}, {"when": {situation: bool}, "mode": name} (see set_mode_when) or {"move": name, "to":
+    position} (see move_mode)."""
     if "add" in body:
         error = add_mode(body["add"], str(body.get("copy_from") or NORMAL))
     elif "remove" in body:
         error = remove_mode(body["remove"])
     elif "choose" in body:
         error = choose_mode(body["choose"])
-    elif "pattern" in body:
-        error = set_mode_pattern(body.get("mode"), body["pattern"])
+    elif "when" in body:
+        error = set_mode_when(body.get("mode"), body["when"])
+    elif "move" in body:
+        error = move_mode(body["move"], body.get("to"))
     else:
-        error = "expected add, remove, choose or pattern"
+        error = "expected add, remove, choose, when or move"
     return {"ok": not error, "error": error, **settings()}, 400 if error else 200
 
 

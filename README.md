@@ -119,7 +119,7 @@ Incomplete tasks appear as cards; events don't — they take place when schedule
 feed happens to show them, so they only stop watching (see Stop watching):
 every busy event that hasn't ended acts as a stop time at its start minus the Event lead time setting,
 so posts you couldn't finish before you need to leave for it are pushed down. Events marked free
-(not busy) and all-day events don't stop watching; free ones can turn a mode on instead (see Modes). The score panel
+(not busy) and all-day events don't stop watching; events can turn a mode on (see Modes). The score panel
 controls task urgency during the final 30 days before a deadline. Tasks also get the
 similar-posts-above penalty against other tasks in the same calendar, and the fixed Task term
 adds points to every task (default 0). The Task priority term gives a task points by its
@@ -334,7 +334,7 @@ the one playing in another card.
 Calendar events stop watching. Every busy event that hasn't ended has a stop time at its start
 minus the **Event lead time** setting (30 minutes by default; 0 stops exactly at the event's
 start), and the earliest one counts. So with dinner at 19:00 and the default lead, the stop time is
-18:30. Events marked free (not busy) don't stop watching; they can turn a mode on instead (see
+18:30. Events marked free (not busy) don't stop watching, though they can turn a mode on (see
 Modes). All-day events, such as birthdays and holidays, don't stop watching either, as they would
 stop the feed for the whole day. Events never appear as feed cards, and ended events don't stop
 watching anymore.
@@ -378,22 +378,27 @@ next up. Items start untagged; click the dot of an item's tag again to remove th
 ## Modes
 
 A mode is a separate set of settings, such as Work with a post limit of 0 for an empty page, or
-points for tasks. Add one with "New mode…" in the Mode list at the top of the settings panel; it
-starts as a copy of the settings shown, and you change it like any other. Normal is the settings in
-effect when no mode is on.
+points for tasks. The Mode list at the top of the settings panel shows Auto, Normal and your modes;
+**New mode…** adds one, starting as a copy of the settings shown, and you change it like any other.
+Normal is the settings in effect when no mode is on. Picking a mode or Normal in the list uses it
+until you pick Auto again.
 
-With Mode set to Auto (the default), a mode is on while a calendar event marked free (not busy)
-takes place whose title matches the mode's **Calendar events matching** pattern: a regular
-expression (Python syntax) searched for anywhere in the title, ignoring case. A new mode's pattern
-is its name as a whole word, such as `\bWork\b`, which matches "Work block" and "Deep work" but not
-"Homework"; `^(work|focus)\b` would match titles starting with either word. An empty pattern means
-the calendar never turns the mode on. Of several matching modes, the one added first wins. Picking a mode
-or Normal in the list uses it until you pick Auto again. The panel always shows and changes the
-settings of the mode in effect, and the status line names it, unless it's Normal. While an event has
-a mode on, the status line says when the event ends ("Work mode until 17:00") and leaves out a stop
-time that comes after that. When the mode changes,
-such as when a work block starts, the feed is shown again from the top. Remove deletes the mode
-shown and its settings. Modes are saved in `settings.json` with the normal settings.
+With Auto (the default), the calendar turns modes on, and the list marks the one that's on now.
+Each mode has three toggles under **With Auto, on during**: **Busy events**, **Free (not busy)
+events** and **Free time, with no event** (no event of either kind taking place). A mode is on
+while any of its ticked situations lasts; all-day events, such as birthdays, don't count, so free
+time goes on during them. A new mode has none ticked, so it's only on when you pick it. When
+several modes could be on, such as two ticking the same situation, or one for busy events and one
+for free events while both kinds take place, the one highest in the list wins; move modes up and
+down with the ↑ and ↓ buttons.
+
+The panel always shows and changes the settings of the mode in effect, and the status line names
+it, unless it's Normal. While the calendar has a mode on, the status line says when that ends
+("Work mode until 17:00": the event's end, or for free time, the next event's start) and leaves out
+a stop time that comes after that. When the mode changes, such as when a work block starts, the
+feed is shown again from the top. Remove deletes the mode shown and its settings. Modes are saved
+in `settings.json` with the normal settings; modes saved with the earlier title patterns are on
+during free events, unless the pattern was empty.
 
 ## Ranking
 

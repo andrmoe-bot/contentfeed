@@ -588,9 +588,10 @@ function appendNew(list, fresh) {
   return [...list, ...fresh.filter((it) => !urls.has(it.url))];
 }
 
-// The status line: calendars that didn't answer, the mode, unless it's Normal, with when the event that
-// turned it on ends, the stop time, if any, then text, then how many fetches are under way. While an
-// event has a mode on, a stop time after the event ends is left out: the end is what's next.
+// The status line: calendars that didn't answer, the mode, unless it's Normal, with when the calendar
+// situation that turned it on ends (an event, or free time), the stop time, if any, then text, then how
+// many fetches are under way. While the calendar has a mode on, a stop time after the situation ends is
+// left out: the end is what's next.
 function showStatus(data, text) {
   const unreachable = (data.calendars_unreachable || []).map((c) =>
     `Calendar “${c.title}” isn't answering; using its events from ${c.fetched ? clock(c.fetched) : "before"}`);

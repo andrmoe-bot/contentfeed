@@ -163,7 +163,7 @@ def valid_minutes(value) -> bool:
 
 def stops_watching(event: dict) -> bool:
     """Whether a calendar item is an event that stops watching: busy, at a time of day. Events marked
-    free, such as time set off for work, turn modes on instead (see server.active_mode), and all-day
+    free, such as time set off for work, can turn modes on instead (see server.active_mode), and all-day
     events, such as birthdays, would stop the feed for the whole day."""
     return (event.get("calendar_kind") == "event" and not event.get("free") and not event.get("all_day")
             and event.get("calendar_start") is not None)
