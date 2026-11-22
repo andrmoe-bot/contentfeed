@@ -361,14 +361,14 @@ function showModeBar() {
   document.getElementById("mode-hint").textContent =
     mode.source === "calendar" ? `These are ${mode.name}'s settings, on ${situationText(mode)}.`
     : mode.source === "chosen" ? `These are ${mode.name}'s settings, until you pick Auto.`
-    : modeList.length ? "No mode is on, so the feed is empty. Pick a mode to use it, or to choose when the calendar turns it on."
+    : modeList.length ? `No mode is on, so the feed is empty${mode.until ? ` until ${mode.next} turns on at ${when(mode.until)}` : ""}. Pick a mode to use it, or to choose when the calendar turns it on.`
     : "There are no modes, so the feed is empty. Add one with New mode….";
 }
 
-// Why the calendar turned a mode on, and until when, for the hint.
-function situationText({ situation, event, until }) {
+// Why the calendar turned a mode on, and until when it changes to which, for the hint.
+function situationText({ situation, event, until, next }) {
   const what = situation === "free_time" ? "during free time" : `during “${event || "an event"}”`;
-  return until ? `${what} until ${when(until)}` : what;
+  return until ? `${what} until ${when(until)}, then ${next ?? "no mode"}` : what;
 }
 
 // Mode changes save what you were changing first, then show the new mode's settings and feed.
@@ -427,7 +427,7 @@ let modeCheck = null;
 function syncMode(fresh) {
   if (!fresh || modeCheck || !Object.keys(limits).length) return;
   if (fresh.name === mode.name && fresh.source === mode.source && fresh.situation === mode.situation
-      && fresh.event === mode.event && fresh.until === mode.until) return;
+      && fresh.event === mode.event && fresh.until === mode.until && fresh.next === mode.next) return;
   modeCheck = api("/api/settings").then(({ ok, data }) => { if (ok) showMode(data); })
     .finally(() => { modeCheck = null; });
 }

@@ -361,7 +361,7 @@ screen then shows the meeting and, as up next, lunch, and the status line says "
 for “Meeting”, then “Lunch”". The feed itself is still served, so once the event is over the page switches
 straight back to the feed with nothing rebuilt. While a stop time is in effect the page polls every
 10 seconds, and the page checks again just after each change it knows is coming (the stop time,
-the feed returning, a mode's event ending), so these show within a second or so.
+the feed returning, the mode changing), so these show within a second or so.
 
 ## Tags
 
@@ -399,9 +399,11 @@ list posts then, ranked with the default settings, and the stop time uses the de
 time.
 
 The panel always shows and changes the settings of the mode in effect, and the status line names
-it. While the calendar has a mode on, the status line says when that ends ("Work mode until 17:00":
-the event's end, or for free time, the next event's start) and leaves out a stop time that comes
-after that. When the mode changes, such as when a work block starts, the feed is shown again from
+it. Following the calendar, the status line says when the mode next changes and to what ("Work
+mode until 17:00, then Busy", or "No mode on until 09:00"), looking a week ahead, and leaves out a
+stop time that comes after that. A change is when the mode in effect becomes another, not just when
+an event starts or ends: back-to-back work blocks count as one, and a meeting starting during a
+work block ends Work then if a mode for busy events is higher in the list. When the mode changes, such as when a work block starts, the feed is shown again from
 the top. Remove deletes the mode shown and its settings. Modes are saved in `settings.json`.
 Settings saved before Normal was a mode become the Normal mode, at the bottom of the list, on in
 free time; modes saved with the earlier title patterns are on during free events, unless the

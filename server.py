@@ -860,23 +860,51 @@ def calendar_situations(events: list[dict], now: float) -> dict:
     return out
 
 
-def active_mode(events: list[dict], now: float) -> dict:
-    """The mode in effect: {"name", "source", "situation", "event", "until"}. The mode you chose in the
-    panel, if any ("source": "chosen"); else the first mode in the list (the highest priority) turned on
-    for a situation taking place now (see calendar_situations; "calendar", with the situation, the
-    event's title, if any, and when it ends); else none ("name": None, "source": "none"), and the feed
-    is empty. Free events don't stop watching (see ranking.effective_stop), but busy ones do, so a mode
-    on during them applies while watching is stopped. Call with lock held."""
-    chosen = mode_choice.get("name")
-    if chosen and find_mode(chosen):
-        return {"name": chosen, "source": "chosen", "situation": None, "event": None, "until": None}
+def calendar_mode(events: list[dict], now: float) -> tuple[dict | None, str | None, tuple | None]:
+    """The mode the calendar turns on at now, ignoring the mode you chose: (the first mode in the list,
+    the highest priority, turned on for a situation taking place then, the situation, and (the event's
+    title or None, when the situation ends)), or (None, None, None). Call with lock held."""
     now_on = calendar_situations(events, now)
     for mode in modes:
         situation = next((s for s in SITUATIONS if mode["when"][s] and now_on[s]), None)
         if situation:
-            event, until = now_on[situation]
-            return {"name": mode["name"], "source": "calendar", "situation": situation, "event": event, "until": until}
-    return {"name": None, "source": "none", "situation": None, "event": None, "until": None}
+            return mode, situation, now_on[situation]
+    return None, None, None
+
+
+MODE_LOOKAHEAD = 7 * 86400  # how far ahead to look for the next mode change, in seconds
+
+
+def next_mode_change(events: list[dict], now: float, name: str | None) -> tuple[float | None, str | None]:
+    """When the calendar next turns on a mode other than name (None: no mode), and which (None: none),
+    within MODE_LOOKAHEAD; (None, None) if it doesn't. The mode can only change when an event starts
+    or ends, so those are the times to check. Call with lock held."""
+    times = sorted({t for e in events if e.get("calendar_kind") == "event" and not e.get("all_day")
+                    and e.get("calendar_start") is not None and e.get("deadline") is not None
+                    for t in (e["calendar_start"], e["deadline"]) if now < t <= now + MODE_LOOKAHEAD})
+    for t in times:
+        mode = calendar_mode(events, t)[0]
+        if (mode and mode["name"]) != name:
+            return t, mode and mode["name"]
+    return None, None
+
+
+def active_mode(events: list[dict], now: float) -> dict:
+    """The mode in effect: {"name", "source", "situation", "event", "until", "next"}. The mode you chose
+    in the panel, if any ("source": "chosen"); else the mode the calendar turns on (see calendar_mode;
+    "calendar", with the situation and the event's title, if any); else none ("name": None, "source":
+    "none"), and the feed is empty. Following the calendar, until is when the mode next changes and
+    next the mode then (see next_mode_change); a chosen mode stays until you choose another. Free events
+    don't stop watching (see ranking.effective_stop), but busy ones do, so a mode on during them
+    applies while watching is stopped. Call with lock held."""
+    chosen = mode_choice.get("name")
+    if chosen and find_mode(chosen):
+        return {"name": chosen, "source": "chosen", "situation": None, "event": None, "until": None, "next": None}
+    mode, situation, on = calendar_mode(events, now)
+    name = mode["name"] if mode else None
+    until, following = next_mode_change(events, now, name)
+    return {"name": name, "source": "calendar" if mode else "none", "situation": situation,
+            "event": on[0] if on else None, "until": until, "next": following}
 
 
 def write_settings():
