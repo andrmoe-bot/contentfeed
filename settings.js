@@ -364,7 +364,7 @@ function showModeBar() {
 
 // Why the calendar turned a mode on, and until when, for the hint.
 function situationText({ situation, event, until }) {
-  const what = situation === "free_time" ? "in free time" : `during “${event || "an event"}”`;
+  const what = situation === "free_time" ? "during free time" : `during “${event || "an event"}”`;
   return until ? `${what} until ${when(until)}` : what;
 }
 
