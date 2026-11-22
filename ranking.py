@@ -97,6 +97,15 @@ DEFAULT_TERMS = {
     "post_limit": 10_000_000,  # most posts the feed shows; the maximum (LIMIT) means no limit, 0 an empty feed
 }
 TERMS = dict(DEFAULT_TERMS)
+# Terms that apply whatever the mode: how many posts to fetch details for, and how long before an event
+# watching stops. The rest belong to each mode (see server.modes).
+GLOBAL_TERMS = frozenset({"enrich_count", "event_lead_minutes"})
+
+
+def split_terms(terms: dict) -> tuple[dict, dict]:
+    """(a mode's terms, the global terms) of a set of terms (see GLOBAL_TERMS)."""
+    return ({k: v for k, v in terms.items() if k not in GLOBAL_TERMS},
+            {k: v for k, v in terms.items() if k in GLOBAL_TERMS})
 # Every scoring coefficient is signed; windows, similarity parameters and counts are not.
 SIGNED = {
     "next_up_bonus", "seen_bonus", "new_sub_bonus", "series_penalty", "similar_penalty",

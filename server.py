@@ -123,14 +123,18 @@ cache: dict[str, dict] = {}
 added: dict[str, float] = {}  # url -> unix time the server first saw the link
 viewed: dict[str, float] = {}  # url -> unix time you last opened it
 colors: dict[str, str] = {}  # url -> the tag you gave it (see ranking.TAGS); most items have none
-# Modes, each with its own settings, saved in settings.json. With no mode on, the feed is empty.
+# Modes, each with its own settings, saved in settings.json with the global settings, which apply
+# whatever the mode (see ranking.GLOBAL_TERMS). With no mode on, the feed is empty.
 def starting_modes() -> list[dict]:
     """The modes before you change any: Normal, with the default settings, on in free time."""
     return [{"name": "Normal", "when": {"busy": False, "not_busy": False, "free_time": True},
-             "terms": dict(ranking.DEFAULT_TERMS)}]
+             "terms": ranking.split_terms(ranking.DEFAULT_TERMS)[0]}]
 
 
-modes: list[dict] = starting_modes()  # [{"name", "when": {situation: bool}, "terms"}], highest priority first
+global_terms: dict = ranking.split_terms(ranking.DEFAULT_TERMS)[1]  # the same in every mode
+
+
+modes: list[dict] = starting_modes()  # [{"name", "when": {situation: bool}, "terms": the mode's own}], highest priority first
 mode_choice: dict = {}  # {"name": mode}: the mode you chose in the panel; empty to follow the calendar
 subscriptions: dict[str, dict] = {}  # feeds.txt url -> resolved feed, its posts and fetch status
 pending: set[str] = set()
@@ -798,11 +802,11 @@ def mark_older_red(url: str, age: float) -> int | None:
 
 
 def settings() -> dict:
-    """The settings panel's data: the modes with their settings, the active mode and how it was chosen
-    (see active_mode), and the defaults and limits."""
+    """The settings panel's data: the modes with their own settings, the global settings, the active
+    mode and how it was chosen (see active_mode), and the defaults and limits."""
     with lock:
         mode = active_mode(calendar_events(list(subscriptions)), time.time())
-        return {"modes": [mode_data(m) for m in modes],
+        return {"modes": [mode_data(m) for m in modes], "global": dict(global_terms),
                 "mode": mode, "defaults": ranking.DEFAULT_TERMS, "limits": ranking.TERM_LIMITS}
 
 
@@ -815,9 +819,15 @@ def find_mode(name: str) -> dict | None:
 
 
 def mode_terms(name: str | None) -> dict | None:
-    """A mode's settings, or None if there's no such mode. Call with lock held."""
+    """A mode's own settings, without the global ones, or None if there's no such mode. Call with lock held."""
     mode = find_mode(name) if name else None
-    return mode["terms"] if mode else None
+    return ranking.split_terms(mode["terms"])[0] if mode else None
+
+
+def terms_for(name: str | None) -> dict:
+    """All the terms in effect in a mode: its own and the global ones. With no such mode, as when none
+    is on, the defaults with the global ones. Call with lock held."""
+    return {**ranking.DEFAULT_TERMS, **(mode_terms(name) or {}), **global_terms}
 
 
 # The calendar situations a mode can be on in (its toggles, all off for a new mode): during a busy
@@ -828,7 +838,7 @@ SITUATIONS = ("busy", "not_busy", "free_time")
 
 def mode_data(mode: dict) -> dict:
     """A mode as saved and sent to the panel."""
-    return {"name": mode["name"], "when": dict(mode["when"]), "terms": dict(mode["terms"])}
+    return {"name": mode["name"], "when": dict(mode["when"]), "terms": ranking.split_terms(mode["terms"])[0]}
 
 
 def when_error(when) -> str | None:
@@ -882,14 +892,15 @@ def active_mode(events: list[dict], now: float) -> dict:
 def write_settings():
     """Save the modes and the mode you chose to settings.json."""
     with lock:
-        data = {"version": SETTINGS_VERSION, "modes": [mode_data(m) for m in modes],
+        data = {"version": SETTINGS_VERSION, "global": dict(global_terms), "modes": [mode_data(m) for m in modes],
                 "mode_choice": mode_choice.get("name")}
     save_json(SETTINGS_FILE, data)
 
 
 def save_settings(terms, mode: str | None = None) -> str | None:
-    """Set a mode's terms (by default, the mode in effect) from the feed's settings panel. Returns an
-    error message, or None."""
+    """Set the terms from the feed's settings panel: all of them, the global ones for every mode and
+    the rest for a mode (by default, the mode in effect; with no mode on, only the global ones are
+    saved). Returns an error message, or None."""
     try:
         checked = ranking.check_terms(terms if isinstance(terms, dict) else {})
     except ValueError as e:
@@ -897,12 +908,13 @@ def save_settings(terms, mode: str | None = None) -> str | None:
     with lock:
         if mode is None:
             mode = active_mode(calendar_events(list(subscriptions)), time.time())["name"]
-            if mode is None:
-                return "no mode is on"
-        target = mode_terms(mode)
-        if target is None:
+        target = find_mode(mode) if mode is not None else None
+        if mode is not None and target is None:
             return f"there's no mode called {mode}"
-        target.update(checked)
+        own, shared = ranking.split_terms(checked)
+        global_terms.update(shared)
+        if target is not None:
+            target["terms"].update(own)
     write_settings()
     return None
 
@@ -929,7 +941,7 @@ def add_mode(name, copy_from: str | None = None) -> str | None:
         if error:
             return error
         name = name.strip()
-        modes.append({"name": name, "when": dict.fromkeys(SITUATIONS, False), "terms": dict(mode_terms(copy_from) or ranking.DEFAULT_TERMS)})
+        modes.append({"name": name, "when": dict.fromkeys(SITUATIONS, False), "terms": mode_terms(copy_from) or ranking.split_terms(ranking.DEFAULT_TERMS)[0]})
         mode_choice["name"] = name
     write_settings()
     return None
@@ -993,7 +1005,7 @@ def choose_mode(name) -> str | None:
 
 # settings.json's format. Files without a version were saved before it had one; when a term is renamed
 # or changes meaning, bump the version and move saved values in migrate_terms.
-SETTINGS_VERSION = 3  # 3: the normal settings are the Normal mode's
+SETTINGS_VERSION = 4  # 3: the normal settings are the Normal mode's; 4: global settings
 
 
 def migrate_terms(data: dict) -> dict | None:
@@ -1038,9 +1050,11 @@ def saved_when(mode: dict) -> dict:
 
 
 def load_settings():
-    """Load the modes and the mode you chose from settings.json. Without saved settings, the modes are
-    the starting ones (see starting_modes). Settings saved before version 3 had normal settings, used
-    whenever no mode was on; they become the Normal mode, at the bottom of the list, on in free time."""
+    """Load the modes, the global settings and the mode you chose from settings.json. Without saved
+    settings, the modes are the starting ones (see starting_modes) and the global settings the defaults.
+    Settings saved before version 3 had normal settings, used whenever no mode was on; they become the
+    Normal mode, at the bottom of the list, on in free time. Settings saved before version 4 had no
+    global settings; they're taken from the Normal mode, else the first mode."""
     data = load_json(SETTINGS_FILE)
     saved_modes = data.get("modes") if isinstance(data.get("modes"), list) else []
     with lock:
@@ -1062,6 +1076,18 @@ def load_settings():
             except ValueError as e:
                 print(f"Ignoring the normal settings in {SETTINGS_FILE}: {e}")
             modes.append(normal)
+        shared = data.get("global")
+        if not isinstance(shared, dict):  # saved before there were global settings
+            shared = (find_mode("Normal") or (modes[0] if modes else {})).get("terms") or {}
+        try:
+            shared = ranking.split_terms(complete_terms({**ranking.DEFAULT_TERMS, **shared}))[1]
+        except ValueError as e:
+            print(f"Ignoring the global settings in {SETTINGS_FILE}: {e}")
+            shared = ranking.split_terms(ranking.DEFAULT_TERMS)[1]
+        global_terms.clear()
+        global_terms.update(shared)
+        for mode in modes:
+            mode["terms"] = ranking.split_terms(mode["terms"])[0]
         mode_choice.clear()
         chosen = data.get("mode_choice")
         if isinstance(chosen, str) and find_mode(chosen):
@@ -1322,7 +1348,7 @@ def feed(ranker: str, limit: int = MAX_ITEMS_SHOWN, terms: dict | None = None, *
         events = calendar_events(all_subs)
         mode = active_mode(events, now)
         # With no mode on, the main feed is empty; other pages rank with the default settings.
-        terms = terms or dict(mode_terms(mode["name"]) or ranking.DEFAULT_TERMS)
+        terms = terms or terms_for(mode["name"])
         stopping = stop_state(events, now, terms, lambda event: calendar_name(event, all_subs))
     stopping = {**stopping, "mode": mode,
                 "calendars_unreachable": unreachable_calendars(all_subs)}

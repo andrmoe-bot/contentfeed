@@ -332,7 +332,7 @@ the one playing in another card.
 ## Stop watching
 
 Calendar events stop watching. Every busy event that hasn't ended has a stop time at its start
-minus the **Event lead time** setting (30 minutes by default; 0 stops exactly at the event's
+minus the **Event lead time** setting, which is the same in every mode (30 minutes by default; 0 stops exactly at the event's
 start), and the earliest one counts. So with dinner at 19:00 and the default lead, the stop time is
 18:30. Events marked free (not busy) don't stop watching, though they can turn a mode on (see
 Modes). All-day events, such as birthdays and holidays, don't stop watching either, as they would
@@ -393,10 +393,14 @@ several modes could be on, such as two ticking the same situation, or one for bu
 for free events while both kinds take place, the one highest in the list wins; move modes up and
 down with the ↑ and ↓ buttons.
 
+Two settings are the same in every mode, under **All modes** in the panel: **Event lead time** and
+**Fetch details**. Changing them in one mode changes them for all, and they apply when no mode is on.
+Reset only resets the shown mode's own settings.
+
 When no mode is on, the feed is empty and says so, as does the status line ("No mode on"), and the
-panel has no settings to show until you pick a mode. A subscription's page and a post's page still
-list posts then, ranked with the default settings, and the stop time uses the default Event lead
-time.
+panel shows only the settings for all modes until you pick a mode. A subscription's page and a
+post's page still list posts then, ranked with the default settings, and the stop time uses the
+Event lead time as usual.
 
 The panel always shows and changes the settings of the mode in effect, and the status line names
 it. While the calendar has a mode on, the status line says when that ends ("Work mode until 17:00":
@@ -404,7 +408,8 @@ the event's end, or for free time, the next event's start) and leaves out a stop
 after that. When the mode changes, such as when a work block starts, the feed is shown again from
 the top. Remove deletes the mode shown and its settings. Modes are saved in `settings.json`.
 Settings saved before Normal was a mode become the Normal mode, at the bottom of the list, on in
-free time; modes saved with the earlier title patterns are on during free events, unless the
+free time; settings saved before the settings for all modes take those from the Normal mode, else the
+first mode; modes saved with the earlier title patterns are on during free events, unless the
 pattern was empty.
 
 ## Ranking
@@ -427,7 +432,7 @@ All scoring terms add their configured signed points; negative values subtract p
 - 0 (off) × the **sum** over everything you opened recently of similarity × the fraction of the 24-hour window remaining since opening; each match contributes on its own, not just the strongest (see below)
 - 0 for its media type: video (YouTube, Jellyfin, NRK TV, pages with a video file), image (a link straight to a picture) or
   article (anything else). Each has its own setting, which may be negative, to favor or hold back that type.
-- 0 per **minute away from the target content length** by default. Content length adds `weight × |estimated minutes − target minutes|`. Set a negative weight to favor content near the target, or a positive weight to favor content farther away. The target defaults to 0 minutes, preserving existing scores; both the weight and target are configurable in Settings. Runtime metadata is used where available; text is estimated at 200 words per minute (at least one minute). Feed text may be only an excerpt, and page estimates can include surrounding text. Unknown lengths have no adjustment. When the site loads, the highest-ranked posts with incomplete data can be updated in the background, regardless of score weights; this is off by default. YouTube updates fetch runtime and exact publication time together. Set how many with “Fetch details” in Settings (0–100; 0, the default, turns it off). Routine polling does not start additional batches; unavailable data stays unknown and recent attempts are skipped for six hours.
+- 0 per **minute away from the target content length** by default. Content length adds `weight × |estimated minutes − target minutes|`. Set a negative weight to favor content near the target, or a positive weight to favor content farther away. The target defaults to 0 minutes, preserving existing scores; both the weight and target are configurable in Settings. Runtime metadata is used where available; text is estimated at 200 words per minute (at least one minute). Feed text may be only an excerpt, and page estimates can include surrounding text. Unknown lengths have no adjustment. When the site loads, the highest-ranked posts with incomplete data can be updated in the background, regardless of score weights; this is off by default. YouTube updates fetch runtime and exact publication time together. Set how many with “Fetch details” in Settings, the same in every mode (0–100; 0, the default, turns it off). Routine polling does not start additional batches; unavailable data stays unknown and recent attempts are skipped for six hours.
 - +10 if tagged "show again soon" (green), −50 if "maybe later" (white), −1000 if "don't show again" (red)
 - 0 (off) × the **sum of similarities to posts above it**. At −15, a 100% match contributes −15,
   a 50% match contributes −7.5, and two 50% matches contribute −15 together. It uses the same
