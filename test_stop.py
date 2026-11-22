@@ -150,6 +150,9 @@ class StopServerTests(unittest.TestCase):
         self.stack.enter_context(patch.object(server, "pending", set()))
         self.stack.enter_context(patch.object(server, "state_version", 0))
         self.stack.enter_context(patch.object(ranking, "TERMS", dict(ranking.DEFAULT_TERMS)))
+        # One mode, on whatever the calendar holds, whose settings are ranking.TERMS.
+        self.stack.enter_context(patch.object(server, "modes", [{"name": "Normal", "when": dict.fromkeys(server.SITUATIONS, True),
+                                                      "terms": ranking.TERMS}]))
         self.stack.enter_context(patch.object(server, "schedule", return_value=None))
         self.stack.enter_context(patch.object(server, "schedule_subscription", return_value=None))
         self.url = "https://example.com/feed"

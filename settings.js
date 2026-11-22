@@ -5,7 +5,8 @@
 // short; each group's "Add a setting" brings them back. The similarity measures (marked measure: true)
 // only shape the two similarity penalties, so they're shown whenever either penalty is.
 // Each mode has its own settings. The panel shows and changes the active mode's: the one you picked
-// in its Mode list, or with Auto, the mode the calendar turns on (see server.active_mode).
+// in its Mode list, or with Auto, the mode the calendar turns on (see server.active_mode). With no
+// mode on, the feed is empty and there are no settings to show.
 const GROUPS = [
   { id: "feed", title: "Feed", open: true },
   { id: "opened", title: "Opened and next up", open: true },
@@ -79,9 +80,10 @@ let limits = {};  // each term's {min, max, integer}, from the server
 let saved = {};  // as saved on the server
 let draft = {};  // as shown in the panel
 let defaults = {};
-let modeList = [];  // [{name, when, terms}], the modes besides Normal, highest priority first
-let mode = { name: "Normal", source: "default", situation: null, event: null };  // the active mode, whose settings the panel shows
-const termsOf = (name, data) => (name === "Normal" ? data.terms : data.modes.find((m) => m.name === name)?.terms || data.terms);
+let modeList = [];  // [{name, when, terms}], the modes, highest priority first
+let mode = { name: null, source: "none", situation: null, event: null };  // the active mode, whose settings the panel shows
+// A mode's settings; the defaults when no mode is on, which aren't shown or saved then.
+const termsOf = (name, data) => data.modes.find((m) => m.name === name)?.terms || data.defaults;
 
 // Slider positions: 0, then 1, 1.5, 2, 3, 5, 7 times each power of ten from 10^lo up to 10^hi,
 // mirrored below 0 for terms that may be negative.
@@ -285,7 +287,7 @@ async function saveNow() {
   if (!ok) return panelSay(`Couldn't save: ${data.error || "unknown error"}`, true);
   modeList = data.modes;
   saved = termsOf(mode.name, data);
-  panelSay(mode.name === "Normal" && !modeList.length ? "Saved." : `Saved for ${mode.name}.`);
+  panelSay(`Saved for ${mode.name}.`);
 }
 
 let rankerShown = null;
@@ -320,9 +322,11 @@ function showMode(data) {
   shownTerms.clear();
   hideUnusedTerms(saved);
   showModeBar();
+  document.getElementById("mode-settings").hidden = !mode.name;
+  document.getElementById("reset").hidden = !mode.name;
 }
 
-// The Mode list: Auto, Normal and the modes, highest priority first, each with a radio button to pick
+// The Mode list: Auto and the modes, highest priority first, each with a radio button to pick
 // it and the modes with buttons to move them up or down. Under Auto, the mode the calendar has on is
 // marked "on now".
 const modeListEl = document.getElementById("mode-list");
@@ -347,19 +351,18 @@ function showModeBar() {
   };
   modeListEl.replaceChildren(
     row("", "Auto: follow the calendar"),
-    row("Normal", "Normal"),
     ...modeList.map((m, i) => row(m.name, m.name, [move(m.name, i, -1), move(m.name, i, 1)])));
   document.getElementById("mode-order-hint").hidden = modeList.length < 2;
-  document.getElementById("mode-remove").hidden = mode.name === "Normal";
+  document.getElementById("mode-remove").hidden = !mode.name;
   document.getElementById("mode-remove").textContent = `Remove ${mode.name}`;
-  whenBox.hidden = mode.name === "Normal";
+  whenBox.hidden = !mode.name;
   const toggles = modeList.find((m) => m.name === mode.name)?.when || {};
   for (const box of whenBoxes) box.checked = !!toggles[box.dataset.situation];
   document.getElementById("mode-hint").textContent =
     mode.source === "calendar" ? `These are ${mode.name}'s settings, on ${situationText(mode)}.`
     : mode.source === "chosen" ? `These are ${mode.name}'s settings, until you pick Auto.`
-    : modeList.length ? "These are the normal settings. A mode is on during the calendar situations ticked for it."
-    : "Add a mode to use other settings, such as during free (not busy) calendar events for work.";
+    : modeList.length ? "No mode is on, so the feed is empty. Pick a mode to use it, or to choose when the calendar turns it on."
+    : "There are no modes, so the feed is empty. Add one with New mode….";
 }
 
 // Why the calendar turned a mode on, and until when, for the hint.
@@ -382,7 +385,8 @@ async function modeRequest(body) {
 }
 
 document.getElementById("mode-add").addEventListener("click", () => {
-  const name = prompt(`Name of the new mode. It starts with ${mode.name}'s settings. With Auto, you choose below when the calendar turns it on.`);
+  const from = mode.name ? `${mode.name}'s settings` : "the default settings";
+  const name = prompt(`Name of the new mode. It starts with ${from}. With Auto, you choose below when the calendar turns it on.`);
   if (name !== null && name.trim()) modeRequest({ add: name.trim(), copy_from: mode.name });
 });
 

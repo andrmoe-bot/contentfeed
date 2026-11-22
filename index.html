@@ -50,10 +50,12 @@
     <label><input type="checkbox" data-situation="free_time"> Free time, with no event</label>
     <p class="hint">From your calendars, leaving out all-day events. None ticked: only when you pick it.</p>
   </fieldset>
-  <p class="hint">Each post's score adds up these points, and the feed shows the highest first. A card's
-    “Score” lists its points. Changes show as you slide and are saved when you let go.</p>
-  <div id="settings"></div>
-  <select id="add-setting" aria-label="Add a setting" hidden></select>
+  <div id="mode-settings">
+    <p class="hint">Each post's score adds up these points, and the feed shows the highest first. A card's
+      “Score” lists its points. Changes show as you slide and are saved when you let go.</p>
+    <div id="settings"></div>
+    <select id="add-setting" aria-label="Add a setting" hidden></select>
+  </div>
   <div class="panel-actions">
     <button type="button" id="reset">Reset to defaults</button>
     <p id="panel-status" role="status"></p>

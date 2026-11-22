@@ -588,15 +588,16 @@ function appendNew(list, fresh) {
   return [...list, ...fresh.filter((it) => !urls.has(it.url))];
 }
 
-// The status line: calendars that didn't answer, the mode, unless it's Normal, with when the calendar
+// The status line: calendars that didn't answer, the mode (or that none is on), with when the calendar
 // situation that turned it on ends (an event, or free time), the stop time, if any, then text, then how
 // many fetches are under way. While the calendar has a mode on, a stop time after the situation ends is
 // left out: the end is what's next.
 function showStatus(data, text) {
   const unreachable = (data.calendars_unreachable || []).map((c) =>
     `Calendar “${c.title}” isn't answering; using its events from ${c.fetched ? clock(c.fetched) : "before"}`);
-  const mode = data.mode && data.mode.name !== "Normal" ? data.mode : null;
-  const modeNote = mode ? `${mode.name} mode${mode.until ? ` until ${when(mode.until)}` : ""}` : "";
+  const mode = data.mode?.name ? data.mode : null;
+  const modeNote = mode ? `${mode.name} mode${mode.until ? ` until ${when(mode.until)}` : ""}`
+    : data.mode ? "No mode on" : "";
   const stopLater = mode?.until && data.stop_at && !data.stopped && data.stop_at > mode.until;
   statusEl.textContent = [...unreachable, modeNote, stopLater ? "" : stopNote(data), text, data.pending ? `fetching ${data.pending}…` : ""]
     .filter(Boolean).join(" · ");
@@ -608,14 +609,14 @@ function showRanked(data) {
   const limited = data.post_limit != null && data.post_limit < data.total;
   more.hidden = limited || data.total <= items.length;
   more.textContent = `Show ${Math.min(PAGE, data.total - items.length)} more (${data.total - items.length} not shown)`;
-  showStatus(data, `${data.total > items.length ? `top ${items.length} of ${data.total}` : data.total} items${limited ? " (post limit)" : ""} · ranked by ${data.ranker}`);
+  showStatus(data, `${data.total > items.length ? `top ${items.length} of ${data.total}` : data.total} items${limited && data.mode?.name !== null ? " (post limit)" : ""} · ranked by ${data.ranker}`);
   rankerNote(data.ranker);
 }
 
 function showFeed(data, more = false) {
   items = more ? appendNew(items, data.items) : data.items;
   render();
-  if (!items.length) feedEl.replaceChildren(el("p", {}, searchEl.value.trim() ? "No posts match your search." : data.post_limit === 0 && data.total ? `The post limit is 0${data.mode && data.mode.name !== "Normal" ? ` in ${data.mode.name} mode` : ""}, so the feed is empty. Change it in Settings.` : data.stopped ? "Stopped: the stop time has passed." : "No posts in your feed yet."));
+  if (!items.length) feedEl.replaceChildren(el("p", {}, searchEl.value.trim() ? "No posts match your search." : data.mode && !data.mode.name && data.post_limit === 0 ? "No mode is on, so the feed is empty. Pick one in Settings, or choose there when the calendar turns one on." : data.post_limit === 0 && data.total ? `The post limit is 0${data.mode?.name ? ` in ${data.mode.name} mode` : ""}, so the feed is empty. Change it in Settings.` : data.stopped ? "Stopped: the stop time has passed." : "No posts in your feed yet."));
   showRanked(data);
 }
 

@@ -91,7 +91,7 @@ class ModeTests(unittest.TestCase):
         self.assertIsNone(server.choose_mode(None))
         now = time.time()
         self.set_events(event("work", now - 60, now + 3600, free=True, title="Work block"))
-        self.assertEqual(server.feed("score")["mode"]["name"], "Normal")
+        self.assertEqual(server.feed("score")["mode"]["name"], None)
         self.assertIsNone(server.set_mode_when("work", {"not_busy": True}))
         self.assertEqual(server.feed("score")["mode"], {"name": "Work", "source": "calendar", "situation": "not_busy",
                                                         "event": "Work block", "until": now + 3600})
@@ -100,7 +100,7 @@ class ModeTests(unittest.TestCase):
         self.assertEqual(server.set_mode_when("Work", {}), "expected the situations to turn on or off")
         self.assertEqual(server.set_mode_when("Play", {"busy": True}), "there's no mode called Play")
         self.assertIsNone(server.set_mode_when("Work", {"not_busy": False}))
-        self.assertEqual(server.feed("score")["mode"]["name"], "Normal")
+        self.assertEqual(server.feed("score")["mode"]["name"], None)
 
     def test_modes_turn_on_for_busy_events_free_events_or_free_time(self):
         for name in ("Busy", "Free", "Idle"):
@@ -136,35 +136,62 @@ class ModeTests(unittest.TestCase):
             self.assertEqual(server.move_mode("A", to), "the position must be a whole number from 0 to 2")
         self.assertEqual(server.move_mode("D", 0), "there's no mode called D")
 
+    def test_the_starting_mode_is_normal_on_in_free_time_and_removable(self):
+        server.modes[:] = server.starting_modes()
+        self.assertEqual(server.settings()["modes"], [{"name": "Normal", "when": {"busy": False, "not_busy": False, "free_time": True},
+                                                        "terms": ranking.DEFAULT_TERMS}])
+        self.assertEqual(server.feed("score")["mode"]["name"], "Normal")
+        self.assertIsNone(server.remove_mode("Normal"))
+        self.assertEqual(server.modes, [])
+        self.assertIsNone(server.add_mode("Normal"))  # an ordinary name
+
+    def test_with_no_mode_on_the_feed_is_empty(self):
+        result = server.feed("score")
+        self.assertEqual((result["mode"], result["items"], result["post_limit"], result["total"]), ({"name": None, "source": "none", "situation": None, "event": None, "until": None}, [], 0, 1))
+        # A subscription's page still lists its posts, ranked with the default settings.
+        self.assertEqual(len(server.feed("score", subscription_url=self.feed_url)["items"]), 1)
+        self.assertEqual(server.save_settings(dict(ranking.DEFAULT_TERMS)), "no mode is on")
+        self.assertEqual(server.settings()["mode"], {"name": None, "source": "none", "situation": None, "event": None, "until": None})
+
     def test_each_mode_ranks_with_its_own_settings(self):
         self.assertIsNone(server.add_mode("Work"))
+        self.assertIsNone(server.add_mode("Play"))
         work = dict(ranking.DEFAULT_TERMS, post_limit=0)
         self.assertIsNone(server.save_settings(work, "Work"))
+        self.assertEqual(server.mode_terms("Play"), ranking.DEFAULT_TERMS)  # Play's settings are untouched
+        self.assertIsNone(server.choose_mode("Work"))
         result = server.feed("score")
         self.assertEqual((result["mode"]["name"], result["items"], result["post_limit"]), ("Work", [], 0))
-        self.assertEqual(ranking.TERMS["post_limit"], ranking.LIMIT)  # Normal's settings are untouched
-        self.assertIsNone(server.choose_mode("Normal"))
+        self.assertIsNone(server.choose_mode("play"))
         self.assertEqual(len(server.feed("score")["items"]), 1)
-        self.assertEqual(server.save_settings(work, "Play"), "there's no mode called Play")
+        # Without a mode named, settings are saved for the mode in effect.
+        self.assertIsNone(server.save_settings(dict(ranking.DEFAULT_TERMS, video_bonus=3)))
+        self.assertEqual(server.mode_terms("Play")["video_bonus"], 3)
+        self.assertEqual(server.save_settings(work, "Gone"), "there's no mode called Gone")
 
     def test_a_new_mode_copies_settings_and_a_chosen_mode_beats_the_calendar(self):
-        ranking.TERMS["video_bonus"] = 5
-        self.assertIsNone(server.add_mode(" Work ", "Normal"))
-        self.assertEqual(server.settings()["modes"], [{"name": "Work", "when": dict.fromkeys(server.SITUATIONS, False),
-                                                        "terms": dict(ranking.TERMS)}])
-        self.assertEqual(server.settings()["mode"], {"name": "Work", "source": "chosen", "situation": None,
+        self.assertIsNone(server.add_mode("Base"))
+        self.assertIsNone(server.save_settings(dict(ranking.DEFAULT_TERMS, video_bonus=5), "Base"))
+        self.assertIsNone(server.add_mode(" Work ", "Base"))
+        self.assertIsNone(server.add_mode("Fresh", "Missing"))  # a mode that doesn't exist: the defaults
+        self.assertEqual(server.settings()["modes"][1], {"name": "Work", "when": dict.fromkeys(server.SITUATIONS, False),
+                                                         "terms": dict(ranking.DEFAULT_TERMS, video_bonus=5)})
+        self.assertEqual(server.mode_terms("Fresh"), ranking.DEFAULT_TERMS)
+        self.assertEqual(server.settings()["mode"], {"name": "Fresh", "source": "chosen", "situation": None,
                                                      "event": None, "until": None})
         server.set_mode_when("Work", {"not_busy": True})
         now = time.time()
         self.set_events(event("work", now - 60, now + 3600, free=True, title="Work"))
-        self.assertIsNone(server.choose_mode("Normal"))
-        self.assertEqual(server.settings()["mode"]["source"], "chosen")
+        self.assertIsNone(server.choose_mode("Base"))
+        self.assertEqual(server.settings()["mode"]["name"], "Base")
+        self.assertIsNone(server.choose_mode(None))
+        self.assertEqual(server.settings()["mode"]["name"], "Work")
         self.assertEqual(server.choose_mode("Play"), "there's no mode called Play")
 
     def test_mode_names_are_checked(self):
         self.assertIsNone(server.add_mode("Work"))
         for name, error in [("", "a mode needs a name"), ("work", "there's already a mode called work"),
-                            ("normal", "there's already a mode called normal"), ("Auto", "there's already a mode called Auto"),
+                            ("Auto", "there's already a mode called Auto"),
                             ("x" * 41, "a mode's name can be at most 40 characters"), (5, "a mode needs a name"),
                             ("a\nb", "a mode's name can't have control characters")]:
             self.assertEqual(server.add_mode(name), error)
@@ -195,18 +222,39 @@ class ModeTests(unittest.TestCase):
             {"name": "Idle", "when": {"free_time": True, "busy": "yes", "gone": True}, "terms": terms},
             {"name": ""}, "junk"], "mode_choice": "Missing"}))
         server.load_settings()
-        # Modes saved with a title pattern (or before patterns, matching their name) are on during free events.
+        # Modes saved with a title pattern (or before patterns, matching their name) are on during free
+        # events. The normal settings of before become the Normal mode, at the bottom.
         on = lambda m: [s for s in server.SITUATIONS if m["when"][s]]
         self.assertEqual([(m["name"], on(m)) for m in server.modes],
-                         [("Work", ["not_busy"]), ("Never", []), ("Focus", ["not_busy"]), ("Idle", ["free_time"])])
+                         [("Work", ["not_busy"]), ("Never", []), ("Focus", ["not_busy"]), ("Idle", ["free_time"]),
+                          ("Normal", ["free_time"])])
         self.assertEqual(server.mode_terms("Work"), ranking.DEFAULT_TERMS)
         self.assertEqual(server.mode_choice, {})
+
+    def test_normal_settings_saved_before_modes_held_them_become_the_normal_mode(self):
+        server.SETTINGS_FILE.write_text(json.dumps({"version": 2, "terms": dict(ranking.DEFAULT_TERMS, video_bonus=7),
+                                                    "modes": [{"name": "Work", "when": {"busy": True}, "terms": ranking.DEFAULT_TERMS}],
+                                                    "mode_choice": "Normal"}))
+        server.load_settings()
+        self.assertEqual([(m["name"], m["when"]) for m in server.modes],
+                         [("Work", {"busy": True, "not_busy": False, "free_time": False}),
+                          ("Normal", {"busy": False, "not_busy": False, "free_time": True})])
+        self.assertEqual(server.mode_terms("Normal")["video_bonus"], 7)
+        self.assertEqual(server.mode_choice, {"name": "Normal"})
+        # Without saved settings, the modes are the starting ones; with the current version, as saved.
+        server.SETTINGS_FILE.unlink()
+        server.load_settings()
+        self.assertEqual(server.modes, server.starting_modes())
+        server.SETTINGS_FILE.write_text(json.dumps({"version": server.SETTINGS_VERSION, "modes": []}))
+        server.load_settings()
+        self.assertEqual(server.modes, [])
 
     def test_modes_api(self):
         body, code = server.modes_api({"add": "Work"})
         self.assertEqual((code, body["mode"]["name"], [m["name"] for m in body["modes"]]), (200, "Work", ["Work"]))
         body, code = server.modes_api({"choose": None})
-        self.assertEqual((code, body["mode"]["source"]), (200, "default"))
+        self.assertEqual((code, body["mode"]["source"]), (200, "none"))
+        self.assertNotIn("terms", body)  # every mode's settings are in modes
         body, code = server.settings_api({"terms": dict(ranking.DEFAULT_TERMS, white_points=0), "mode": "Work"})
         self.assertEqual((code, body["modes"][0]["terms"]["white_points"]), (200, 0))
         body, code = server.modes_api({"when": {"busy": True}, "mode": "Work"})
