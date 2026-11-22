@@ -13,7 +13,7 @@ const GROUPS = [
   { id: "opened", title: "Opened and next up", open: true },
   { id: "tags", title: "Tags", open: true },
   { id: "kind", title: "Kind, length and age" },
-  { id: "stop", title: "Lead and stop time" },
+  { id: "stop", title: "Mode changes" },
   { id: "tasks", title: "Tasks" },
   { id: "similarity", title: "Similarity" },
   { id: "global", title: "All modes", open: true, hint: "The same in every mode, and used when none is on." },
@@ -52,8 +52,8 @@ const SETTINGS = [
 
   { group: "stop", key: "event_lead_minutes", label: "Lead time", after: "minutes",
     hint: "This mode turns on this long before an event it's on for, so you're ready when it starts; a busy event stops watching then too. Free time doesn't use it." },
-  { group: "stop", key: "past_stop_per_minute", label: "Past the stop time", after: "points per minute",
-    hint: "For each minute a post would run past the stop time. The post you're viewing is exempt." },
+  { group: "stop", key: "past_mode_change_per_minute", label: "Past the mode change", after: "points per minute",
+    hint: "For each minute a post would run past when the calendar next changes the mode. The post you're viewing is exempt." },
 
   { group: "tasks", key: "task_deadline_bonus", label: "Deadline", after: "points when due",
     hint: "Ramps up over the last 30 days before a task's deadline." },

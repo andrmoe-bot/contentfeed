@@ -386,7 +386,7 @@ function scoreDetail(item, reason) {
       : `${rate(w.similar_penalty)} × ${strongest}`;
   }
   if (label.startsWith("estimated ")) return `|${n(item.estimated_minutes)} − ${rate(w.length_target_minutes)}| min × ${rate(w.length_per_minute)} pts/min`;
-  if (label.includes(" past the stop time")) return `${rate(w.past_stop_per_minute)} pts/min`;
+  if (label.includes(" past the mode change")) return `${rate(w.past_mode_change_per_minute)} pts/min`;
   if (label.startsWith("age ")) {
     return `${rate(w.age_per_year)} pts/year`;
   }
@@ -568,7 +568,7 @@ async function fetchFeed({ reorder = false, more = false } = {}) {
 }
 
 // A check's answer: the cards shown take the newest score, tag and viewed time of their item, in
-// place. Cards the answer leaves out (such as posts past the stop time) keep what they had.
+// place. Cards the answer leaves out (such as posts past the mode change) keep what they had.
 function refreshCards(fresh) {
   const byUrl = new Map(fresh.map((it) => [it.url, it]));
   for (const item of shown) {

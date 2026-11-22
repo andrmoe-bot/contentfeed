@@ -26,14 +26,14 @@ Each item has its page metadata (url, title, description, domain, ...) plus thes
     sub_last_viewed  for a post: unix time you last opened any post in its subscription, or None
     series_ids   for a post: the ids of the series it's part of within its subscription (see series.py),
                  empty if none
-    past_stop    whole minutes its estimated length would run past the stop time in effect (see
-                 minutes_past_stop), or None when it fits, its length is unknown or nothing stops watching
+    past_mode_change  whole minutes its estimated length would run past the next mode change (see
+                 minutes_past), or None when it fits, its length is unknown or the mode isn't set to change
 
 rank() adds one more, "similar": the item you opened recently that this one is most like, plus
 "total" and "matches", the summed strength and count of every recent match (see similarity), or
 None. The similar_penalty is based on the sum, not on the strongest match alone.
 
-Nothing is hidden: items you've opened, tagged or that would run past the stop time are scored
+Nothing is hidden: items you've opened, tagged or that would run past the next mode change are scored
 differently, not removed. The one cut is the post limit term: the feed shows at most that many posts
 (server.py applies it; 0 gives an empty feed). Once the stop time has run out, the feed itself is
 left unchanged and the response's stopped flag tells the page to show the stop screen (notice,
@@ -93,7 +93,7 @@ DEFAULT_TERMS = {
     "length_per_minute": 0,  # signed points per minute away from the target length
     "length_target_minutes": 0,  # target runtime or reading time; 0 preserves the original linear score
     "age_per_year": 0,  # signed points per fractional 365-day year since publication (or addition for links)
-    "past_stop_per_minute": -20,  # signed points per minute a post would run past the stop time
+    "past_mode_change_per_minute": -20,  # signed points per minute a post would run past the next mode change
     "post_limit": 10_000_000,  # most posts the feed shows; the maximum (LIMIT) means no limit, 0 an empty feed
 }
 TERMS = dict(DEFAULT_TERMS)
@@ -111,7 +111,7 @@ SIGNED = {
     "next_up_bonus", "seen_bonus", "new_sub_bonus", "series_penalty", "similar_penalty",
     "above_similarity_penalty", "green_points", "white_points", "red_points", "video_bonus", "image_bonus",
     "article_bonus", "youtube_shorts_bonus", "length_per_minute", "age_per_year",
-    "task_deadline_bonus", "task_bonus", "task_priority_bonus", "past_stop_per_minute",
+    "task_deadline_bonus", "task_bonus", "task_priority_bonus", "past_mode_change_per_minute",
 }
 LIMIT = 10_000_000
 # The tags you can give an item with the dots on its card, and their names. None of them counts as
@@ -228,16 +228,17 @@ def ongoing_event(events: list[dict], now: float) -> dict | None:
     return min(ongoing, key=lambda it: it["deadline"]) if ongoing else None
 
 
-def minutes_past_stop(item: dict, now: float, stop: float | None) -> int | None:
-    """How many whole minutes the item would run past the stop time if started now (rounded up, so
-    any overrun counts), or None when it can be finished before then. Tasks aren't watched, and items
-    without an estimated length can't be ruled out, so they always fit."""
-    if stop is None or item.get("calendar_kind"):
+def minutes_past(item: dict, now: float, at: float | None) -> int | None:
+    """How many whole minutes the item would run past a time, such as the next mode change, if started
+    now (rounded up, so any overrun counts), or None when it can be finished before then or at is
+    None. Tasks aren't watched, and items without an estimated length can't be ruled out, so they
+    always fit."""
+    if at is None or item.get("calendar_kind"):
         return None
     minutes = item.get("estimated_minutes")
     if not valid_minutes(minutes):
         return None
-    over = math.ceil((now + minutes * 60 - stop) / 60)
+    over = math.ceil((now + minutes * 60 - at) / 60)
     return over if over > 0 else None
 
 
@@ -603,7 +604,7 @@ def _tag_reasons(item: dict, terms: dict) -> Reasons:
 @ranker("score", spread=True)
 def score(item: dict, now: float, terms: dict) -> Reasons:
     """Points for next up, opened before, a new subscription, a later part of a series, being like
-    something opened recently, its media type, length, age, running past the stop time, and its tag. rank() then penalizes similarity to posts above it."""
+    something opened recently, its media type, length, age, running past the next mode change, and its tag. rank() then penalizes similarity to posts above it."""
     w = terms
     reasons = []
     if item.get("calendar_kind"):
@@ -633,9 +634,9 @@ def score(item: dict, now: float, terms: dict) -> Reasons:
     if w["age_per_year"]:
         hours = hours_since(now, item["date"])
         reasons.append((f"age {hours_label(hours)}", points(hours / (24 * 365) * w["age_per_year"])))
-    past = item.get("past_stop")
-    if past and w["past_stop_per_minute"]:
-        reasons.append((f"runs {past} minute{'s' if past != 1 else ''} past the stop time", points(past * w["past_stop_per_minute"])))
+    past = item.get("past_mode_change")
+    if past and w["past_mode_change_per_minute"]:
+        reasons.append((f"runs {past} minute{'s' if past != 1 else ''} past the mode change", points(past * w["past_mode_change_per_minute"])))
     return reasons + _tag_reasons(item, w)
 
 

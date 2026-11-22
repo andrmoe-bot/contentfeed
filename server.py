@@ -1065,7 +1065,7 @@ def choose_mode(name) -> str | None:
 
 # settings.json's format. Files without a version were saved before it had one; when a term is renamed
 # or changes meaning, bump the version and move saved values in migrate_terms.
-SETTINGS_VERSION = 4  # 3: the normal settings are the Normal mode's; 4: global settings
+SETTINGS_VERSION = 5  # 3: the normal settings are the Normal mode's; 4: global settings; 5: past the mode change
 
 
 def migrate_terms(data: dict) -> dict | None:
@@ -1089,6 +1089,10 @@ def migrate_terms(data: dict) -> dict | None:
         green = terms.pop("green_bonus_points", 0)
         if green and "green_points" not in terms:
             terms["green_points"] = green
+    if data.get("version", 0) < 5:
+        # The points for running past the stop time are now for running past the next mode change.
+        if "past_stop_per_minute" in terms and "past_mode_change_per_minute" not in terms:
+            terms["past_mode_change_per_minute"] = terms.pop("past_stop_per_minute")
     return terms
 
 
@@ -1218,7 +1222,7 @@ RANKED_KEPT = 20
 class CachedRanking:
     built: float  # unix time
     ranked: ranking.RankedItems
-    stop: tuple  # (stop_at, stopped) it was filtered for; see ranking_for
+    change: float | None  # the next mode change it was marked for; see ranking_for
     state_version: int
 
 
@@ -1343,30 +1347,28 @@ def build_items(entries: dict[str, list[str]], subs: dict[str, list[str]], now: 
     return items, new
 
 
-def mark_past_stop(items: list[dict], stopping: dict, now: float, post_url: str | None) -> list[dict]:
-    """While the stop is ahead, give each post past_stop: how many minutes it would run past it, for
-    the ranker's points. The post whose page is open and the one you're viewing are left unmarked, so
-    reloading while you watch doesn't push it down. Once the stop has fired the feed is left alone: the
-    response's stopped flag tells the page to show the stop screen in JS, so switching back is seamless."""
-    if stopping["stop_at"] is None or stopping["stopped"]:
+def mark_past_mode_change(items: list[dict], change: float | None, now: float, post_url: str | None) -> list[dict]:
+    """While the calendar is set to change the mode (change, when it next does; see active_mode), give
+    each post past_mode_change: how many minutes it would run past then, for the ranker's points. The
+    post whose page is open and the one you're viewing are left unmarked, so reloading while you watch
+    doesn't push it down. A mode you chose doesn't change, so its posts aren't marked."""
+    if change is None:
         return items
     watching = being_viewed(items)
     for it in items:
         if it is not watching and it["url"] != post_url:
-            it["past_stop"] = ranking.minutes_past_stop(it, now, stopping["stop_at"])
+            it["past_mode_change"] = ranking.minutes_past(it, now, change)
     return items
 
 
 def ranking_for(ranker: str, terms: dict, entries: dict, subs: dict, search: str, post_url: str | None,
-                stopping: dict, now: float) -> ranking.RankedItems:
-    """The ranked feed, from the cache when it's recent and was filtered for the same stop state. The
-    stop state changes with time alone, so a cached ranking is reused only while it's unchanged, and a
-    response never mixes items filtered at one moment with stop fields computed at another."""
-    stop_key = (stopping["stop_at"], stopping["stopped"])
+                change: float | None, now: float) -> ranking.RankedItems:
+    """The ranked feed, from the cache when it's recent and was marked for the same next mode change
+    (see mark_past_mode_change), which changes with time alone."""
     with lock:
         key = (ranker, json.dumps(terms, sort_keys=True), json.dumps([entries, subs, search, post_url]))
         hit = ranked_cache.get(key)
-        if hit and now - hit.built < RANKED_TTL and hit.stop == stop_key and hit.state_version == state_version:
+        if hit and now - hit.built < RANKED_TTL and hit.change == change and hit.state_version == state_version:
             return hit.ranked
         version = state_version
         items, new = build_items(entries, subs, now)
@@ -1374,14 +1376,14 @@ def ranking_for(ranker: str, terms: dict, entries: dict, subs: dict, search: str
         save_state(affects_feed=False)
     if post_url is None and search.strip():
         items = [p for p in items if matches_search(p, search)]
-    ranked = ranking.rank(ranker, mark_past_stop(items, stopping, now, post_url), now, terms, lazy=True)
+    ranked = ranking.rank(ranker, mark_past_mode_change(items, change, now, post_url), now, terms, lazy=True)
     with lock:
         for k in [k for k, c in ranked_cache.items() if now - c.built >= RANKED_TTL or c.state_version != state_version]:
             del ranked_cache[k]
         if len(ranked_cache) >= RANKED_KEPT:
             ranked_cache.pop(next(iter(ranked_cache)))
         if version == state_version:
-            ranked_cache[key] = CachedRanking(now, ranked, stop_key, version)
+            ranked_cache[key] = CachedRanking(now, ranked, change, version)
     return ranked
 
 
@@ -1417,7 +1419,7 @@ def feed(ranker: str, limit: int = MAX_ITEMS_SHOWN, terms: dict | None = None, *
         stopping = stop_state(leading, now, terms, lambda event: calendar_name(original.get(id(event), event), all_subs))
     stopping = {**stopping, "mode": mode,
                 "calendars_unreachable": unreachable_calendars(all_subs)}
-    ranked = ranking_for(ranker, terms, entries, subs, search, post_url, stopping, now)
+    ranked = ranking_for(ranker, terms, entries, subs, search, post_url, mode["until"], now)
     if post_url is not None:
         return {**post_details(ranked.source, post_url, ranker, limit, terms, now, enrich=enrich, search=search), **stopping}
     extra_count = terms["enrich_count"] if enrich else 0

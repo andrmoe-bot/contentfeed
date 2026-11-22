@@ -1,7 +1,6 @@
-// Stopping for calendar events. While an event's stop time is ahead (its start minus the Event lead
-// time setting), posts that would run past it get the "Past the stop time" points for each minute
-// they would (as of when the feed was shown: the page doesn't reorder as time passes). When it runs
-// out, the page shows the stop screen in JS: the feed is hidden behind a notice — in an event's lead
+// Stopping for calendar events: a busy event's stop time is its start minus the lead time of the mode
+// it turns on. (Posts that would run past the next mode change get points for it in the ranking, not
+// here.) When the stop time runs out, the page shows the stop screen in JS: the feed is hidden behind a notice — in an event's lead
 // time, "stop watching now and get ready", with the event in full and a countdown to its start — and
 // the event taking place now, if any, with a countdown to its end; playback is force-stopped and an
 // audio alert sounds (see forceStop). Since the feed itself is still served, switching back to the
@@ -30,7 +29,7 @@ function stopNote(data) {
     return `Stopped${until}${events.length ? ` for ${events.join(", then ")}` : ""}`;
   }
   const event = data.stop_event ? ` for “${data.stop_event.title}”` : "";
-  return `Stopping at ${when(data.stop_at)}${event} (${inTime(data.stop_at)}) · posts that would run past it are pushed down`;
+  return `Stopping at ${when(data.stop_at)}${event} (${inTime(data.stop_at)})`;
 }
 
 let lastStop = null;  // the stop fields of the last feed response

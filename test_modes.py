@@ -390,6 +390,15 @@ class GlobalTermsTests(ServerTestCase):
         server.load_settings()
         self.assertEqual(server.global_terms, GLOBAL)
 
+    def test_the_past_stop_points_become_the_past_mode_change_points(self):
+        old = {k: v for k, v in ranking.DEFAULT_TERMS.items() if k != "past_mode_change_per_minute"}
+        mode = {"name": "Work", "when": {"busy": True}, "terms": dict(old, past_stop_per_minute=-7)}
+        self.load({"version": 4, "global": {}, "modes": [mode]})
+        self.assertEqual(server.mode_terms("Work")["past_mode_change_per_minute"], -7)
+        self.assertNotIn("past_stop_per_minute", server.mode_terms("Work"))
+        self.load({"version": 2, "terms": dict(old, past_stop_per_minute=-3), "modes": []})
+        self.assertEqual(server.mode_terms("Normal")["past_mode_change_per_minute"], -3)
+
     def test_bad_or_partial_saved_global_settings(self):
         modes = [{"name": "Work", "when": {}, "terms": dict(ranking.DEFAULT_TERMS, event_lead_minutes=15)}]
         # Unknown settings and mode settings there are dropped: the lead time stays the mode's.
