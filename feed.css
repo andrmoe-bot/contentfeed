@@ -96,6 +96,21 @@ p { margin: 0; color: var(--muted); display: -webkit-box; -webkit-line-clamp: 3;
   body.panel-open { padding-bottom: 50vh; }
 }
 :root { --panel: 380px; }
+/* On large screens the panel takes the room the feed doesn't need, up to 1200px, keeping the feed's
+   720px column and its margins: modes beside their calendar toggles, and the groups of settings in
+   as many columns as fit. */
+@media (min-width: 1140px) {
+  :root { --panel: clamp(380px, 100vw - 760px, 1200px); }
+}
+@media (min-width: 1400px) {
+  #panel { grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 24px; padding: 16px 24px 24px; }
+  #panel > * { grid-column: 1 / -1; }
+  #panel > .modes { grid-column: 1; grid-row: 2; }
+  #panel > #mode-hint { grid-column: 1; grid-row: 3; }
+  #panel > #mode-when { grid-column: 2; grid-row: 2 / span 2; align-self: start; }
+  #settings { grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); align-items: start; gap: 12px; }
+  #mode-settings { max-width: 70ch; }
+}
 .panel-head { display: flex; align-items: center; justify-content: space-between; }
 .panel-head h2 { font-size: 16px; margin: 0; }
 #panel-close { padding: 2px 10px; font-size: 18px; line-height: 1.2; }
@@ -125,18 +140,6 @@ p { margin: 0; color: var(--muted); display: -webkit-box; -webkit-line-clamp: 3;
 #panel-status { margin: 0; font-size: 13px; color: var(--muted); }
 #panel-status.error { color: var(--error); }
 nav button { padding: 0; border: 0; background: none; color: var(--accent); font-size: 14px; }
-/* The stop-watching timer stays compact in the nav row, not a whole header row of its own */
-#stop-notice { max-width: 720px; margin: 16px auto 0; padding: 10px 16px; display: flex; flex-wrap: wrap; gap: 4px 10px;
-  align-items: center; background: var(--card); border: 1px solid var(--border); border-radius: 12px; color: var(--text);
-  -webkit-line-clamp: none; }
-#stop-notice button { padding: 2px 8px; font-size: 13px; border-radius: 6px; }
-#stop-notice .ongoing { flex: 1 0 100%; }
-#stop-notice .ongoing .source { color: var(--muted); font-size: 13px; }
-#stop-notice .ongoing h2 { margin: 2px 0 4px; font-size: 18px; }
-#stop-notice .ongoing .countdown { font-weight: 600; font-variant-numeric: tabular-nums; }
-#stop-notice .ongoing .description { margin: 6px 0; white-space: pre-line; }
-/* The stop screen hides the feed but keeps it in the page, so switching back is seamless */
-#feed.stopped { display: none; }
 nav button:hover { text-decoration: underline; }
 nav button[aria-expanded="true"] { font-weight: 600; }
 .play::after {

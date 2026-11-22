@@ -209,8 +209,8 @@ class PlaylistIntegrationTests(server_tests.FeedCacheTests):
 
     def test_saved_playlist_changes_scores_and_survives_feed_refresh(self):
         import ranking
-        first = dict(self.post, youtube='a', title='First', url='https://www.youtube.com/watch?v=a')
-        second = dict(self.post, youtube='b', title='Second', url='https://www.youtube.com/watch?v=b')
+        first = dict(self.post, youtube='a', title='First', url='https://www.youtube.com/watch?v=a', video_metadata_checked=1)
+        second = dict(self.post, youtube='b', title='Second', url='https://www.youtube.com/watch?v=b', video_metadata_checked=1)
         self.post = first
         entry = server.subscriptions[self.url]
         entry.update(feed_url='https://www.youtube.com/feeds/videos.xml?channel_id=UCabc', items=[second, first])
@@ -236,8 +236,8 @@ class PlaylistIntegrationTests(server_tests.FeedCacheTests):
         self.assertIsNone(ranked['b']['series_first'])
 
     def test_latest_tag_disables_playlist_score_adjustments(self):
-        first = dict(self.post, youtube='a', title='First', url='https://www.youtube.com/watch?v=a')
-        second = dict(self.post, youtube='b', title='Second', url='https://www.youtube.com/watch?v=b')
+        first = dict(self.post, youtube='a', title='First', url='https://www.youtube.com/watch?v=a', video_metadata_checked=1)
+        second = dict(self.post, youtube='b', title='Second', url='https://www.youtube.com/watch?v=b', video_metadata_checked=1)
         server.FEEDS_FILE.write_text(self.url + ' latest')
         server.subscriptions[self.url].update(items=[second, first], youtube_playlists=[{'id': 'PL', 'videos': ['a', 'b']}])
         ranked = {p['youtube']: p for p in server.feed('score')['items']}

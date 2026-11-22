@@ -17,11 +17,10 @@ import server
 
 
 def normal(settings=None):
-    """The settings in effect in the Normal mode, its own and the global ones: in the server, or in
-    settings as saved or served."""
+    """The settings in effect in the Normal mode: in the server, or in settings as saved or served."""
     if settings is None:
         return server.terms_for('Normal')
-    return {**next(m['terms'] for m in settings['modes'] if m['name'] == 'Normal'), **settings['global']}
+    return next(m["terms"] for m in settings["modes"] if m["name"] == "Normal")
 
 
 class SimilaritySettingsTests(unittest.TestCase):
@@ -38,9 +37,6 @@ class SimilaritySettingsTests(unittest.TestCase):
         # One mode, on whatever the calendar holds, whose settings are ranking.TERMS.
         patcher = patch.object(server, 'modes', [{'name': 'Normal', 'when': dict.fromkeys(server.SITUATIONS, True),
                                                   'terms': ranking.TERMS}])
-        patcher.start()
-        self.addCleanup(patcher.stop)
-        patcher = patch.object(server, 'global_terms', ranking.split_terms(ranking.DEFAULT_TERMS)[1])
         patcher.start()
         self.addCleanup(patcher.stop)
 
@@ -132,10 +128,11 @@ class SimilaritySettingsTests(unittest.TestCase):
                 self.assertEqual(defaults['similar_publish_weight'], 1)
                 self.assertEqual(defaults['similar_length_weight'], 0)
                 self.assertNotIn('event_bonus', defaults)  # events aren't feed items, so no event terms
+                self.assertNotIn('enrich_count', defaults)  # details are fetched for every page
                 self.assertEqual(defaults['task_bonus'], 0)
                 self.assertEqual(defaults['event_lead_minutes'], 0)
                 self.assertEqual(defaults['task_deadline_bonus'], 200)
-                for key in ('similar_penalty', 'above_similarity_penalty', 'enrich_count', 'task_priority_bonus'):
+                for key in ('similar_penalty', 'above_similarity_penalty', 'task_priority_bonus'):
                     self.assertEqual(defaults[key], 0, key)  # off unless you turn them on
                 self.assertIsNone(candidate()['similar'])
                 on = dict(defaults, similar_penalty=-40)

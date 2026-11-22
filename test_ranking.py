@@ -9,7 +9,7 @@ import ranking
 
 NOW = 2_000_000
 # These tests were written with both similarity penalties and page-load fetching on; they're off by default.
-TERMS_ON = dict(ranking.DEFAULT_TERMS, similar_penalty=-40, above_similarity_penalty=-15, enrich_count=5)
+TERMS_ON = dict(ranking.DEFAULT_TERMS, similar_penalty=-40, above_similarity_penalty=-15)
 
 
 def item(url, sub=None, age=None, date=NOW):

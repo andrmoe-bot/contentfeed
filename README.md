@@ -116,10 +116,8 @@ It can also be a blog or news page without a feed (see Pages without a feed), a 
 (see NRK TV), an author on arXiv or Google Scholar (see Authors), the papers citing a paper (see Citations)
 or a Jellyfin server (see Jellyfin).
 Incomplete tasks appear as cards; events don't — they take place when scheduled, not whenever the
-feed happens to show them, so they only stop watching (see Stop watching):
-every busy event that hasn't ended acts as a stop time when it begins, at its start minus the lead
-time of the mode it turns on (see Modes), so posts you couldn't finish before then are pushed down. Events marked free
-(not busy) and all-day events don't stop watching; events can turn a mode on (see Modes). The score panel
+feed happens to show them, so they only turn modes on (see Modes), such as a mode with a post limit
+of 0 during busy events to stop watching for meetings. The score panel
 controls task urgency during the final 30 days before a deadline. Tasks also get the
 similar-posts-above penalty against other tasks in the same calendar, and the fixed Task term
 adds points to every task (default 0). The Task priority term gives a task points by its
@@ -325,39 +323,9 @@ viewed it.
 The feed's order changes only when you load the page, change a setting or the mode, or
 search, and then the page shows the top of the feed; "Show more" adds the next posts below the ones
 shown. Otherwise nothing moves while you're watching: the page checks the server in the background
-and updates each card's score, tag and viewed time (and the status line and stop state) in place.
+and updates each card's score, tag and viewed time (and the status line) in place.
 New posts and new scores take effect in the order the next time you reload. Playing a video stops
 the one playing in another card.
-
-## Stop watching
-
-Calendar events stop watching. Every busy event that hasn't ended has a stop time when it begins:
-at its start minus the **Lead time** of the mode it turns on, the highest mode on during busy events
-(see Modes), or at its start if no mode is (0 minutes by default). The earliest stop counts. So with
-dinner at 19:00 and a Meeting mode on during busy events with a lead time of 30 minutes, Meeting mode
-turns on at 18:30 and the stop time is 18:30. Events marked free (not busy) don't stop watching, though they can turn a mode on (see
-Modes). All-day events, such as birthdays and holidays, don't stop watching either, as they would
-stop the feed for the whole day. Events never appear as feed cards, and ended events don't stop
-watching anymore.
-
-The status line shows the stop time, the event and how long is left, such as "Stopping at 18:30
-for “Dinner” (in 2 h 15 min)"; times on another day say which ("tomorrow 08:30"). Posts that would
-run past the stop are pushed down only when the mode changes then, as it does when a mode is on
-during busy events (see Modes).
-
-When the stop time runs out, the page shows the stop screen: the feed is hidden behind a notice
-saying to stop watching now and get ready for the event, with the event in full — its calendar,
-title, start and end, description and link — and a countdown to its start. Any video or other
-media playing is force-stopped, and a short audio alert sounds once per stop. If an event is taking
-place right now, the stop screen shows it with a countdown to when it's over (of several, the one
-that ends first); when a countdown reaches zero the page checks again at once instead of waiting
-for the next poll. The feed stays stopped until every event whose stop time has come is over,
-including one whose lead time begins before then, such as lunch right after a meeting: the stop
-screen then shows the meeting and, as up next, lunch, and the status line says "Stopped until 13:30
-for “Meeting”, then “Lunch”". The feed itself is still served, so once the event is over the page switches
-straight back to the feed with nothing rebuilt. While a stop time is in effect the page polls every
-10 seconds, and the page checks again just after each change it knows is coming (the stop time,
-the feed returning, the mode changing), so these show within a second or so.
 
 ## Tags
 
@@ -373,8 +341,8 @@ next up. Items start untagged; click the dot of an item's tag again to remove th
 
 ## Modes
 
-The feed's settings belong to modes, such as Work with a post limit of 0 for an empty page, or one
-with points for tasks. At first there's one, Normal, with the default settings, on in free time. It's
+The feed's settings belong to modes, such as Meeting, on during busy events with a post limit of 0
+for an empty page, or one with points for tasks. At first there's one, Normal, with the default settings, on in free time. It's
 an ordinary mode: change, move or remove it like any other. The Mode list
 at the top of the settings panel shows Auto and your modes; **New mode…** adds one, starting as a
 copy of the settings shown (or the defaults), and you change it like any other. Picking a mode in the
@@ -391,7 +359,7 @@ down with the ↑ and ↓ buttons.
 
 Each mode's **Lead time** (under **Mode changes**, 0 by default) turns it on that long before
 an event it's on for starts, so you're ready when it does: a Meeting mode with a lead time of 30
-minutes turns on at 09:30 for a 10:00 meeting, and as meetings are busy, watching stops then too. An
+minutes turns on at 09:30 for a 10:00 meeting; with a post limit of 0, the feed empties then. An
 event's lead time is that of the highest mode on during events of its kind, busy or free, and free
 time ends when it begins. Free time itself doesn't use a lead time.
 
@@ -405,26 +373,21 @@ exempt, so reloading while you watch doesn't push it down. Posts without an esti
 tasks get no points, and neither does anything while you've picked a mode, as it doesn't change. To
 leave posts out altogether, use the post limit (see Ranking).
 
-One setting is the same in every mode, under **All modes** in the panel: **Fetch details**. Changing
-it in one mode changes it for all, and it applies when no mode is on. Reset only resets the shown
-mode's own settings.
-
 When no mode is on, the feed is empty and says so, as does the status line ("No mode on"), and the
-panel shows only the settings for all modes until you pick a mode. A subscription's page and a
-post's page still list posts then, ranked with the default settings, and events stop watching with
-their lead times as usual.
+panel shows no settings until you pick a mode. A subscription's page and a
+post's page still list posts then, ranked with the default settings.
 
 The panel always shows and changes the settings of the mode in effect, and the status line names
 it. Following the calendar, the status line says when the mode next changes and to what ("Work
-mode until 17:00, then Busy", or "No mode on until 09:00"), looking a week ahead, and leaves out a
-stop time that comes after that. A change is when the mode in effect becomes another, not just when
+mode until 17:00, then Busy", or "No mode on until 09:00"), looking a week ahead; the page checks again just after then. A change is when the mode in effect becomes another, not just when
 an event starts or ends: back-to-back work blocks count as one, and a meeting starting during a
 work block ends Work then if a mode for busy events is higher in the list. When the mode changes,
-such as when a work block starts, the feed is shown again from the top. Remove deletes the mode
+such as when a work block starts, the feed is shown again from the top, any video or other media
+playing is stopped, and a short alert sounds, on every page; changing the mode yourself in the panel
+does neither. Remove deletes the mode
 shown and its settings. Modes are saved in `settings.json`.
 Settings saved before Normal was a mode become the Normal mode, at the bottom of the list, on in
-free time; settings saved before Fetch details was the same in every mode take it from the Normal
-mode, else the first mode, and each mode keeps the lead time it had; modes saved with the earlier title patterns are on during free events, unless the
+free time; each mode keeps the lead time it had; the old global Fetch details setting is ignored; modes saved with the earlier title patterns are on during free events, unless the
 pattern was empty; and a mode's Past the stop time points, from before they were for the mode change,
 become its Past the mode change points.
 
@@ -448,7 +411,7 @@ All scoring terms add their configured signed points; negative values subtract p
 - 0 (off) × the **sum** over everything you opened recently of similarity × the fraction of the 24-hour window remaining since opening; each match contributes on its own, not just the strongest (see below)
 - 0 for its media type: video (YouTube, Jellyfin, NRK TV, pages with a video file), image (a link straight to a picture) or
   article (anything else). Each has its own setting, which may be negative, to favor or hold back that type.
-- 0 per **minute away from the target content length** by default. Content length adds `weight × |estimated minutes − target minutes|`. Set a negative weight to favor content near the target, or a positive weight to favor content farther away. The target defaults to 0 minutes, preserving existing scores; both the weight and target are configurable in Settings. Runtime metadata is used where available; text is estimated at 200 words per minute (at least one minute). Feed text may be only an excerpt, and page estimates can include surrounding text. Unknown lengths have no adjustment. When the site loads, the highest-ranked posts with incomplete data can be updated in the background, regardless of score weights; this is off by default. YouTube updates fetch runtime and exact publication time together. Set how many with “Fetch details” in Settings, the same in every mode (0–100; 0, the default, turns it off). Routine polling does not start additional batches; unavailable data stays unknown and recent attempts are skipped for six hours.
+- 0 per **minute away from the target content length** by default. Content length adds `weight × |estimated minutes − target minutes|`. Set a negative weight to favor content near the target, or a positive weight to favor content farther away. The target defaults to 0 minutes, preserving existing scores; both the weight and target are configurable in Settings. Runtime metadata is used where available; text is estimated at 200 words per minute (at least one minute). Feed text may be only an excerpt, and page estimates can include surrounding text. Unknown lengths have no adjustment. A post whose length or exact publication time is missing stays out of the main feed until its details have been fetched; the server fetches them in the background as soon as it sees the post, and the status line says how many posts are waiting ("3 posts waiting for details"). If the details turn out to be unavailable, the post enters without them. Posts whose details can't be fetched (tasks, Jellyfin, Google Scholar) enter at once, and a subscription's page lists every post. Fetches wait in a queue per site and run one request at a time per site, so a site with many posts to fetch doesn't hold up others. When the site loads, the posts it shows that are still incomplete are fetched again if they weren't in the last six hours. YouTube updates fetch runtime and exact publication time together. Unavailable data stays unknown and recent attempts are skipped for six hours.
 - +10 if tagged "show again soon" (green), −50 if "maybe later" (white), −1000 if "don't show again" (red)
 - 0 (off) × the **sum of similarities to posts above it**. At −15, a 100% match contributes −15,
   a 50% match contributes −7.5, and two 50% matches contribute −15 together. It uses the same
@@ -532,8 +495,7 @@ Cards show the number of matches and the total similarity, such as “similarity
 100% total −15”.
 
 Ranking is computed only as far as the requested page needs, then resumed from cached state for
-“Show more”. Page-load enrichment can extend that prefix to find the configured number of
-incomplete posts; if none are eligible, it does not rank the tail looking for them.
+“Show more”.
 
 Each card's "Score" shows its points, such as
 `88% like “Egyptian Fractions”, opened 2 hours ago (same subscription, published 7 days apart), 91.67% penalty remaining −32.27`
@@ -542,7 +504,7 @@ or `in a series starting “Making a CPU, part 1”, nothing before it opened �
 Change the numbers in the score panel: click "Settings" at the top of the feed. It opens
 beside the feed on a wide screen, or along the bottom on a narrow one, and stays open across reloads
 until you close it. The settings are in groups that fold away (Feed; Opened and next up; Tags; Kind,
-length and age; Stop time; Tasks; Similarity), and each group's heading says how many of its settings
+length and age; Mode changes; Tasks; Similarity), and each group's heading says how many of its settings
 you've changed from the defaults. The browser remembers which groups you left open. Each setting has
 a box for an exact number and a slider; the sliders go in steps of 1, 1.5, 2, 3, 5 and 7 times a power
 of ten, so they cover both small and large numbers. Leave the post limit's box empty for no limit.

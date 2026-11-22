@@ -35,11 +35,9 @@ None. The similar_penalty is based on the sum, not on the strongest match alone.
 
 Nothing is hidden: items you've opened, tagged or that would run past the next mode change are scored
 differently, not removed. The one cut is the post limit term: the feed shows at most that many posts
-(server.py applies it; 0 gives an empty feed). Once the stop time has run out, the feed itself is
-left unchanged and the response's stopped flag tells the page to show the stop screen (notice,
-playback force-stopped, alert), so it can switch back seamlessly. Calendar events are not feed items
-at all — they take place when scheduled — so subscriptions keep them apart from their posts, and
-they reach the feed only as stop times through effective_stop.
+(server.py applies it; 0 gives an empty feed, such as in a mode on during busy events). Calendar
+events are not feed items at all — they take place when scheduled — so subscriptions keep them apart
+from their posts, and they reach the feed only by turning modes on (see server.active_mode).
 
 A ranker registered with spread=True penalizes similarity to posts above it (see rank).
 
@@ -78,7 +76,7 @@ DEFAULT_TERMS = {
     "similar_days": 30,  # posts from the same subscription are alike if published within this many days
     "series_penalty": -30,  # added to a later part of a series when you haven't opened anything before it
     "above_similarity_penalty": 0,  # added per 100% similarity to each post above it
-    "event_lead_minutes": 0,  # a mode turns on, and watching stops, this many minutes before an event it's on for
+    "event_lead_minutes": 0,  # a mode turns on this many minutes before an event it's on for
     "task_deadline_bonus": 200,  # maximum points for a task due now
     "task_bonus": 0,  # fixed points added to every task
     "task_priority_bonus": 0,  # points for a priority-1 task, scaled down to 1/9 of them at priority 9
@@ -89,7 +87,6 @@ DEFAULT_TERMS = {
     "video_bonus": 0,  # for each media type (see media_type); below 0 is a penalty
     "image_bonus": 0,
     "article_bonus": 0,
-    "enrich_count": 0,  # highest-ranked incomplete posts to enrich on page load
     "length_per_minute": 0,  # signed points per minute away from the target length
     "length_target_minutes": 0,  # target runtime or reading time; 0 preserves the original linear score
     "age_per_year": 0,  # signed points per fractional 365-day year since publication (or addition for links)
@@ -97,15 +94,6 @@ DEFAULT_TERMS = {
     "post_limit": 10_000_000,  # most posts the feed shows; the maximum (LIMIT) means no limit, 0 an empty feed
 }
 TERMS = dict(DEFAULT_TERMS)
-# Terms that apply whatever the mode: how many posts to fetch details for. The rest belong to each mode
-# (see server.modes).
-GLOBAL_TERMS = frozenset({"enrich_count"})
-
-
-def split_terms(terms: dict) -> tuple[dict, dict]:
-    """(a mode's terms, the global terms) of a set of terms (see GLOBAL_TERMS)."""
-    return ({k: v for k, v in terms.items() if k not in GLOBAL_TERMS},
-            {k: v for k, v in terms.items() if k in GLOBAL_TERMS})
 # Every scoring coefficient is signed; windows, similarity parameters and counts are not.
 SIGNED = {
     "next_up_bonus", "seen_bonus", "new_sub_bonus", "series_penalty", "similar_penalty",
@@ -119,8 +107,8 @@ LIMIT = 10_000_000
 TAGS = {"green": "show again soon", "white": "maybe later", "red": "don't show again"}
 # Each term's allowed values, which the score panel also gets, to check what you type.
 TERM_LIMITS = {key: {"min": -LIMIT if key in SIGNED else 0,
-                     "max": 100 if key in ("similar_base_percent", "similar_series_percent", "enrich_count") else LIMIT,
-                     "integer": key in ("enrich_count", "post_limit")}
+                     "max": 100 if key in ("similar_base_percent", "similar_series_percent") else LIMIT,
+                     "integer": key == "post_limit"}
                for key in DEFAULT_TERMS}
 
 
@@ -168,64 +156,6 @@ def valid_minutes(value) -> bool:
     """Only positive, finite numeric estimates can contribute to length similarity."""
     return (isinstance(value, (int, float)) and not isinstance(value, bool)
             and math.isfinite(value) and value > 0)
-
-
-def stops_watching(event: dict) -> bool:
-    """Whether a calendar item is an event that stops watching: busy, at a time of day. Events marked
-    free, such as time set off for work, can turn modes on instead (see server.active_mode), and all-day
-    events, such as birthdays, would stop the feed for the whole day."""
-    return (event.get("calendar_kind") == "event" and not event.get("free") and not event.get("all_day")
-            and event.get("calendar_start") is not None)
-
-
-def _stops(events: list[dict], now: float, terms: dict) -> list[tuple[float, float, dict]]:
-    """(stop, end, event) for each event that stops watching and hasn't ended, earliest stop first.
-    An event stops watching when it begins: at "begins", where the server puts the start minus the
-    lead time of the mode the event turns on (see server.with_leads), else at its start minus the
-    lead time setting in terms. An event without an end ends when it starts."""
-    lead = terms["event_lead_minutes"] * 60
-    out = []
-    for it in events:
-        if not stops_watching(it):
-            continue
-        start = it["calendar_start"]
-        end = it.get("deadline") or start
-        if end > now:  # ended events don't stop watching anymore
-            out.append((it.get("begins", start - lead), end, it))
-    return sorted(out, key=lambda s: s[0])
-
-
-def effective_stop(events: list[dict], now: float, terms: dict):
-    """The stop-watching state: (stop, event), or (None, None) when nothing stops watching: the earliest
-    stop of the events that stop watching (see _stops), and the event that causes it. A stop in the
-    past means the time has run out: watching should stop now."""
-    stops = _stops(events, now, terms)
-    return (stops[0][0], stops[0][2]) if stops else (None, None)
-
-
-def stopped_until(events: list[dict], now: float, terms: dict) -> tuple[float | None, dict | None]:
-    """While watching is stopped: (when the feed returns, the next event to start), else (None, None).
-    The feed returns when every event whose stop has come has ended, including events whose lead time
-    begins before then, such as lunch right after a meeting. The next event is the first of those
-    that hasn't started yet, if any."""
-    until, upcoming = None, None
-    for stop, end, event in _stops(events, now, terms):
-        if stop > (now if until is None else until):
-            break
-        until = max(until or end, end)
-        if upcoming is None and event["calendar_start"] > now:
-            upcoming = event
-    return until, upcoming
-
-
-def ongoing_event(events: list[dict], now: float) -> dict | None:
-    """The event taking place now (started, not yet ended), or None. Of several, the one that ends
-    first, so the next one shows once it's over. Events without an end take no time, so they're
-    never ongoing, and only events that stop watching count (see stops_watching)."""
-    ongoing = [it for it in events if stops_watching(it)
-               and it.get("calendar_start") is not None and it.get("deadline") is not None
-               and it["calendar_start"] <= now < it["deadline"]]
-    return min(ongoing, key=lambda it: it["deadline"]) if ongoing else None
 
 
 def minutes_past(item: dict, now: float, at: float | None) -> int | None:
@@ -574,7 +504,7 @@ def _similarity_reasons(item: dict, terms: dict) -> Reasons:
 
 def _task_score(item: dict, now: float, terms: dict) -> Reasons:
     """Score calendar tasks under their own rules: deadline urgency, priority, similarity to recently
-    opened tasks, the fixed task term and its tag. (Events aren't feed items; see effective_stop.)"""
+    opened tasks, the fixed task term and its tag. (Events aren't feed items.)"""
     due = item.get("deadline")
     reasons = []
     if due is not None:
@@ -655,25 +585,12 @@ class RankedItems:
         self.total = len(source)
         self.lock = threading.Lock()
 
-    def read(self, limit: int, extra_count: int = 0, match_key=None) -> tuple[list[dict], list[dict]]:
-        """Extend to the page size and, optionally, the highest-ranked eligible matches.
-
-        Count eligible source keys first so a page with no missing metadata never consumes
-        the whole ranking just to discover there is nothing to enrich.
-        """
+    def read(self, limit: int) -> list[dict]:
+        """The first limit items, extending the cached prefix as needed."""
         with self.lock:
-            matched = set()
-            target = 0
-            if extra_count and match_key:
-                possible = {key for it in self.source if (key := match_key(it)) is not None}
-                target = min(extra_count, len(possible))
-                matched = {key for it in self.items if (key := match_key(it)) is not None}
-            while len(self.items) < min(limit, self.total) or len(matched) < target:
-                it = next(self.iterator)
-                self.items.append(it)
-                if target and (key := match_key(it)) is not None:
-                    matched.add(key)
-            return self.items[:limit], list(self.items) if extra_count else []
+            while len(self.items) < min(limit, self.total):
+                self.items.append(next(self.iterator))
+            return self.items[:limit]
 
 
 def rank(name: str, items: list[dict], now: float, terms: dict | None = None,

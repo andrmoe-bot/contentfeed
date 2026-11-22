@@ -13,6 +13,7 @@ channels and playlists, older videos than the feed lists are loaded once (see fe
 """
 
 import argparse
+import collections
 import functools
 import gzip
 import hashlib
@@ -109,7 +110,7 @@ CONTENT_TYPES = {".html": "text/html; charset=utf-8", ".css": "text/css; charset
 PAGES = {  # request path -> file
     "/": "index.html", "/subscription": "index.html", "/subscription/next-up": "index.html", "/post": "index.html",
     "/subscriptions": "subscriptions.html",
-    **{"/" + name: name for name in ("style.css", "common.js", "feed.css", "feed.js", "stop.js", "settings.js",
+    **{"/" + name: name for name in ("style.css", "common.js", "feed.css", "feed.js", "settings.js",
                                      "subscriptions.css", "subscriptions.js")},
 }
 MAX_BYTES = 1_000_000
@@ -123,15 +124,11 @@ cache: dict[str, dict] = {}
 added: dict[str, float] = {}  # url -> unix time the server first saw the link
 viewed: dict[str, float] = {}  # url -> unix time you last opened it
 colors: dict[str, str] = {}  # url -> the tag you gave it (see ranking.TAGS); most items have none
-# Modes, each with its own settings, saved in settings.json with the global settings, which apply
-# whatever the mode (see ranking.GLOBAL_TERMS). With no mode on, the feed is empty.
+# Modes, each with its own settings, saved in settings.json. With no mode on, the feed is empty.
 def starting_modes() -> list[dict]:
     """The modes before you change any: Normal, with the default settings, on in free time."""
     return [{"name": "Normal", "when": {"busy": False, "not_busy": False, "free_time": True},
-             "terms": ranking.split_terms(ranking.DEFAULT_TERMS)[0]}]
-
-
-global_terms: dict = ranking.split_terms(ranking.DEFAULT_TERMS)[1]  # the same in every mode
+             "terms": dict(ranking.DEFAULT_TERMS)}]
 
 
 modes: list[dict] = starting_modes()  # [{"name", "when": {situation: bool}, "terms": the mode's own}], highest priority first
@@ -346,15 +343,45 @@ def job(prefix: str):
     return wrap
 
 
-def submit_once(work, arg, *args, unless=None) -> bool:
-    """Queue a job unless it's already pending or unless() (called with lock held) is true."""
+def submit_once(work, arg, *args, unless=None, site: str | None = None) -> bool:
+    """Queue a job unless it's already pending or unless() (called with lock held) is true. With a
+    site, the job waits in that site's queue (see site_queues) instead of the shared executor."""
     key = work.key(arg)
     with lock:
         if key in pending or (unless is not None and unless()):
             return False
         pending.add(key)
-    executor.submit(work, arg, *args)
+        if site is not None:
+            queue = site_queues.get(site)
+            start = queue is None
+            if start:
+                queue = site_queues[site] = collections.deque()
+            queue.append((work, arg, args))
+    if site is None:
+        executor.submit(work, arg, *args)
+    elif start:
+        threading.Thread(target=work_through, args=(site,), daemon=True).start()
     return True
+
+
+# Fetches of a post's details wait in a queue per site, each worked through by a thread of its own
+# while it has jobs. outbound paces requests to a site one at a time anyway, so a site with hundreds
+# of posts to fetch, such as YouTube, only delays its own fetches, not other sites' or the executor's.
+site_queues: dict[str, collections.deque] = {}
+
+
+def work_through(site: str):
+    while True:
+        with lock:
+            queue = site_queues[site]
+            if not queue:
+                del site_queues[site]
+                return
+            work, arg, args = queue.popleft()
+        try:
+            work(arg, *args)
+        except Exception as e:  # like the executor, carry on with the next job
+            print(f"Fetching details from {site} failed: {e}")
 
 
 def run_now(work, arg, *args):
@@ -373,7 +400,7 @@ def refresh(url: str):
 
 
 def schedule(url: str, force: bool = False):
-    submit_once(refresh, url, unless=lambda: url in cache and not force)
+    submit_once(refresh, url, unless=lambda: url in cache and not force, site=urlparse(url).netloc.lower())
 
 
 def post_key(post: dict) -> str:
@@ -769,7 +796,7 @@ def update_video_metadata(video: str):
 
 
 def schedule_video_metadata(video: str):
-    submit_once(update_video_metadata, video)
+    submit_once(update_video_metadata, video, site="www.youtube.com")
 
 
 def set_color(url: str, color: str) -> bool:
@@ -802,11 +829,11 @@ def mark_older_red(url: str, age: float) -> int | None:
 
 
 def settings() -> dict:
-    """The settings panel's data: the modes with their own settings, the global settings, the active
-    mode and how it was chosen (see active_mode), and the defaults and limits."""
+    """The settings panel's data: the modes with their settings, the active mode and how it was chosen
+    (see active_mode), and the defaults and limits."""
     with lock:
         mode = active_mode(calendar_events(list(subscriptions)), time.time())
-        return {"modes": [mode_data(m) for m in modes], "global": dict(global_terms),
+        return {"modes": [mode_data(m) for m in modes],
                 "mode": mode, "defaults": ranking.DEFAULT_TERMS, "limits": ranking.TERM_LIMITS}
 
 
@@ -819,26 +846,26 @@ def find_mode(name: str) -> dict | None:
 
 
 def mode_terms(name: str | None) -> dict | None:
-    """A mode's own settings, without the global ones, or None if there's no such mode. Call with lock held."""
+    """A copy of a mode's settings, or None if there's no such mode. Call with lock held."""
     mode = find_mode(name) if name else None
-    return ranking.split_terms(mode["terms"])[0] if mode else None
+    return dict(mode["terms"]) if mode else None
 
 
 def terms_for(name: str | None) -> dict:
-    """All the terms in effect in a mode: its own and the global ones. With no such mode, as when none
-    is on, the defaults with the global ones. Call with lock held."""
-    return {**ranking.DEFAULT_TERMS, **(mode_terms(name) or {}), **global_terms}
+    """The terms in effect in a mode: its own. With no such mode, as when none is on, the defaults.
+    Call with lock held."""
+    return {**ranking.DEFAULT_TERMS, **(mode_terms(name) or {})}
 
 
 # The calendar situations a mode can be on in (its toggles, all off for a new mode): during a busy
 # event, during a free (not busy) event, and in free time, when no event takes place. All-day events,
-# such as birthdays, don't count, as for stopping watching (see ranking.stops_watching).
+# such as birthdays, don't count (see is_timed).
 SITUATIONS = ("busy", "not_busy", "free_time")
 
 
 def mode_data(mode: dict) -> dict:
     """A mode as saved and sent to the panel."""
-    return {"name": mode["name"], "when": dict(mode["when"]), "terms": ranking.split_terms(mode["terms"])[0]}
+    return {"name": mode["name"], "when": dict(mode["when"]), "terms": dict(mode["terms"])}
 
 
 def when_error(when) -> str | None:
@@ -879,8 +906,8 @@ def event_lead(event: dict, preview: tuple[str, dict] | None = None) -> float:
 
 def with_leads(events: list[dict], preview: tuple[str, dict] | None = None) -> list[dict]:
     """The events, with each timed one (see is_timed) beginning its lead time early (see event_lead):
-    a copy with "begins", its start minus the lead. The mode it turns on is on from then, it stops
-    watching from then if busy (see ranking._stops), and free time ends then. Call with lock held."""
+    a copy with "begins", its start minus the lead. The mode it turns on is on from then, and free
+    time ends then. Call with lock held."""
     return [dict(e, begins=e["calendar_start"] - event_lead(e, preview)) if is_timed(e) else e for e in events]
 
 
@@ -934,9 +961,7 @@ def active_mode(events: list[dict], now: float) -> dict:
     in the panel, if any ("source": "chosen"); else the mode the calendar turns on (see calendar_mode;
     "calendar", with the situation and the event's title, if any); else none ("name": None, "source":
     "none"), and the feed is empty. Following the calendar, until is when the mode next changes and
-    next the mode then (see next_mode_change); a chosen mode stays until you choose another. Free events
-    don't stop watching (see ranking.effective_stop), but busy ones do, so a mode on during them
-    applies while watching is stopped. Events begin their lead time early (see with_leads). Call with
+    next the mode then (see next_mode_change); a chosen mode stays until you choose another. Events begin their lead time early (see with_leads). Call with
     lock held."""
     chosen = mode_choice.get("name")
     if chosen and find_mode(chosen):
@@ -952,15 +977,14 @@ def active_mode(events: list[dict], now: float) -> dict:
 def write_settings():
     """Save the modes and the mode you chose to settings.json."""
     with lock:
-        data = {"version": SETTINGS_VERSION, "global": dict(global_terms), "modes": [mode_data(m) for m in modes],
+        data = {"version": SETTINGS_VERSION, "modes": [mode_data(m) for m in modes],
                 "mode_choice": mode_choice.get("name")}
     save_json(SETTINGS_FILE, data)
 
 
 def save_settings(terms, mode: str | None = None) -> str | None:
-    """Set the terms from the feed's settings panel: all of them, the global ones for every mode and
-    the rest for a mode (by default, the mode in effect; with no mode on, only the global ones are
-    saved). Returns an error message, or None."""
+    """Set a mode's terms from the feed's settings panel: all of them, for the mode in effect by default.
+    Returns an error message, or None."""
     try:
         checked = ranking.check_terms(terms if isinstance(terms, dict) else {})
     except ValueError as e:
@@ -968,13 +992,12 @@ def save_settings(terms, mode: str | None = None) -> str | None:
     with lock:
         if mode is None:
             mode = active_mode(calendar_events(list(subscriptions)), time.time())["name"]
-        target = find_mode(mode) if mode is not None else None
-        if mode is not None and target is None:
+        if mode is None:
+            return "no mode is on, so there are no settings to save"
+        target = find_mode(mode)
+        if target is None:
             return f"there's no mode called {mode}"
-        own, shared = ranking.split_terms(checked)
-        global_terms.update(shared)
-        if target is not None:
-            target["terms"].update(own)
+        target["terms"].update(checked)
     write_settings()
     return None
 
@@ -1001,7 +1024,7 @@ def add_mode(name, copy_from: str | None = None) -> str | None:
         if error:
             return error
         name = name.strip()
-        modes.append({"name": name, "when": dict.fromkeys(SITUATIONS, False), "terms": mode_terms(copy_from) or ranking.split_terms(ranking.DEFAULT_TERMS)[0]})
+        modes.append({"name": name, "when": dict.fromkeys(SITUATIONS, False), "terms": mode_terms(copy_from) or dict(ranking.DEFAULT_TERMS)})
         mode_choice["name"] = name
     write_settings()
     return None
@@ -1065,7 +1088,7 @@ def choose_mode(name) -> str | None:
 
 # settings.json's format. Files without a version were saved before it had one; when a term is renamed
 # or changes meaning, bump the version and move saved values in migrate_terms.
-SETTINGS_VERSION = 5  # 3: the normal settings are the Normal mode's; 4: global settings; 5: past the mode change
+SETTINGS_VERSION = 6  # 3: the normal settings are the Normal mode's; 4: global settings; 5: past the mode change; 6: no global settings
 
 
 def migrate_terms(data: dict) -> dict | None:
@@ -1114,11 +1137,10 @@ def saved_when(mode: dict) -> dict:
 
 
 def load_settings():
-    """Load the modes, the global settings and the mode you chose from settings.json. Without saved
-    settings, the modes are the starting ones (see starting_modes) and the global settings the defaults.
-    Settings saved before version 3 had normal settings, used whenever no mode was on; they become the
-    Normal mode, at the bottom of the list, on in free time. Settings saved before version 4 had no
-    global settings; they're taken from the Normal mode, else the first mode."""
+    """Load the modes and the mode you chose from settings.json. Without saved settings, the modes are
+    the starting ones (see starting_modes). Settings saved before version 3 had normal settings, used
+    whenever no mode was on; they become the Normal mode, at the bottom of the list, on in free time.
+    Versions 4 and 5 also saved global settings, which are ignored."""
     data = load_json(SETTINGS_FILE)
     saved_modes = data.get("modes") if isinstance(data.get("modes"), list) else []
     with lock:
@@ -1140,18 +1162,6 @@ def load_settings():
             except ValueError as e:
                 print(f"Ignoring the normal settings in {SETTINGS_FILE}: {e}")
             modes.append(normal)
-        shared = data.get("global")
-        if not isinstance(shared, dict):  # saved before there were global settings
-            shared = (find_mode("Normal") or (modes[0] if modes else {})).get("terms") or {}
-        try:
-            shared = ranking.split_terms(complete_terms({**ranking.DEFAULT_TERMS, **shared}))[1]
-        except ValueError as e:
-            print(f"Ignoring the global settings in {SETTINGS_FILE}: {e}")
-            shared = ranking.split_terms(ranking.DEFAULT_TERMS)[1]
-        global_terms.clear()
-        global_terms.update(shared)
-        for mode in modes:
-            mode["terms"] = ranking.split_terms(mode["terms"])[0]
         mode_choice.clear()
         chosen = data.get("mode_choice")
         if isinstance(chosen, str) and find_mode(chosen):
@@ -1224,34 +1234,53 @@ class CachedRanking:
     ranked: ranking.RankedItems
     change: float | None  # the next mode change it was marked for; see ranking_for
     state_version: int
+    waiting: list[dict]  # the posts left out until their details are fetched; see ranking_for
 
 
 ranked_cache: dict[tuple, CachedRanking] = {}
 
 
-def enrichment_key(post: dict, cached: dict, pending_keys: set, now: float) -> str | None:
-    """Identify incomplete posts eligible for enrichment, using one state snapshot."""
-    if post.get("jellyfin") or post.get("scholar") or (post.get("estimated_minutes") and not post.get("date_approx")):
-        return None  # Google Scholar turns away clients that read many of its pages
+def details_job(post: dict, cached: dict) -> tuple[str, float] | None:
+    """For a post whose length or exact date is missing and can be fetched: (the fetch's job key, when
+    it was last fetched, or 0 if never). None for a complete post, or one whose details can't be
+    fetched: tasks, Jellyfin, and Google Scholar, which turns away clients that read many of its pages."""
+    if (post.get("calendar_kind") or post.get("jellyfin") or post.get("scholar")
+            or (post.get("estimated_minutes") and not post.get("date_approx"))):
+        return None
     video = post.get("youtube") if post.get("kind") == "subscription" else None
-    key = "video:" + video if video else post["url"]
     metadata = cached.get(post["url"], {})
     checked = post.get("video_metadata_checked", 0) if video else (
         metadata.get("fetched", 0) if metadata.get("length_version") == 1 else 0)
+    return ("video:" + video if video else post["url"]), checked
+
+
+def awaiting_details(post: dict, cached: dict) -> bool:
+    """Whether a post's details haven't been fetched yet, which keeps it out of the main feed until they
+    have. A post whose details turned out to be unavailable enters the feed without them."""
+    job = details_job(post, cached)
+    return job is not None and not job[1]
+
+
+def enrichment_key(post: dict, cached: dict, pending_keys: set, now: float) -> str | None:
+    """The job key to fetch an incomplete post's details: never fetched, or not for six hours. None if
+    it's complete, can't be fetched, or is being fetched."""
+    job = details_job(post, cached)
+    if job is None:
+        return None
+    key, checked = job
     if key in pending_keys or (checked and now - checked < 6 * 3600):
         return None
     return key
 
 
-def enrich_posts(ranked: list[dict], count: int):
-    """Schedule the highest-ranked incomplete posts once for this page load."""
+def enrich_posts(ranked: list[dict]):
+    """Fetch the details of incomplete posts (see enrichment_key), in their sites' queues (see
+    site_queues)."""
     with lock:
         cached, pending_keys = dict(cache), set(pending)
     seen = set()
     now = time.time()
     for post in ranked:
-        if len(seen) >= count:
-            break
         key = enrichment_key(post, cached, pending_keys, now)
         if key is None or key in seen:
             continue
@@ -1260,26 +1289,6 @@ def enrich_posts(ranked: list[dict], count: int):
             schedule_video_metadata(key.removeprefix("video:"))
         else:
             schedule(post["url"], force=True)
-
-
-def stop_state(events: list[dict], now: float, terms: dict, calendar_of=lambda event: None) -> dict:
-    """The stop-watching state for a feed response: the effective stop time, whether it has run out
-    (stopped), stop_event, the event that causes it, ongoing_event, the event taking place now, if
-    any, and while stopped, stopped_until, when the feed returns, and next_event, the next event to
-    get ready for, if any (see ranking.stopped_until). The events come with all their details and
-    calendar_of(event), their calendar's name, for the stop screen to show with a countdown to the
-    start or the end."""
-    effective, event = ranking.effective_stop(events, now, terms)
-    ongoing = ranking.ongoing_event(events, now)
-    until, upcoming = ranking.stopped_until(events, now, terms)
-    details = lambda e: ({**{k: e.get(k) for k in ("url", "title", "description", "calendar_kind", "calendar_start", "deadline")},
-                          "calendar": calendar_of(e)} if e is not None else None)
-    return {"stop_at": effective,
-            "stopped": effective is not None and now >= effective,
-            "stop_event": details(event),
-            "ongoing_event": details(ongoing),
-            "stopped_until": until,
-            "next_event": details(upcoming)}
 
 
 ARXIV_AUTHOR_TITLE = re.compile(r"^(.+?)(?:'s articles)? on arXiv$")
@@ -1362,18 +1371,25 @@ def mark_past_mode_change(items: list[dict], change: float | None, now: float, p
 
 
 def ranking_for(ranker: str, terms: dict, entries: dict, subs: dict, search: str, post_url: str | None,
-                change: float | None, now: float) -> ranking.RankedItems:
-    """The ranked feed, from the cache when it's recent and was marked for the same next mode change
-    (see mark_past_mode_change), which changes with time alone."""
+                change: float | None, now: float, complete_only: bool = False) -> tuple[ranking.RankedItems, list[dict]]:
+    """The ranked feed and the posts left out of it, from the cache when it's recent and was marked for
+    the same next mode change (see mark_past_mode_change), which changes with time alone. With
+    complete_only, as for the main feed, posts whose details haven't been fetched yet are left out (see
+    awaiting_details); they enter once fetching them saves the details, which rebuilds the ranking."""
     with lock:
-        key = (ranker, json.dumps(terms, sort_keys=True), json.dumps([entries, subs, search, post_url]))
+        key = (ranker, json.dumps(terms, sort_keys=True), json.dumps([entries, subs, search, post_url, complete_only]))
         hit = ranked_cache.get(key)
         if hit and now - hit.built < RANKED_TTL and hit.change == change and hit.state_version == state_version:
-            return hit.ranked
+            return hit.ranked, hit.waiting
         version = state_version
         items, new = build_items(entries, subs, now)
+        cached = dict(cache) if complete_only else {}
     if new:
         save_state(affects_feed=False)
+    waiting = [p for p in items if awaiting_details(p, cached)] if complete_only else []
+    if waiting:
+        left_out = {id(p) for p in waiting}
+        items = [p for p in items if id(p) not in left_out]
     if post_url is None and search.strip():
         items = [p for p in items if matches_search(p, search)]
     ranked = ranking.rank(ranker, mark_past_mode_change(items, change, now, post_url), now, terms, lazy=True)
@@ -1383,8 +1399,8 @@ def ranking_for(ranker: str, terms: dict, entries: dict, subs: dict, search: str
         if len(ranked_cache) >= RANKED_KEPT:
             ranked_cache.pop(next(iter(ranked_cache)))
         if version == state_version:
-            ranked_cache[key] = CachedRanking(now, ranked, change, version)
-    return ranked
+            ranked_cache[key] = CachedRanking(now, ranked, change, version, waiting)
+    return ranked, waiting
 
 
 def feed(ranker: str, limit: int = MAX_ITEMS_SHOWN, terms: dict | None = None, *, enrich: bool = False,
@@ -1406,46 +1422,42 @@ def feed(ranker: str, limit: int = MAX_ITEMS_SHOWN, terms: dict | None = None, *
     sync_calendars(all_subs)
     now = time.time()
     with lock:
-        # Every subscribed calendar's events stop watching, on every page, not only their own subscription's.
+        # Every subscribed calendar's events turn modes on, on every page, not only their own subscription's.
         events = calendar_events(all_subs)
         mode = active_mode(events, now)
-        # With no mode on, the main feed is empty; other pages rank with the default settings. Busy
-        # events stop watching when they begin, with the lead time of the mode they turn on, or the
-        # previewed one if that's the mode in effect.
+        # With no mode on, the main feed is empty; other pages rank with the default settings.
         preview = (mode["name"], terms) if terms and mode["name"] else None
         terms = terms or terms_for(mode["name"])
-        leading = with_leads(events, preview)
-        original = {id(copy): event for copy, event in zip(leading, events)}  # calendar_name finds the originals
-        stopping = stop_state(leading, now, terms, lambda event: calendar_name(original.get(id(event), event), all_subs))
         if preview and mode["source"] == "calendar":
-            # A previewed lead time can move the next mode change too, such as by opening a gap
-            # between meetings, so the points for running past it follow the preview like the stop.
-            until, following = next_mode_change(leading, now, mode["name"])
+            # A previewed lead time can move the next mode change, such as by opening a gap between
+            # meetings, so the points for running past it follow the preview.
+            until, following = next_mode_change(with_leads(events, preview), now, mode["name"])
             mode = {**mode, "until": until, "next": following}
-    stopping = {**stopping, "mode": mode,
-                "calendars_unreachable": unreachable_calendars(all_subs)}
-    ranked = ranking_for(ranker, terms, entries, subs, search, post_url, mode["until"], now)
+    context = {"mode": mode, "calendars_unreachable": unreachable_calendars(all_subs)}
+    main = post_url is None and subscription_url is None
+    ranked, waiting = ranking_for(ranker, terms, entries, subs, search, post_url, mode["until"], now, complete_only=main)
+    # Posts left out of the main feed are fetched on every request, not only on page load, so they
+    # enter it as soon as they can; enrich_posts skips those already queued.
+    if waiting:
+        enrich_posts(waiting)
     if post_url is not None:
-        return {**post_details(ranked.source, post_url, ranker, limit, terms, now, enrich=enrich, search=search), **stopping}
-    extra_count = terms["enrich_count"] if enrich else 0
+        return {**post_details(ranked.source, post_url, ranker, limit, terms, now, enrich=enrich, search=search), **context}
     # The post limit applies to the main feed, not to a subscription's page, where you browse its posts.
     post_limit = terms["post_limit"] if subscription_url is None and terms["post_limit"] < ranking.LIMIT else None
     if subscription_url is None and mode["name"] is None:
         post_limit = 0
     if post_limit is not None:
         limit = min(limit, post_limit)
-    with lock:
-        cached, pending_keys = dict(cache), set(pending)
-    visible, extra = ranked.read(limit, extra_count, lambda post: enrichment_key(post, cached, pending_keys, now))
+    visible = ranked.read(limit)
+    next_up = (sorted((p for p in ranked.source if p.get("next_after")), key=ranking.order, reverse=True)
+               if subscription_url is not None else [])
+    if enrich:
+        enrich_posts([*next_up, *visible])
     result = {"items": ranking.explain_similarities(visible, ranked.source, terms, now),
-              "total": ranked.total, "post_limit": post_limit, "pending": pending_count(), "ranker": ranker, **stopping}
+              "total": ranked.total, "post_limit": post_limit, "pending": pending_count(), "ranker": ranker,
+              "waiting": len(waiting), **context}
     if subscription_url is not None:
-        next_up = sorted((p for p in ranked.source if p.get("next_after")), key=ranking.order, reverse=True)
-        if enrich:
-            enrich_posts([*next_up, *extra], extra_count)
         result["next_up"] = ranking.explain_similarities(next_up, ranked.source, terms, now)
-    elif enrich:
-        enrich_posts(extra, extra_count)
     return result
 
 
@@ -1496,7 +1508,7 @@ def post_details(source: list[dict], url: str, ranker: str, limit: int, terms: d
         p["related_percent"] = percent
     item = cards([target])[0]
     if enrich:
-        enrich_posts([item, *(p for group in feeds_of_series for p in group["items"]), *similar], terms["enrich_count"])
+        enrich_posts([item, *(p for group in feeds_of_series for p in group["items"]), *similar])
     return {"item": item, "series": feeds_of_series, "similar": {"items": similar, "total": len(matches)},
             "pending": pending_count(), "ranker": ranker}
 
@@ -1587,15 +1599,6 @@ def migrate_calendar_events() -> bool:
 def calendar_events(subs) -> list[dict]:
     """The subscriptions' calendar events. Call with lock held."""
     return [event for url in subs for event in subscriptions.get(url, {}).get("events", [])]
-
-
-def calendar_name(event: dict, subs) -> str | None:
-    """The name of the subscribed calendar that has the event. Call with lock held."""
-    for url in subs:
-        subscription = subscriptions.get(url, {})
-        if any(e is event for e in subscription.get("events", [])):
-            return subscription.get("title") or url
-    return None
 
 
 # CalDAV calendars are kept in step on every feed request, not only on the subscription timer: each

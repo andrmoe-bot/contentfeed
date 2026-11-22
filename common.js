@@ -37,14 +37,6 @@ function when(unix) {
   return `${d.toLocaleDateString(undefined, opts)} ${clock(unix)}`;
 }
 
-// How long until a unix time: "now", "in 5 min", "in 2 h", "in 2 h 30 min".
-function inTime(unix) {
-  const minutes = Math.round((unix - Date.now() / 1000) / 60);
-  if (minutes <= 0) return "now";
-  const h = Math.floor(minutes / 60), m = minutes % 60;
-  return `in ${[h ? `${h} h` : "", m || !h ? `${m} min` : ""].filter(Boolean).join(" ")}`;
-}
-
 // GET path, or with a body, POST it as JSON. Returns { ok, data }; a server that doesn't answer is an error too.
 async function api(path, body) {
   const res = await fetch(path, body ? {

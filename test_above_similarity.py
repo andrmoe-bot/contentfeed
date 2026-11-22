@@ -194,12 +194,12 @@ class AboveSimilarityTests(unittest.TestCase):
             terms = self.terms(similar_length_weight=length_weight)
             expected = ranking.rank('score', posts, NOW, terms)
             lazy = ranking.rank('score', posts, NOW, terms, lazy=True)
-            first, _ = lazy.read(20)
+            first = lazy.read(20)
             snapshot = copy.deepcopy(first)
             self.assertEqual(first, expected[:20])
             self.assertEqual(len(lazy.items), 20)
             for size in [50, 25, 100, 200, 300]:
-                page, _ = lazy.read(size)
+                page = lazy.read(size)
                 self.assertEqual(page, expected[:size])
             self.assertEqual(first, snapshot)
 
@@ -211,27 +211,10 @@ class AboveSimilarityTests(unittest.TestCase):
         lazy = ranking.rank('score', posts, NOW, lazy=True)
         sizes = [20, 150, 50, 100, 200, 30]
         with ThreadPoolExecutor(max_workers=6) as pool:
-            pages = list(pool.map(lambda size: lazy.read(size)[0], sizes))
+            pages = list(pool.map(lambda size: lazy.read(size), sizes))
         for size, page in zip(sizes, pages):
             self.assertEqual(page, expected[:size])
         self.assertEqual(len(lazy.items), 200)
-
-    def test_metadata_search_can_extend_past_visible_page_without_losing_order(self):
-        posts = [dict(item(str(i)), estimated_minutes=10 if i < 25 else None) for i in range(40)]
-        lazy = ranking.rank('score', posts, NOW, lazy=True)
-        visible, extra = lazy.read(10, 5, lambda it: it['url'] if not it.get('estimated_minutes') else None)
-        self.assertEqual(len(visible), 10)
-        self.assertEqual(len(extra), 30)
-        self.assertEqual([it['url'] for it in extra[-5:]], ['25', '26', '27', '28', '29'])
-        self.assertEqual([it['url'] for it in lazy.read(40)[0]], [str(i) for i in range(40)])
-
-    def test_no_eligible_metadata_does_not_force_full_ranking(self):
-        posts = [dict(item(str(i), 'a'), estimated_minutes=10) for i in range(100)]
-        lazy = ranking.rank('score', posts, NOW, lazy=True)
-        visible, extra = lazy.read(10, 5, lambda it: None)
-        self.assertEqual(len(visible), 10)
-        self.assertEqual(len(extra), 10)
-        self.assertEqual(len(lazy.items), 10)
 
     def test_visible_page_at_scale_visits_only_selected_groups(self):
         posts = [dict(item(str(i), str(i % 50), date=NOW - (i // 50) * 86400),
@@ -246,7 +229,7 @@ class AboveSimilarityTests(unittest.TestCase):
 
         with patch.object(ranking.SimilarityMetric, 'percent', counted):
             lazy = ranking.rank('score', posts, NOW, self.terms(similar_length_weight=1), lazy=True)
-            visible, _ = lazy.read(300)
+            visible = lazy.read(300)
         self.assertEqual(len(visible), 300)
         self.assertEqual(lazy.total, 10_000)
         self.assertEqual(len(lazy.items), 300)
