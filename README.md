@@ -340,15 +340,10 @@ Modes). All-day events, such as birthdays and holidays, don't stop watching eith
 stop the feed for the whole day. Events never appear as feed cards, and ended events don't stop
 watching anymore.
 
-While the stop time is ahead, a post whose estimated length would run past it gets the **Past the
-stop time** points for each minute it would (−20 per minute by default, rounded up to whole
-minutes), so a post running 1 minute over drops a little and a two-hour film sinks to the bottom.
-Nothing is left out. Like the rest of the order, this is worked out when the feed is shown, not as
-time passes. The post you're viewing (the one you opened last) is exempt, so reloading while you
-watch doesn't push it down. Posts without an estimated length and tasks get no points. To leave
-posts out altogether, use the post limit (see Ranking). The status line shows the stop time, the
-event and how long is left, such as "Stopping at 18:30 for “Dinner” (in 2 h 15 min)"; times on
-another day say which ("tomorrow 08:30").
+The status line shows the stop time, the event and how long is left, such as "Stopping at 18:30
+for “Dinner” (in 2 h 15 min)"; times on another day say which ("tomorrow 08:30"). Posts that would
+run past the stop are pushed down only when the mode changes then, as it does when a mode is on
+during busy events (see Modes).
 
 When the stop time runs out, the page shows the stop screen: the feed is hidden behind a notice
 saying to stop watching now and get ready for the event, with the event in full — its calendar,
@@ -394,11 +389,21 @@ several modes could be on, such as two ticking the same situation, or one for bu
 for free events while both kinds take place, the one highest in the list wins; move modes up and
 down with the ↑ and ↓ buttons.
 
-Each mode's **Lead time** (under **Lead and stop time**, 0 by default) turns it on that long before
+Each mode's **Lead time** (under **Mode changes**, 0 by default) turns it on that long before
 an event it's on for starts, so you're ready when it does: a Meeting mode with a lead time of 30
 minutes turns on at 09:30 for a 10:00 meeting, and as meetings are busy, watching stops then too. An
 event's lead time is that of the highest mode on during events of its kind, busy or free, and free
 time ends when it begins. Free time itself doesn't use a lead time.
+
+While the calendar is set to change the mode (see when below), a post whose estimated length would run
+past the change gets the mode's **Past the mode change** points (under **Mode changes**) for each
+minute it would (−20 per minute by default, rounded up to whole minutes), so a post running 1 minute
+over drops a little and a two-hour film sinks to the bottom. With a Work mode on from 09:00, at 08:30
+a 45-minute video gets −300. Nothing is left out. Like the rest of the order, this is worked out
+when the feed is shown, not as time passes. The post you're viewing (the one you opened last) is
+exempt, so reloading while you watch doesn't push it down. Posts without an estimated length and
+tasks get no points, and neither does anything while you've picked a mode, as it doesn't change. To
+leave posts out altogether, use the post limit (see Ranking).
 
 One setting is the same in every mode, under **All modes** in the panel: **Fetch details**. Changing
 it in one mode changes it for all, and it applies when no mode is on. Reset only resets the shown
@@ -420,7 +425,8 @@ shown and its settings. Modes are saved in `settings.json`.
 Settings saved before Normal was a mode become the Normal mode, at the bottom of the list, on in
 free time; settings saved before Fetch details was the same in every mode take it from the Normal
 mode, else the first mode, and each mode keeps the lead time it had; modes saved with the earlier title patterns are on during free events, unless the
-pattern was empty.
+pattern was empty; and a mode's Past the stop time points, from before they were for the mode change,
+become its Past the mode change points.
 
 ## Ranking
 
@@ -450,7 +456,7 @@ All scoring terms add their configured signed points; negative values subtract p
   Different subscriptions do not match. “Similar posts above” replaces the fixed repeat penalty;
   existing saved repeat amounts are carried over to the new setting.
 
-- −20 per minute a post would run past the stop time, while one is ahead (see Stop watching)
+- −20 per minute a post would run past the next mode change, while the calendar is set to change it (see Modes)
 
 Equal scores are ordered unopened first, then newest first, so with nothing else going on the
 feed is newest first.

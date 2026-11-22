@@ -27,28 +27,28 @@ class StopFilterTests(unittest.TestCase):
     def test_no_stop_means_no_filter(self):
         post = dict(item("post", "feed"), estimated_minutes=60)
         self.assertEqual(ranking.effective_stop([post], NOW, LEAD_30), (None, None))
-        self.assertIsNone(ranking.minutes_past_stop(post, NOW, None))
+        self.assertIsNone(ranking.minutes_past(post, NOW, None))
 
-    def test_minutes_past_stop_by_estimated_length(self):
+    def test_minutes_past_by_estimated_length(self):
         post = dict(item("post", "feed"), estimated_minutes=45)
         long_post = dict(item("long", "feed"), estimated_minutes=120)
         unknown = dict(item("unknown", "feed"))
         stop = NOW + 3600
-        self.assertIsNone(ranking.minutes_past_stop(post, NOW, stop))  # 45 minutes fit in the hour
-        self.assertIsNone(ranking.minutes_past_stop(dict(post, estimated_minutes=60), NOW, stop))  # exactly fits
-        self.assertEqual(ranking.minutes_past_stop(post, NOW, NOW + 30 * 60), 15)
-        self.assertEqual(ranking.minutes_past_stop(long_post, NOW, stop), 60)
-        self.assertEqual(ranking.minutes_past_stop(dict(post, estimated_minutes=60.2), NOW, stop), 1)  # rounded up
-        self.assertIsNone(ranking.minutes_past_stop(unknown, NOW, NOW + 1))  # unknown lengths get none
+        self.assertIsNone(ranking.minutes_past(post, NOW, stop))  # 45 minutes fit in the hour
+        self.assertIsNone(ranking.minutes_past(dict(post, estimated_minutes=60), NOW, stop))  # exactly fits
+        self.assertEqual(ranking.minutes_past(post, NOW, NOW + 30 * 60), 15)
+        self.assertEqual(ranking.minutes_past(long_post, NOW, stop), 60)
+        self.assertEqual(ranking.minutes_past(dict(post, estimated_minutes=60.2), NOW, stop), 1)  # rounded up
+        self.assertIsNone(ranking.minutes_past(unknown, NOW, NOW + 1))  # unknown lengths get none
 
-    def test_running_past_the_stop_costs_points_per_minute(self):
-        post = dict(item("post", "feed"), estimated_minutes=45, past_stop=15)
+    def test_running_past_the_mode_change_costs_points_per_minute(self):
+        post = dict(item("post", "feed"), estimated_minutes=45, past_mode_change=15)
         reasons = dict(ranking.score(post, NOW, LEAD_30))
-        self.assertEqual(reasons["runs 15 minutes past the stop time"], -300)
-        off = dict(LEAD_30, past_stop_per_minute=0)
-        self.assertFalse(any("past the stop" in label for label, _ in ranking.score(post, NOW, off)))
-        fits = dict(post, past_stop=None)
-        self.assertFalse(any("past the stop" in label for label, _ in ranking.score(fits, NOW, LEAD_30)))
+        self.assertEqual(reasons["runs 15 minutes past the mode change"], -300)
+        off = dict(LEAD_30, past_mode_change_per_minute=0)
+        self.assertFalse(any("past the mode change" in label for label, _ in ranking.score(post, NOW, off)))
+        fits = dict(post, past_mode_change=None)
+        self.assertFalse(any("past the mode change" in label for label, _ in ranking.score(fits, NOW, LEAD_30)))
 
     def test_events_act_as_stop_times_with_the_configured_lead(self):
         event = dict(item("event", "cal"), calendar_kind="event",
@@ -91,7 +91,7 @@ class StopFilterTests(unittest.TestCase):
         event = dict(item("event", "cal"), calendar_kind="event", calendar_start=NOW + 600, estimated_minutes=60)
         task = dict(item("task", "cal"), calendar_kind="task", deadline=NOW + 600, estimated_minutes=60)
         for it in (event, task):
-            self.assertIsNone(ranking.minutes_past_stop(it, NOW, NOW + 1))
+            self.assertIsNone(ranking.minutes_past(it, NOW, NOW + 1))
 
     def test_post_limit_is_a_whole_number_from_zero(self):
         self.assertEqual(ranking.DEFAULT_TERMS["post_limit"], ranking.LIMIT)  # no limit
@@ -154,9 +154,11 @@ class StopServerTests(unittest.TestCase):
         self.stack.enter_context(patch.object(server, "state_version", 0))
         self.stack.enter_context(patch.object(ranking, "TERMS", dict(LEAD_30)))
         self.stack.enter_context(patch.object(server, "global_terms", ranking.split_terms(LEAD_30)[1]))
-        # One mode, on whatever the calendar holds, whose settings are ranking.TERMS.
-        self.stack.enter_context(patch.object(server, "modes", [{"name": "Normal", "when": dict.fromkeys(server.SITUATIONS, True),
-                                                      "terms": ranking.TERMS}]))
+        # Meeting, on during busy events, and Normal, on otherwise, both with the settings ranking.TERMS,
+        # so the calendar changes the mode when a busy event begins (its start minus the lead time).
+        self.stack.enter_context(patch.object(server, "modes", [
+            {"name": "Meeting", "when": dict.fromkeys(server.SITUATIONS, False) | {"busy": True}, "terms": ranking.TERMS},
+            {"name": "Normal", "when": dict.fromkeys(server.SITUATIONS, True) | {"busy": False}, "terms": ranking.TERMS}]))
         self.stack.enter_context(patch.object(server, "schedule", return_value=None))
         self.stack.enter_context(patch.object(server, "schedule_subscription", return_value=None))
         self.url = "https://example.com/feed"
@@ -171,36 +173,36 @@ class StopServerTests(unittest.TestCase):
     def urls(self, result):
         return {it["url"] for it in result["items"]}
 
-    def past_stop(self, result, url):
-        """Whether the post got points for running past the stop time."""
+    def past_mode_change(self, result, url):
+        """Whether the post got points for running past the next mode change."""
         card = next(it for it in result["items"] if it["url"] == url)
-        return any("past the stop" in r["label"] for r in card["reasons"])
+        return any("past the mode change" in r["label"] for r in card["reasons"])
 
     def order(self, result):
         return [it["url"] for it in result["items"]]
 
-    def test_posts_that_would_run_past_the_stop_are_pushed_down_not_left_out(self):
-        server.subscriptions[self.url]["events"] = [self.dinner(60)]  # stop in 30 minutes
+    def test_posts_that_would_run_past_the_mode_change_are_pushed_down_not_left_out(self):
+        server.subscriptions[self.url]["events"] = [self.dinner(60)]  # Meeting mode in 30 minutes
         server.subscriptions[self.url]["items"] = [self.long, self.short]
-        self.long["published"] = 2_000_000  # newer: first without the stop
+        self.long["published"] = 2_000_000  # newer: first without the mode change
         result = server.feed("score")
         self.assertEqual(self.order(result), [self.short["url"], self.long["url"]])  # 10 minutes fit; 120 don't
         long_card = result["items"][1]
-        self.assertTrue(any(r["label"] in ("runs 90 minutes past the stop time", "runs 91 minutes past the stop time")
+        self.assertTrue(any(r["label"] in ("runs 90 minutes past the mode change", "runs 91 minutes past the mode change")
                             for r in long_card["reasons"]))
         self.assertAlmostEqual(result["stop_at"], server.subscriptions[self.url]["events"][0]["calendar_start"] - 30 * 60, places=3)
         self.assertEqual(result["total"], 2)
 
-    def test_viewed_post_gets_no_past_stop_points(self):
+    def test_viewed_post_gets_no_past_mode_change_points(self):
         """Reloading while you watch doesn't push down the post you're viewing."""
-        server.subscriptions[self.url]["events"] = [self.dinner(60)]  # stop in 30 minutes
+        server.subscriptions[self.url]["events"] = [self.dinner(60)]  # Meeting mode in 30 minutes
         server.viewed[self.long["url"]] = time.time()  # you're watching the long one now
         result = server.feed("score")
         long_card = next(it for it in result["items"] if it["url"] == self.long["url"])
-        self.assertFalse(any("past the stop" in r["label"] for r in long_card["reasons"]))
+        self.assertFalse(any("past the mode change" in r["label"] for r in long_card["reasons"]))
 
     def test_only_the_latest_viewed_post_is_exempt(self):
-        server.subscriptions[self.url]["events"] = [self.dinner(60)]  # stop in 30 minutes
+        server.subscriptions[self.url]["events"] = [self.dinner(60)]  # Meeting mode in 30 minutes
         other_long = {"url": "https://example.com/other-long", "title": "Other long", "first_seen": 1_000_000,
                       "published": 1_000_000, "estimated_minutes": 90}
         server.subscriptions[self.url]["items"].append(other_long)
@@ -208,8 +210,42 @@ class StopServerTests(unittest.TestCase):
         server.viewed[other_long["url"]] = now - 600  # opened earlier
         server.viewed[self.long["url"]] = now - 60  # opened last: this is the one you're viewing
         cards = {it["url"]: it for it in server.feed("score")["items"]}
-        self.assertFalse(any("past the stop" in r["label"] for r in cards[self.long["url"]]["reasons"]))
-        self.assertTrue(any("past the stop" in r["label"] for r in cards[other_long["url"]]["reasons"]))
+        self.assertFalse(any("past the mode change" in r["label"] for r in cards[self.long["url"]]["reasons"]))
+        self.assertTrue(any("past the mode change" in r["label"] for r in cards[other_long["url"]]["reasons"]))
+
+    def test_the_points_are_for_the_mode_change_even_without_a_stop(self):
+        """A free event stops nothing, but a mode on during it still changes the mode when it begins."""
+        server.modes.insert(0, {"name": "Work", "when": dict.fromkeys(server.SITUATIONS, False) | {"not_busy": True},
+                                "terms": ranking.TERMS})
+        work = dict(self.dinner(60), url=self.url + "#item=work", title="Work block", free=True)
+        server.subscriptions[self.url]["events"] = [work]
+        result = server.feed("score")
+        self.assertIsNone(result["stop_at"])
+        self.assertAlmostEqual(result["mode"]["until"], work["calendar_start"] - 30 * 60, places=3)  # Work's lead time
+        cards = {it["url"]: it for it in result["items"]}
+        self.assertTrue(any(r["label"] in ("runs 90 minutes past the mode change", "runs 91 minutes past the mode change")
+                            for r in cards[self.long["url"]]["reasons"]))
+        self.assertFalse(self.past_mode_change(result, self.short["url"]))
+
+    def test_the_points_count_from_the_mode_change_not_a_later_stop(self):
+        server.modes.insert(0, {"name": "Work", "when": dict.fromkeys(server.SITUATIONS, False) | {"not_busy": True},
+                                "terms": dict(ranking.TERMS, event_lead_minutes=0)})
+        work = dict(self.dinner(60), url=self.url + "#item=work", title="Work block", free=True)
+        server.subscriptions[self.url]["events"] = [work, self.dinner(5 * 60)]
+        result = server.feed("score")
+        self.assertGreater(result["stop_at"], result["mode"]["until"])
+        long_card = next(it for it in result["items"] if it["url"] == self.long["url"])
+        self.assertTrue(any(r["label"] in ("runs 60 minutes past the mode change", "runs 61 minutes past the mode change")
+                            for r in long_card["reasons"]))
+        self.assertFalse(self.past_mode_change(result, self.short["url"]))
+
+    def test_a_chosen_mode_does_not_change_so_gets_no_points(self):
+        server.subscriptions[self.url]["events"] = [self.dinner(60)]
+        with patch.object(server, "mode_choice", {"name": "Normal"}):
+            result = server.feed("score")
+        self.assertIsNone(result["mode"]["until"])
+        self.assertIsNotNone(result["stop_at"])  # the dinner still stops watching
+        self.assertFalse(self.past_mode_change(result, self.long["url"]))
 
     def test_post_limit_cuts_the_feed_but_not_a_subscription_page(self):
         server.save_settings(dict(LEAD_30, post_limit=1))
@@ -287,8 +323,8 @@ class StopServerTests(unittest.TestCase):
         self.assertFalse(result["stopped"])
         self.assertEqual(result["stop_event"]["title"], "Dinner")
         self.assertNotIn(event["url"], self.urls(result))  # events aren't feed items
-        self.assertFalse(self.past_stop(result, self.short["url"]))
-        self.assertTrue(self.past_stop(result, self.long["url"]))  # 120 minutes don't fit before the stop
+        self.assertFalse(self.past_mode_change(result, self.short["url"]))
+        self.assertTrue(self.past_mode_change(result, self.long["url"]))  # 120 minutes don't fit before Meeting mode turns on
 
     def test_events_are_not_feed_items_but_still_act_as_stop_times(self):
         start = time.time() + 5 * 3600  # far enough that both posts fit before the stop
@@ -335,7 +371,7 @@ class StopServerTests(unittest.TestCase):
         self.assertAlmostEqual(result["stop_at"], start - 30 * 60, places=3)
 
     def test_post_page_keeps_its_post_even_when_it_no_longer_fits(self):
-        server.subscriptions[self.url]["events"] = [self.dinner(60)]  # stop in 30 minutes
+        server.subscriptions[self.url]["events"] = [self.dinner(60)]  # Meeting mode in 30 minutes
         result = server.feed("score", 300, post_url=self.long["url"])
         self.assertEqual(result["item"]["url"], self.long["url"])
         self.assertIsNotNone(result["stop_at"])
