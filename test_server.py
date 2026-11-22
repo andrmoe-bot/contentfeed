@@ -23,6 +23,9 @@ class FeedCacheTests(unittest.TestCase):
         self.stack.enter_context(patch.object(server, "pending", set()))
         self.stack.enter_context(patch.object(server, "state_version", 0))
         self.stack.enter_context(patch.object(ranking, "TERMS", dict(ranking.DEFAULT_TERMS)))
+        # One mode, on whatever the calendar holds, whose settings are ranking.TERMS.
+        self.stack.enter_context(patch.object(server, "modes", [{"name": "Normal", "when": dict.fromkeys(server.SITUATIONS, True),
+                                                      "terms": ranking.TERMS}]))
         self.stack.enter_context(patch.object(server, "schedule", return_value=None))
         self.stack.enter_context(patch.object(server, "schedule_subscription", return_value=None))
         self.stack.enter_context(patch.object(server.jellyfin, "read_logins", return_value=({}, None)))
@@ -241,16 +244,16 @@ class FeedCacheTests(unittest.TestCase):
             with self.subTest(green=green):
                 server.save_json(server.SETTINGS_FILE, {"version": 1, "terms": dict(old, green_bonus_points=green)})
                 server.load_settings()
-                self.assertEqual((ranking.TERMS["green_points"], ranking.TERMS["white_points"], ranking.TERMS["red_points"]),
+                self.assertEqual((server.mode_terms("Normal")["green_points"], server.mode_terms("Normal")["white_points"], server.mode_terms("Normal")["red_points"]),
                                  (expected, -50, -1000))
-                ranking.TERMS.update(ranking.DEFAULT_TERMS)
+                server.mode_terms("Normal").update(ranking.DEFAULT_TERMS)
 
     def test_settings_are_saved_with_their_version_and_served_with_limits(self):
         self.assertIsNone(server.save_settings(dict(ranking.DEFAULT_TERMS, task_bonus=5)))
         saved = server.load_json(server.SETTINGS_FILE)
         self.assertEqual(saved["version"], server.SETTINGS_VERSION)
         server.load_settings()  # task_bonus is the fixed term here, not the old deadline ramp
-        self.assertEqual((ranking.TERMS["task_bonus"], ranking.TERMS["task_deadline_bonus"]), (5, 200))
+        self.assertEqual((server.mode_terms("Normal")["task_bonus"], server.mode_terms("Normal")["task_deadline_bonus"]), (5, 200))
         limits = server.settings()["limits"]
         self.assertEqual(limits["seen_bonus"], {"min": -ranking.LIMIT, "max": ranking.LIMIT, "integer": False})
         self.assertEqual(limits["enrich_count"], {"min": 0, "max": 100, "integer": True})
@@ -258,22 +261,22 @@ class FeedCacheTests(unittest.TestCase):
     def test_saved_settings_ignore_removed_tag_similarity(self):
         server.save_json(server.SETTINGS_FILE, {"terms": dict(ranking.DEFAULT_TERMS, tag_similarity=99)})
         server.load_settings()
-        self.assertEqual(ranking.TERMS, ranking.DEFAULT_TERMS)
+        self.assertEqual(server.mode_terms("Normal"), ranking.DEFAULT_TERMS)
 
     def test_settings_saved_under_the_old_weights_key_still_load(self):
         server.save_json(server.SETTINGS_FILE, {"weights": dict(ranking.DEFAULT_TERMS, seen_bonus=-50)})
         server.load_settings()
-        self.assertEqual(ranking.TERMS["seen_bonus"], -50)
+        self.assertEqual(server.mode_terms("Normal")["seen_bonus"], -50)
 
     def test_old_calendar_urgency_values_migrate_to_renamed_settings(self):
         old = {key: value for key, value in ranking.DEFAULT_TERMS.items() if key != "task_deadline_bonus"}
         old.update(task_bonus=60, event_urgency_bonus=80)  # the removed event ramp is dropped
         server.save_json(server.SETTINGS_FILE, {"terms": old})
         server.load_settings()
-        self.assertEqual(ranking.TERMS["task_deadline_bonus"], 60)
-        self.assertEqual(ranking.TERMS["task_bonus"], 0)
-        self.assertNotIn("event_urgency_bonus", ranking.TERMS)
-        self.assertEqual(ranking.TERMS["event_lead_minutes"], 30)
+        self.assertEqual(server.mode_terms("Normal")["task_deadline_bonus"], 60)
+        self.assertEqual(server.mode_terms("Normal")["task_bonus"], 0)
+        self.assertNotIn("event_urgency_bonus", server.mode_terms("Normal"))
+        self.assertEqual(server.mode_terms("Normal")["event_lead_minutes"], 30)
 
     def test_state_changed_during_ranking_is_not_cached(self):
         original_rank = ranking.rank

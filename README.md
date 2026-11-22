@@ -60,7 +60,7 @@ It holds:
   and `colors.json`; they're moved into `state.json` at startup and the old files kept as `.bak`.
   Older versions also recorded skips (the old white dot); at startup, an untagged item whose last
   skip came after you last opened it is tagged "maybe later" instead.
-- `settings.json`: your score settings from the feed's score panel, if you changed them, and your modes
+- `settings.json`: your modes and their score settings from the feed's score panel, if you changed them
 - `jellyfin.json`: logins for Jellyfin servers you subscribe to (see Jellyfin), if any
 - `caldav.json`: logins for private CalDAV calendars you subscribe to, if any
 - `cache.json` and `feeds.json`: fetched page details and subscription posts
@@ -377,11 +377,12 @@ next up. Items start untagged; click the dot of an item's tag again to remove th
 
 ## Modes
 
-A mode is a separate set of settings, such as Work with a post limit of 0 for an empty page, or
-points for tasks. The Mode list at the top of the settings panel shows Auto, Normal and your modes;
-**New mode…** adds one, starting as a copy of the settings shown, and you change it like any other.
-Normal is the settings in effect when no mode is on. Picking a mode or Normal in the list uses it
-until you pick Auto again.
+The feed's settings belong to modes, such as Work with a post limit of 0 for an empty page, or one
+with points for tasks. At first there's one, Normal, with the default settings, on in free time. It's
+an ordinary mode: change, move or remove it like any other. The Mode list
+at the top of the settings panel shows Auto and your modes; **New mode…** adds one, starting as a
+copy of the settings shown (or the defaults), and you change it like any other. Picking a mode in the
+list uses it until you pick Auto again.
 
 With Auto (the default), the calendar turns modes on, and the list marks the one that's on now.
 Each mode has three toggles under **With Auto, on during**: **Busy events**, **Free (not busy)
@@ -392,13 +393,19 @@ several modes could be on, such as two ticking the same situation, or one for bu
 for free events while both kinds take place, the one highest in the list wins; move modes up and
 down with the ↑ and ↓ buttons.
 
+When no mode is on, the feed is empty and says so, as does the status line ("No mode on"), and the
+panel has no settings to show until you pick a mode. A subscription's page and a post's page still
+list posts then, ranked with the default settings, and the stop time uses the default Event lead
+time.
+
 The panel always shows and changes the settings of the mode in effect, and the status line names
-it, unless it's Normal. While the calendar has a mode on, the status line says when that ends
-("Work mode until 17:00": the event's end, or for free time, the next event's start) and leaves out
-a stop time that comes after that. When the mode changes, such as when a work block starts, the
-feed is shown again from the top. Remove deletes the mode shown and its settings. Modes are saved
-in `settings.json` with the normal settings; modes saved with the earlier title patterns are on
-during free events, unless the pattern was empty.
+it. While the calendar has a mode on, the status line says when that ends ("Work mode until 17:00":
+the event's end, or for free time, the next event's start) and leaves out a stop time that comes
+after that. When the mode changes, such as when a work block starts, the feed is shown again from
+the top. Remove deletes the mode shown and its settings. Modes are saved in `settings.json`.
+Settings saved before Normal was a mode become the Normal mode, at the bottom of the list, on in
+free time; modes saved with the earlier title patterns are on during free events, unless the
+pattern was empty.
 
 ## Ranking
 

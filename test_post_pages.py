@@ -28,6 +28,9 @@ class PostPageTests(unittest.TestCase):
         stack.enter_context(patch.object(server, 'schedule'))
         stack.enter_context(patch.object(server, 'schedule_subscription'))
         stack.enter_context(patch.object(ranking, 'TERMS', dict(ranking.DEFAULT_TERMS)))
+        # One mode, on whatever the calendar holds, whose settings are ranking.TERMS.
+        stack.enter_context(patch.object(server, "modes", [{"name": "Normal", "when": dict.fromkeys(server.SITUATIONS, True),
+                                                      "terms": ranking.TERMS}]))
         self.sub = 'https://example.com/feed'
         server.FEEDS_FILE.write_text(self.sub)
         self.posts = [dict(url=f'https://example.com/{i}', title=f'Part {i}', first_seen=100,

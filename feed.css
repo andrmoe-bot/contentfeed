@@ -156,7 +156,8 @@ nav button[aria-expanded="true"] { font-weight: 600; }
 .mode-row .move:disabled { opacity: .3; cursor: default; }
 .mode-actions { display: flex; gap: 8px; }
 .mode-actions button { padding: 6px 12px; font-size: 14px; }
-#mode-remove[hidden], #mode-order-hint[hidden] { display: none; }
+#mode-remove[hidden], #mode-order-hint[hidden], #mode-settings[hidden], #reset[hidden] { display: none; }
+#mode-settings { display: grid; gap: 14px; }
 .mode-when[hidden] { display: none; }
 .mode-when { gap: 6px; }
 .mode-when label { display: flex; align-items: center; gap: 10px; cursor: pointer; }

@@ -123,8 +123,14 @@ cache: dict[str, dict] = {}
 added: dict[str, float] = {}  # url -> unix time the server first saw the link
 viewed: dict[str, float] = {}  # url -> unix time you last opened it
 colors: dict[str, str] = {}  # url -> the tag you gave it (see ranking.TAGS); most items have none
-# Modes, each with its own settings, saved in settings.json with the normal settings (ranking.TERMS):
-modes: list[dict] = []  # [{"name": str, "when": {situation: bool}, "terms": dict}], highest priority first
+# Modes, each with its own settings, saved in settings.json. With no mode on, the feed is empty.
+def starting_modes() -> list[dict]:
+    """The modes before you change any: Normal, with the default settings, on in free time."""
+    return [{"name": "Normal", "when": {"busy": False, "not_busy": False, "free_time": True},
+             "terms": dict(ranking.DEFAULT_TERMS)}]
+
+
+modes: list[dict] = starting_modes()  # [{"name", "when": {situation: bool}, "terms"}], highest priority first
 mode_choice: dict = {}  # {"name": mode}: the mode you chose in the panel; empty to follow the calendar
 subscriptions: dict[str, dict] = {}  # feeds.txt url -> resolved feed, its posts and fetch status
 pending: set[str] = set()
@@ -792,15 +798,14 @@ def mark_older_red(url: str, age: float) -> int | None:
 
 
 def settings() -> dict:
-    """The settings panel's data: the normal settings (terms), each mode's, the active mode and how it
-    was chosen (see active_mode), and the defaults and limits."""
+    """The settings panel's data: the modes with their settings, the active mode and how it was chosen
+    (see active_mode), and the defaults and limits."""
     with lock:
         mode = active_mode(calendar_events(list(subscriptions)), time.time())
-        return {"terms": dict(ranking.TERMS), "modes": [mode_data(m) for m in modes],
+        return {"modes": [mode_data(m) for m in modes],
                 "mode": mode, "defaults": ranking.DEFAULT_TERMS, "limits": ranking.TERM_LIMITS}
 
 
-NORMAL = "Normal"  # the mode in effect when no other is: its settings are ranking.TERMS
 MODE_NAME_MAX = 40
 
 
@@ -809,10 +814,10 @@ def find_mode(name: str) -> dict | None:
     return next((m for m in modes if m["name"].casefold() == name.casefold()), None)
 
 
-def mode_terms(name: str) -> dict:
-    """A mode's settings; the normal settings for Normal or a mode that doesn't exist. Call with lock held."""
-    mode = find_mode(name) if name != NORMAL else None
-    return mode["terms"] if mode else ranking.TERMS
+def mode_terms(name: str | None) -> dict | None:
+    """A mode's settings, or None if there's no such mode. Call with lock held."""
+    mode = find_mode(name) if name else None
+    return mode["terms"] if mode else None
 
 
 # The calendar situations a mode can be on in (its toggles, all off for a new mode): during a busy
@@ -858,12 +863,12 @@ def calendar_situations(events: list[dict], now: float) -> dict:
 def active_mode(events: list[dict], now: float) -> dict:
     """The mode in effect: {"name", "source", "situation", "event", "until"}. The mode you chose in the
     panel, if any ("source": "chosen"); else the first mode in the list (the highest priority) turned on
-    for a situation taking place now
-    (see calendar_situations; "calendar", with the situation, the event's title, if any, and when it
-    ends); else Normal ("default"). Free events don't stop watching (see ranking.effective_stop), but
-    busy ones do, so a mode on during them applies while watching is stopped. Call with lock held."""
+    for a situation taking place now (see calendar_situations; "calendar", with the situation, the
+    event's title, if any, and when it ends); else none ("name": None, "source": "none"), and the feed
+    is empty. Free events don't stop watching (see ranking.effective_stop), but busy ones do, so a mode
+    on during them applies while watching is stopped. Call with lock held."""
     chosen = mode_choice.get("name")
-    if chosen == NORMAL or (chosen and find_mode(chosen)):
+    if chosen and find_mode(chosen):
         return {"name": chosen, "source": "chosen", "situation": None, "event": None, "until": None}
     now_on = calendar_situations(events, now)
     for mode in modes:
@@ -871,27 +876,30 @@ def active_mode(events: list[dict], now: float) -> dict:
         if situation:
             event, until = now_on[situation]
             return {"name": mode["name"], "source": "calendar", "situation": situation, "event": event, "until": until}
-    return {"name": NORMAL, "source": "default", "situation": None, "event": None, "until": None}
+    return {"name": None, "source": "none", "situation": None, "event": None, "until": None}
 
 
 def write_settings():
-    """Save the normal settings, the modes and the mode you chose to settings.json."""
+    """Save the modes and the mode you chose to settings.json."""
     with lock:
-        data = {"version": SETTINGS_VERSION, "terms": dict(ranking.TERMS),
-                "modes": [mode_data(m) for m in modes],
+        data = {"version": SETTINGS_VERSION, "modes": [mode_data(m) for m in modes],
                 "mode_choice": mode_choice.get("name")}
     save_json(SETTINGS_FILE, data)
 
 
-def save_settings(terms, mode: str = NORMAL) -> str | None:
-    """Set a mode's terms (Normal's by default) from the feed's settings panel. Returns an error
-    message, or None."""
+def save_settings(terms, mode: str | None = None) -> str | None:
+    """Set a mode's terms (by default, the mode in effect) from the feed's settings panel. Returns an
+    error message, or None."""
     try:
         checked = ranking.check_terms(terms if isinstance(terms, dict) else {})
     except ValueError as e:
         return str(e)
     with lock:
-        target = ranking.TERMS if mode == NORMAL else (find_mode(mode) or {}).get("terms")
+        if mode is None:
+            mode = active_mode(calendar_events(list(subscriptions)), time.time())["name"]
+            if mode is None:
+                return "no mode is on"
+        target = mode_terms(mode)
         if target is None:
             return f"there's no mode called {mode}"
         target.update(checked)
@@ -907,21 +915,21 @@ def mode_name_error(name) -> str | None:
         return f"a mode's name can be at most {MODE_NAME_MAX} characters"
     if not name.isprintable():
         return "a mode's name can't have control characters"
-    if name.strip().casefold() in (NORMAL.casefold(), "auto") or find_mode(name.strip()):
+    if name.strip().casefold() == "auto" or find_mode(name.strip()):
         return f"there's already a mode called {name.strip()}"
     return None
 
 
-def add_mode(name, copy_from: str = NORMAL) -> str | None:
-    """Add a mode whose settings start as a copy of another mode's, and switch to it, so the panel
-    shows its settings to change. The calendar doesn't turn it on until you turn on a situation (see
+def add_mode(name, copy_from: str | None = None) -> str | None:
+    """Add a mode whose settings start as a copy of another mode's, or the defaults, and switch to it,
+    so the panel shows its settings to change. The calendar doesn't turn it on until you turn on a situation (see
     set_mode_when). Returns an error message, or None."""
     with lock:
         error = mode_name_error(name)
         if error:
             return error
         name = name.strip()
-        modes.append({"name": name, "when": dict.fromkeys(SITUATIONS, False), "terms": dict(mode_terms(copy_from))})
+        modes.append({"name": name, "when": dict.fromkeys(SITUATIONS, False), "terms": dict(mode_terms(copy_from) or ranking.DEFAULT_TERMS)})
         mode_choice["name"] = name
     write_settings()
     return None
@@ -975,8 +983,8 @@ def choose_mode(name) -> str | None:
     with lock:
         if name is None:
             mode_choice.clear()
-        elif name == NORMAL or (isinstance(name, str) and find_mode(name)):
-            mode_choice["name"] = name if name == NORMAL else find_mode(name)["name"]
+        elif isinstance(name, str) and find_mode(name):
+            mode_choice["name"] = find_mode(name)["name"]
         else:
             return f"there's no mode called {name}"
     write_settings()
@@ -985,7 +993,7 @@ def choose_mode(name) -> str | None:
 
 # settings.json's format. Files without a version were saved before it had one; when a term is renamed
 # or changes meaning, bump the version and move saved values in migrate_terms.
-SETTINGS_VERSION = 2
+SETTINGS_VERSION = 3  # 3: the normal settings are the Normal mode's
 
 
 def migrate_terms(data: dict) -> dict | None:
@@ -1030,13 +1038,10 @@ def saved_when(mode: dict) -> dict:
 
 
 def load_settings():
+    """Load the modes and the mode you chose from settings.json. Without saved settings, the modes are
+    the starting ones (see starting_modes). Settings saved before version 3 had normal settings, used
+    whenever no mode was on; they become the Normal mode, at the bottom of the list, on in free time."""
     data = load_json(SETTINGS_FILE)
-    terms = migrate_terms(data)
-    if terms is not None:
-        try:
-            ranking.TERMS.update(complete_terms(terms))
-        except ValueError as e:
-            print(f"Ignoring the normal settings in {SETTINGS_FILE}: {e}")
     saved_modes = data.get("modes") if isinstance(data.get("modes"), list) else []
     with lock:
         modes.clear()
@@ -1049,10 +1054,18 @@ def load_settings():
                               "terms": complete_terms(mode_terms_saved or {})})
             except ValueError as e:
                 print(f"Ignoring mode {mode['name']} in {SETTINGS_FILE}: {e}")
+        if data.get("version", 0) < 3 and not find_mode("Normal"):
+            normal = starting_modes()[0]
+            terms = migrate_terms(data)
+            try:
+                normal["terms"] = complete_terms(terms or {})
+            except ValueError as e:
+                print(f"Ignoring the normal settings in {SETTINGS_FILE}: {e}")
+            modes.append(normal)
         mode_choice.clear()
         chosen = data.get("mode_choice")
-        if chosen == NORMAL or (isinstance(chosen, str) and find_mode(chosen)):
-            mode_choice["name"] = chosen
+        if isinstance(chosen, str) and find_mode(chosen):
+            mode_choice["name"] = find_mode(chosen)["name"]
 
 
 def series_state(subs: dict[str, list[str]]) -> tuple[dict[str, str], dict[str, str]]:
@@ -1308,7 +1321,8 @@ def feed(ranker: str, limit: int = MAX_ITEMS_SHOWN, terms: dict | None = None, *
         # Every subscribed calendar's events stop watching, on every page, not only their own subscription's.
         events = calendar_events(all_subs)
         mode = active_mode(events, now)
-        terms = terms or dict(mode_terms(mode["name"]))
+        # With no mode on, the main feed is empty; other pages rank with the default settings.
+        terms = terms or dict(mode_terms(mode["name"]) or ranking.DEFAULT_TERMS)
         stopping = stop_state(events, now, terms, lambda event: calendar_name(event, all_subs))
     stopping = {**stopping, "mode": mode,
                 "calendars_unreachable": unreachable_calendars(all_subs)}
@@ -1318,6 +1332,8 @@ def feed(ranker: str, limit: int = MAX_ITEMS_SHOWN, terms: dict | None = None, *
     extra_count = terms["enrich_count"] if enrich else 0
     # The post limit applies to the main feed, not to a subscription's page, where you browse its posts.
     post_limit = terms["post_limit"] if subscription_url is None and terms["post_limit"] < ranking.LIMIT else None
+    if subscription_url is None and mode["name"] is None:
+        post_limit = 0
     if post_limit is not None:
         limit = min(limit, post_limit)
     with lock:
@@ -1784,7 +1800,8 @@ def mark_red_api(body):
 
 
 def settings_api(body):
-    error = save_settings(body.get("terms"), str(body.get("mode") or NORMAL))
+    mode = body.get("mode")
+    error = save_settings(body.get("terms"), mode if isinstance(mode, str) else None)
     return {"ok": not error, "error": error, **settings()}, 400 if error else 200
 
 
@@ -1793,7 +1810,8 @@ def modes_api(body):
     calendar}, {"when": {situation: bool}, "mode": name} (see set_mode_when) or {"move": name, "to":
     position} (see move_mode)."""
     if "add" in body:
-        error = add_mode(body["add"], str(body.get("copy_from") or NORMAL))
+        copy_from = body.get("copy_from")
+        error = add_mode(body["add"], copy_from if isinstance(copy_from, str) else None)
     elif "remove" in body:
         error = remove_mode(body["remove"])
     elif "choose" in body:
