@@ -137,20 +137,27 @@ nav button[aria-expanded="true"] { font-weight: 600; }
   border-radius: 12px; background: #e00 url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M9 7l8 5-8 5z' fill='white'/%3E%3C/svg%3E") center / 28px no-repeat;
 }
 
-.modes { display: grid; gap: 6px; border: 0; margin: 0; padding: 0; }
-.modes legend { font-weight: 600; padding: 0; margin-bottom: 4px; }
-#mode-list { display: grid; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
-.mode-row { display: flex; align-items: center; gap: 6px; padding: 4px 8px; min-height: 32px; }
+/* The Mode list: one row per mode, picked with its radio button, like a group of settings. */
+.modes, .mode-when { display: grid; gap: 8px; border: 0; margin: 0; padding: 0; min-width: 0; }
+.modes legend, .mode-when legend { font-weight: 600; padding: 0; margin-bottom: 8px; }
+.modes input, .mode-when input { flex: none; width: 16px; height: 16px; margin: 0; padding: 0; accent-color: var(--accent); cursor: pointer; }
+#mode-list { display: grid; grid-template-columns: minmax(0, 1fr); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.mode-row { display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 12px; min-height: 40px; box-sizing: border-box; }
 .mode-row + .mode-row { border-top: 1px solid var(--border); }
-.mode-row.checked { background: color-mix(in srgb, var(--accent) 12%, transparent); }
-.mode-row label { flex: 1; display: flex; align-items: center; gap: 6px; cursor: pointer; min-width: 0; }
-.mode-row .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.mode-row .now { font-size: 12px; color: var(--muted); white-space: nowrap; }
-.mode-row .move { padding: 0 8px; font-size: 13px; line-height: 24px; border-radius: 6px; }
-.mode-row .move:disabled { visibility: hidden; }
+.mode-row.checked { background: color-mix(in srgb, var(--accent) 10%, var(--card)); }
+.mode-row label { flex: 1; display: flex; align-items: center; gap: 10px; min-width: 0; cursor: pointer; }
+.mode-row .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mode-row.checked .name { font-weight: 600; }
+.mode-row .now { flex: none; padding: 0 8px; border-radius: 999px; font-size: 12px; line-height: 20px;
+  color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.mode-row .move { flex: none; width: 28px; height: 28px; padding: 0; border-radius: 6px; font-size: 14px; line-height: 1;
+  color: var(--muted); background: none; border-color: transparent; }
+.mode-row .move:hover:not(:disabled) { color: var(--text); border-color: var(--border); background: var(--card); }
+.mode-row .move:disabled { opacity: .3; cursor: default; }
 .mode-actions { display: flex; gap: 8px; }
+.mode-actions button { padding: 6px 12px; font-size: 14px; }
 #mode-remove[hidden], #mode-order-hint[hidden] { display: none; }
 .mode-when[hidden] { display: none; }
-.mode-when { display: grid; gap: 4px; border: 0; margin: 0; padding: 0; }
-.mode-when legend { font-weight: 600; padding: 0; margin-bottom: 4px; }
-.mode-when label { display: flex; align-items: center; gap: 6px; }
+.mode-when { gap: 6px; }
+.mode-when label { display: flex; align-items: center; gap: 10px; cursor: pointer; }
+.mode-when .hint { margin-top: 2px; }
