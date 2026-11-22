@@ -13,6 +13,7 @@ channels and playlists, older videos than the feed lists are loaded once (see fe
 """
 
 import argparse
+import collections
 import functools
 import gzip
 import hashlib
@@ -342,15 +343,45 @@ def job(prefix: str):
     return wrap
 
 
-def submit_once(work, arg, *args, unless=None) -> bool:
-    """Queue a job unless it's already pending or unless() (called with lock held) is true."""
+def submit_once(work, arg, *args, unless=None, site: str | None = None) -> bool:
+    """Queue a job unless it's already pending or unless() (called with lock held) is true. With a
+    site, the job waits in that site's queue (see site_queues) instead of the shared executor."""
     key = work.key(arg)
     with lock:
         if key in pending or (unless is not None and unless()):
             return False
         pending.add(key)
-    executor.submit(work, arg, *args)
+        if site is not None:
+            queue = site_queues.get(site)
+            start = queue is None
+            if start:
+                queue = site_queues[site] = collections.deque()
+            queue.append((work, arg, args))
+    if site is None:
+        executor.submit(work, arg, *args)
+    elif start:
+        threading.Thread(target=work_through, args=(site,), daemon=True).start()
     return True
+
+
+# Fetches of a post's details wait in a queue per site, each worked through by a thread of its own
+# while it has jobs. outbound paces requests to a site one at a time anyway, so a site with hundreds
+# of posts to fetch, such as YouTube, only delays its own fetches, not other sites' or the executor's.
+site_queues: dict[str, collections.deque] = {}
+
+
+def work_through(site: str):
+    while True:
+        with lock:
+            queue = site_queues[site]
+            if not queue:
+                del site_queues[site]
+                return
+            work, arg, args = queue.popleft()
+        try:
+            work(arg, *args)
+        except Exception as e:  # like the executor, carry on with the next job
+            print(f"Fetching details from {site} failed: {e}")
 
 
 def run_now(work, arg, *args):
@@ -369,7 +400,7 @@ def refresh(url: str):
 
 
 def schedule(url: str, force: bool = False):
-    submit_once(refresh, url, unless=lambda: url in cache and not force)
+    submit_once(refresh, url, unless=lambda: url in cache and not force, site=urlparse(url).netloc.lower())
 
 
 def post_key(post: dict) -> str:
@@ -765,7 +796,7 @@ def update_video_metadata(video: str):
 
 
 def schedule_video_metadata(video: str):
-    submit_once(update_video_metadata, video)
+    submit_once(update_video_metadata, video, site="www.youtube.com")
 
 
 def set_color(url: str, color: str) -> bool:
@@ -1203,28 +1234,48 @@ class CachedRanking:
     ranked: ranking.RankedItems
     change: float | None  # the next mode change it was marked for; see ranking_for
     state_version: int
+    waiting: list[dict]  # the posts left out until their details are fetched; see ranking_for
 
 
 ranked_cache: dict[tuple, CachedRanking] = {}
 
 
-def enrichment_key(post: dict, cached: dict, pending_keys: set, now: float) -> str | None:
-    """Identify incomplete posts eligible for enrichment, using one state snapshot."""
-    if post.get("jellyfin") or post.get("scholar") or (post.get("estimated_minutes") and not post.get("date_approx")):
-        return None  # Google Scholar turns away clients that read many of its pages
+def details_job(post: dict, cached: dict) -> tuple[str, float] | None:
+    """For a post whose length or exact date is missing and can be fetched: (the fetch's job key, when
+    it was last fetched, or 0 if never). None for a complete post, or one whose details can't be
+    fetched: tasks, Jellyfin, and Google Scholar, which turns away clients that read many of its pages."""
+    if (post.get("calendar_kind") or post.get("jellyfin") or post.get("scholar")
+            or (post.get("estimated_minutes") and not post.get("date_approx"))):
+        return None
     video = post.get("youtube") if post.get("kind") == "subscription" else None
-    key = "video:" + video if video else post["url"]
     metadata = cached.get(post["url"], {})
     checked = post.get("video_metadata_checked", 0) if video else (
         metadata.get("fetched", 0) if metadata.get("length_version") == 1 else 0)
+    return ("video:" + video if video else post["url"]), checked
+
+
+def awaiting_details(post: dict, cached: dict) -> bool:
+    """Whether a post's details haven't been fetched yet, which keeps it out of the main feed until they
+    have. A post whose details turned out to be unavailable enters the feed without them."""
+    job = details_job(post, cached)
+    return job is not None and not job[1]
+
+
+def enrichment_key(post: dict, cached: dict, pending_keys: set, now: float) -> str | None:
+    """The job key to fetch an incomplete post's details: never fetched, or not for six hours. None if
+    it's complete, can't be fetched, or is being fetched."""
+    job = details_job(post, cached)
+    if job is None:
+        return None
+    key, checked = job
     if key in pending_keys or (checked and now - checked < 6 * 3600):
         return None
     return key
 
 
 def enrich_posts(ranked: list[dict]):
-    """Schedule details for the incomplete posts on a page once for this page load. outbound paces the
-    requests, one at a time per host."""
+    """Fetch the details of incomplete posts (see enrichment_key), in their sites' queues (see
+    site_queues)."""
     with lock:
         cached, pending_keys = dict(cache), set(pending)
     seen = set()
@@ -1320,18 +1371,25 @@ def mark_past_mode_change(items: list[dict], change: float | None, now: float, p
 
 
 def ranking_for(ranker: str, terms: dict, entries: dict, subs: dict, search: str, post_url: str | None,
-                change: float | None, now: float) -> ranking.RankedItems:
-    """The ranked feed, from the cache when it's recent and was marked for the same next mode change
-    (see mark_past_mode_change), which changes with time alone."""
+                change: float | None, now: float, complete_only: bool = False) -> tuple[ranking.RankedItems, list[dict]]:
+    """The ranked feed and the posts left out of it, from the cache when it's recent and was marked for
+    the same next mode change (see mark_past_mode_change), which changes with time alone. With
+    complete_only, as for the main feed, posts whose details haven't been fetched yet are left out (see
+    awaiting_details); they enter once fetching them saves the details, which rebuilds the ranking."""
     with lock:
-        key = (ranker, json.dumps(terms, sort_keys=True), json.dumps([entries, subs, search, post_url]))
+        key = (ranker, json.dumps(terms, sort_keys=True), json.dumps([entries, subs, search, post_url, complete_only]))
         hit = ranked_cache.get(key)
         if hit and now - hit.built < RANKED_TTL and hit.change == change and hit.state_version == state_version:
-            return hit.ranked
+            return hit.ranked, hit.waiting
         version = state_version
         items, new = build_items(entries, subs, now)
+        cached = dict(cache) if complete_only else {}
     if new:
         save_state(affects_feed=False)
+    waiting = [p for p in items if awaiting_details(p, cached)] if complete_only else []
+    if waiting:
+        left_out = {id(p) for p in waiting}
+        items = [p for p in items if id(p) not in left_out]
     if post_url is None and search.strip():
         items = [p for p in items if matches_search(p, search)]
     ranked = ranking.rank(ranker, mark_past_mode_change(items, change, now, post_url), now, terms, lazy=True)
@@ -1341,8 +1399,8 @@ def ranking_for(ranker: str, terms: dict, entries: dict, subs: dict, search: str
         if len(ranked_cache) >= RANKED_KEPT:
             ranked_cache.pop(next(iter(ranked_cache)))
         if version == state_version:
-            ranked_cache[key] = CachedRanking(now, ranked, change, version)
-    return ranked
+            ranked_cache[key] = CachedRanking(now, ranked, change, version, waiting)
+    return ranked, waiting
 
 
 def feed(ranker: str, limit: int = MAX_ITEMS_SHOWN, terms: dict | None = None, *, enrich: bool = False,
@@ -1376,7 +1434,12 @@ def feed(ranker: str, limit: int = MAX_ITEMS_SHOWN, terms: dict | None = None, *
             until, following = next_mode_change(with_leads(events, preview), now, mode["name"])
             mode = {**mode, "until": until, "next": following}
     context = {"mode": mode, "calendars_unreachable": unreachable_calendars(all_subs)}
-    ranked = ranking_for(ranker, terms, entries, subs, search, post_url, mode["until"], now)
+    main = post_url is None and subscription_url is None
+    ranked, waiting = ranking_for(ranker, terms, entries, subs, search, post_url, mode["until"], now, complete_only=main)
+    # Posts left out of the main feed are fetched on every request, not only on page load, so they
+    # enter it as soon as they can; enrich_posts skips those already queued.
+    if waiting:
+        enrich_posts(waiting)
     if post_url is not None:
         return {**post_details(ranked.source, post_url, ranker, limit, terms, now, enrich=enrich, search=search), **context}
     # The post limit applies to the main feed, not to a subscription's page, where you browse its posts.
@@ -1386,15 +1449,15 @@ def feed(ranker: str, limit: int = MAX_ITEMS_SHOWN, terms: dict | None = None, *
     if post_limit is not None:
         limit = min(limit, post_limit)
     visible = ranked.read(limit)
+    next_up = (sorted((p for p in ranked.source if p.get("next_after")), key=ranking.order, reverse=True)
+               if subscription_url is not None else [])
+    if enrich:
+        enrich_posts([*next_up, *visible])
     result = {"items": ranking.explain_similarities(visible, ranked.source, terms, now),
-              "total": ranked.total, "post_limit": post_limit, "pending": pending_count(), "ranker": ranker, **context}
+              "total": ranked.total, "post_limit": post_limit, "pending": pending_count(), "ranker": ranker,
+              "waiting": len(waiting), **context}
     if subscription_url is not None:
-        next_up = sorted((p for p in ranked.source if p.get("next_after")), key=ranking.order, reverse=True)
-        if enrich:
-            enrich_posts([*next_up, *visible])
         result["next_up"] = ranking.explain_similarities(next_up, ranked.source, terms, now)
-    elif enrich:
-        enrich_posts(visible)
     return result
 
 

@@ -626,14 +626,16 @@ function appendNew(list, fresh) {
 }
 
 // The status line: calendars that didn't answer, the mode (or that none is on), with when the calendar
-// next changes it and to what, then text, then how many fetches are under way.
+// next changes it and to what, then text, then how many fetches are under way and how many posts wait
+// for their details before they enter the feed (see server.awaiting_details).
 function showStatus(data, text) {
   const unreachable = (data.calendars_unreachable || []).map((c) =>
     `Calendar “${c.title}” isn't answering; using its events from ${c.fetched ? clock(c.fetched) : "before"}`);
   const mode = data.mode?.name ? data.mode : null;
   const change = data.mode?.until ? ` until ${when(data.mode.until)}${mode ? `, then ${data.mode.next ?? "no mode"}` : ""}` : "";
   const modeNote = mode ? `${mode.name} mode${change}` : data.mode ? `No mode on${change}` : "";
-  statusEl.textContent = [...unreachable, modeNote, text, data.pending ? `fetching ${data.pending}…` : ""]
+  statusEl.textContent = [...unreachable, modeNote, text, data.pending ? `fetching ${data.pending}…` : "",
+    data.waiting ? `${data.waiting} post${data.waiting === 1 ? "" : "s"} waiting for details` : ""]
     .filter(Boolean).join(" · ");
 }
 
@@ -650,7 +652,7 @@ function showRanked(data) {
 function showFeed(data, more = false) {
   items = more ? appendNew(items, data.items) : data.items;
   render();
-  if (!items.length) feedEl.replaceChildren(el("p", {}, searchEl.value.trim() ? "No posts match your search." : data.mode && !data.mode.name && data.post_limit === 0 ? "No mode is on, so the feed is empty. Pick one in Settings, or choose there when the calendar turns one on." : data.post_limit === 0 && data.total ? `The post limit is 0${data.mode?.name ? ` in ${data.mode.name} mode` : ""}, so the feed is empty. Change it in Settings.` : "No posts in your feed yet."));
+  if (!items.length) feedEl.replaceChildren(el("p", {}, searchEl.value.trim() ? "No posts match your search." : data.mode && !data.mode.name && data.post_limit === 0 ? "No mode is on, so the feed is empty. Pick one in Settings, or choose there when the calendar turns one on." : data.post_limit === 0 && data.total ? `The post limit is 0${data.mode?.name ? ` in ${data.mode.name} mode` : ""}, so the feed is empty. Change it in Settings.` : data.waiting ? "No posts with their details fetched yet. Reload once they are." : "No posts in your feed yet."));
   showRanked(data);
 }
 

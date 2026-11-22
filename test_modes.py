@@ -65,6 +65,7 @@ class ServerTestCase(unittest.TestCase):
         server.FEEDS_FILE.write_text(f"{self.feed_url}\n{self.cal_url}\n")
         post = {"url": "https://example.com/post", "title": "Post", "first_seen": 1_000_000, "published": 1_000_000}
         server.subscriptions[self.feed_url] = {"title": "Example", "feed_url": self.feed_url, "items": [post], "fetched": 1}
+        server.cache[post["url"]] = {"url": post["url"], "fetched": 1, "length_version": 1}  # read, so in the feed
         server.subscriptions[self.cal_url] = {"title": "Calendar", "items": [], "events": [], "fetched": 1}
 
     def set_events(self, *events):
