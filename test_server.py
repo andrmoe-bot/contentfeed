@@ -23,6 +23,7 @@ class FeedCacheTests(unittest.TestCase):
         self.stack.enter_context(patch.object(server, "pending", set()))
         self.stack.enter_context(patch.object(server, "state_version", 0))
         self.stack.enter_context(patch.object(ranking, "TERMS", dict(ranking.DEFAULT_TERMS)))
+        self.stack.enter_context(patch.object(server, "global_terms", ranking.split_terms(ranking.DEFAULT_TERMS)[1]))
         # One mode, on whatever the calendar holds, whose settings are ranking.TERMS.
         self.stack.enter_context(patch.object(server, "modes", [{"name": "Normal", "when": dict.fromkeys(server.SITUATIONS, True),
                                                       "terms": ranking.TERMS}]))
@@ -244,16 +245,15 @@ class FeedCacheTests(unittest.TestCase):
             with self.subTest(green=green):
                 server.save_json(server.SETTINGS_FILE, {"version": 1, "terms": dict(old, green_bonus_points=green)})
                 server.load_settings()
-                self.assertEqual((server.mode_terms("Normal")["green_points"], server.mode_terms("Normal")["white_points"], server.mode_terms("Normal")["red_points"]),
+                self.assertEqual((server.terms_for("Normal")["green_points"], server.terms_for("Normal")["white_points"], server.terms_for("Normal")["red_points"]),
                                  (expected, -50, -1000))
-                server.mode_terms("Normal").update(ranking.DEFAULT_TERMS)
 
     def test_settings_are_saved_with_their_version_and_served_with_limits(self):
         self.assertIsNone(server.save_settings(dict(ranking.DEFAULT_TERMS, task_bonus=5)))
         saved = server.load_json(server.SETTINGS_FILE)
         self.assertEqual(saved["version"], server.SETTINGS_VERSION)
         server.load_settings()  # task_bonus is the fixed term here, not the old deadline ramp
-        self.assertEqual((server.mode_terms("Normal")["task_bonus"], server.mode_terms("Normal")["task_deadline_bonus"]), (5, 200))
+        self.assertEqual((server.terms_for("Normal")["task_bonus"], server.terms_for("Normal")["task_deadline_bonus"]), (5, 200))
         limits = server.settings()["limits"]
         self.assertEqual(limits["seen_bonus"], {"min": -ranking.LIMIT, "max": ranking.LIMIT, "integer": False})
         self.assertEqual(limits["enrich_count"], {"min": 0, "max": 100, "integer": True})
@@ -261,22 +261,22 @@ class FeedCacheTests(unittest.TestCase):
     def test_saved_settings_ignore_removed_tag_similarity(self):
         server.save_json(server.SETTINGS_FILE, {"terms": dict(ranking.DEFAULT_TERMS, tag_similarity=99)})
         server.load_settings()
-        self.assertEqual(server.mode_terms("Normal"), ranking.DEFAULT_TERMS)
+        self.assertEqual(server.terms_for("Normal"), ranking.DEFAULT_TERMS)
 
     def test_settings_saved_under_the_old_weights_key_still_load(self):
         server.save_json(server.SETTINGS_FILE, {"weights": dict(ranking.DEFAULT_TERMS, seen_bonus=-50)})
         server.load_settings()
-        self.assertEqual(server.mode_terms("Normal")["seen_bonus"], -50)
+        self.assertEqual(server.terms_for("Normal")["seen_bonus"], -50)
 
     def test_old_calendar_urgency_values_migrate_to_renamed_settings(self):
         old = {key: value for key, value in ranking.DEFAULT_TERMS.items() if key != "task_deadline_bonus"}
         old.update(task_bonus=60, event_urgency_bonus=80)  # the removed event ramp is dropped
         server.save_json(server.SETTINGS_FILE, {"terms": old})
         server.load_settings()
-        self.assertEqual(server.mode_terms("Normal")["task_deadline_bonus"], 60)
-        self.assertEqual(server.mode_terms("Normal")["task_bonus"], 0)
-        self.assertNotIn("event_urgency_bonus", server.mode_terms("Normal"))
-        self.assertEqual(server.mode_terms("Normal")["event_lead_minutes"], 30)
+        self.assertEqual(server.terms_for("Normal")["task_deadline_bonus"], 60)
+        self.assertEqual(server.terms_for("Normal")["task_bonus"], 0)
+        self.assertNotIn("event_urgency_bonus", server.terms_for("Normal"))
+        self.assertEqual(server.terms_for("Normal")["event_lead_minutes"], 0)
 
     def test_state_changed_during_ranking_is_not_cached(self):
         original_rank = ranking.rank
@@ -314,7 +314,7 @@ class FeedCacheTests(unittest.TestCase):
         rank.assert_called_once()
 
     def test_enrichment_beyond_visible_prefix_keeps_highest_incomplete_selection(self):
-        ranking.TERMS["enrich_count"] = 5  # off by default
+        server.global_terms["enrich_count"] = 5  # off by default
         server.subscriptions[self.url]['items'] = [
             dict(self.post, url=f'https://example.com/{i}', estimated_minutes=10 if i < 25 else None)
             for i in range(40)]
@@ -335,7 +335,7 @@ if __name__ == "__main__":
 class LengthEnrichmentTests(FeedCacheTests):
     def setUp(self):
         super().setUp()
-        ranking.TERMS["enrich_count"] = 5  # off by default
+        server.global_terms["enrich_count"] = 5  # off by default
 
     def test_missing_subscription_length_is_scheduled_and_used(self):
         ranking.TERMS["length_per_minute"] = -2
@@ -432,10 +432,10 @@ class LengthEnrichmentTests(FeedCacheTests):
 
     def test_custom_count_and_zero_apply_on_cached_feed(self):
         server.feed('score')
-        ranking.TERMS['enrich_count'] = 0
+        server.global_terms["enrich_count"] = 0
         server.feed('score', enrich=True)
         server.schedule.assert_not_called()
-        ranking.TERMS['enrich_count'] = 1
+        server.global_terms["enrich_count"] = 1
         server.feed('score', enrich=True)
         server.schedule.assert_called_once_with(self.post['url'], force=True)
 

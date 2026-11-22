@@ -6,21 +6,22 @@
 // only shape the two similarity penalties, so they're shown whenever either penalty is.
 // Each mode has its own settings. The panel shows and changes the active mode's: the one you picked
 // in its Mode list, or with Auto, the mode the calendar turns on (see server.active_mode). With no
-// mode on, the feed is empty and there are no settings to show.
+// mode on, the feed is empty and only the settings for all modes are shown: fetch details, which is the
+// same in every mode (see ranking.GLOBAL_TERMS), and always shown.
 const GROUPS = [
   { id: "feed", title: "Feed", open: true },
   { id: "opened", title: "Opened and next up", open: true },
   { id: "tags", title: "Tags", open: true },
   { id: "kind", title: "Kind, length and age" },
-  { id: "stop", title: "Stop time" },
+  { id: "stop", title: "Lead and stop time" },
   { id: "tasks", title: "Tasks" },
   { id: "similarity", title: "Similarity" },
+  { id: "global", title: "All modes", open: true, hint: "The same in every mode, and used when none is on." },
 ];
+const GLOBAL_GROUP = "global";
 const SETTINGS = [
   { group: "feed", key: "post_limit", label: "Post limit", before: "show at most", after: "posts", blankIsMax: true,
     hint: "0 empties the feed; 1 shows one post at a time. Leave empty for no limit." },
-  { group: "feed", key: "enrich_count", label: "Fetch details", after: "posts on load",
-    hint: "Fetch missing lengths and dates for this many top posts. Adds no points." },
 
   { group: "opened", key: "seen_bonus", label: "Opened", after: "points",
     hint: "For posts you've opened. Tagging doesn't count as opening." },
@@ -49,8 +50,8 @@ const SETTINGS = [
   { group: "kind", key: "age_per_year", label: "Age", after: "points per year",
     hint: "Below 0 favors newer posts." },
 
-  { group: "stop", key: "event_lead_minutes", label: "Event lead time", after: "minutes before an event",
-    hint: "Each calendar event is a stop time this long before it starts." },
+  { group: "stop", key: "event_lead_minutes", label: "Lead time", after: "minutes",
+    hint: "This mode turns on this long before an event it's on for, so you're ready when it starts; a busy event stops watching then too. Free time doesn't use it." },
   { group: "stop", key: "past_stop_per_minute", label: "Past the stop time", after: "points per minute",
     hint: "For each minute a post would run past the stop time. The post you're viewing is exempt." },
 
@@ -73,7 +74,11 @@ const SETTINGS = [
   { group: "similarity", measure: true, key: "similar_publish_weight", label: "Publish time weight", after: "" },
   { group: "similarity", measure: true, key: "similar_length_weight", label: "Length weight", after: "",
     hint: "Relative to the publish time weight. Unknown lengths are left out." },
+
+  { group: "global", key: "enrich_count", label: "Fetch details", after: "posts on load",
+    hint: "Fetch missing lengths and dates for this many top posts. Adds no points." },
 ];
+const GLOBAL_KEYS = SETTINGS.filter((s) => s.group === GLOBAL_GROUP).map((s) => s.key);
 // Every setting, including the second box some have, such as Similar's hours
 const KEYS = SETTINGS.flatMap(({ key, extra }) => (extra ? [key, extra.key] : [key]));
 let limits = {};  // each term's {min, max, integer}, from the server
@@ -82,8 +87,10 @@ let draft = {};  // as shown in the panel
 let defaults = {};
 let modeList = [];  // [{name, when, terms}], the modes, highest priority first
 let mode = { name: null, source: "none", situation: null, event: null };  // the active mode, whose settings the panel shows
-// A mode's settings; the defaults when no mode is on, which aren't shown or saved then.
-const termsOf = (name, data) => data.modes.find((m) => m.name === name)?.terms || data.defaults;
+// The settings in effect in a mode: its own and those for all modes. With no mode on, the defaults
+// with those for all modes, of which only the latter are shown and saved.
+const termsOf = (name, data) => ({ ...data.defaults, ...data.modes.find((m) => m.name === name)?.terms, ...data.global });
+const globalPart = (terms) => Object.fromEntries(GLOBAL_KEYS.map((key) => [key, terms[key]]));
 
 // Slider positions: 0, then 1, 1.5, 2, 3, 5, 7 times each power of ten from 10^lo up to 10^hi,
 // mirrored below 0 for terms that may be negative.
@@ -183,6 +190,7 @@ function buildSettings() {
     const count = el("span", { class: "changed" });
     const details = el("details", { class: "group" },
       el("summary", {}, group.title, count),
+      ...(group.hint ? [el("p", { class: "hint group-hint" }, group.hint)] : []),
       ...SETTINGS.filter((s) => s.group === group.id).map(settingRow));
     details.open = groupOpen(group);
     details.addEventListener("toggle", () => rememberGroup(group.id, details.open));
@@ -221,6 +229,7 @@ const shownTerms = new Set();
 const contributes = (key, w) => (key === "post_limit" ? w[key] < limits[key].max : w[key] !== 0);
 function hideUnusedTerms(w) {
   for (const { key, measure } of SETTINGS) if (!measure && contributes(key, w)) shownTerms.add(key);
+  for (const key of GLOBAL_KEYS) shownTerms.add(key);  // the settings for all modes, always
   showTerms();
 }
 
@@ -229,12 +238,14 @@ function showTerms() {
   for (const { key, measure } of SETTINGS) {
     document.querySelector(`.setting[data-key="${key}"]`).hidden = measure ? !similarity : !shownTerms.has(key);
   }
-  // A group with nothing shown is left out until you add one of its settings.
+  // A group with nothing shown is left out until you add one of its settings. With no mode on, only
+  // the settings for all modes are shown.
+  const usable = (group) => !!mode.name || group.id === GLOBAL_GROUP;
   for (const group of GROUPS) {
-    groupEls[group.id].details.hidden = !SETTINGS.some((s) => s.group === group.id
+    groupEls[group.id].details.hidden = !usable(group) || !SETTINGS.some((s) => s.group === group.id
       && !document.querySelector(`.setting[data-key="${s.key}"]`).hidden);
   }
-  const groups = GROUPS.map((group) => [group,
+  const groups = GROUPS.filter(usable).map((group) => [group,
     SETTINGS.filter((s) => s.group === group.id && !s.measure && !shownTerms.has(s.key))]).filter(([, hidden]) => hidden.length);
   addSetting.replaceChildren(el("option", { value: "" }, "Add a setting…"),
     ...groups.map(([group, hidden]) => el("optgroup", { label: group.title },
@@ -283,11 +294,12 @@ async function saveNow() {
     return panelSay(`${label} must be a ${integer ? "whole " : ""}number from ${fmt(min)} to ${fmt(max)}.`, true);
   }
   if (sameTerms(draft, saved)) return;
+  const onlyGlobal = KEYS.every((key) => GLOBAL_KEYS.includes(key) || draft[key] === saved[key]);
   const { ok, data } = await api("/api/settings", { terms: draft, mode: mode.name });
   if (!ok) return panelSay(`Couldn't save: ${data.error || "unknown error"}`, true);
   modeList = data.modes;
   saved = termsOf(mode.name, data);
-  panelSay(`Saved for ${mode.name}.`);
+  panelSay(onlyGlobal || !mode.name ? "Saved for all modes." : `Saved for ${mode.name}.`);
 }
 
 let rankerShown = null;
@@ -324,6 +336,7 @@ function showMode(data) {
   showModeBar();
   document.getElementById("mode-settings").hidden = !mode.name;
   document.getElementById("reset").hidden = !mode.name;
+  document.getElementById("reset").textContent = `Reset ${mode.name} to defaults`;
 }
 
 // The Mode list: Auto and the modes, highest priority first, each with a radio button to pick
@@ -361,14 +374,14 @@ function showModeBar() {
   document.getElementById("mode-hint").textContent =
     mode.source === "calendar" ? `These are ${mode.name}'s settings, on ${situationText(mode)}.`
     : mode.source === "chosen" ? `These are ${mode.name}'s settings, until you pick Auto.`
-    : modeList.length ? "No mode is on, so the feed is empty. Pick a mode to use it, or to choose when the calendar turns it on."
+    : modeList.length ? `No mode is on, so the feed is empty${mode.until ? ` until ${mode.next} turns on at ${when(mode.until)}` : ""}. Pick a mode to use it, or to choose when the calendar turns it on.`
     : "There are no modes, so the feed is empty. Add one with New mode….";
 }
 
-// Why the calendar turned a mode on, and until when, for the hint.
-function situationText({ situation, event, until }) {
+// Why the calendar turned a mode on, and until when it changes to which, for the hint.
+function situationText({ situation, event, until, next }) {
   const what = situation === "free_time" ? "during free time" : `during “${event || "an event"}”`;
-  return until ? `${what} until ${when(until)}` : what;
+  return until ? `${what} until ${when(until)}, then ${next ?? "no mode"}` : what;
 }
 
 // Mode changes save what you were changing first, then show the new mode's settings and feed.
@@ -427,14 +440,16 @@ let modeCheck = null;
 function syncMode(fresh) {
   if (!fresh || modeCheck || !Object.keys(limits).length) return;
   if (fresh.name === mode.name && fresh.source === mode.source && fresh.situation === mode.situation
-      && fresh.event === mode.event && fresh.until === mode.until) return;
+      && fresh.event === mode.event && fresh.until === mode.until && fresh.next === mode.next) return;
   modeCheck = api("/api/settings").then(({ ok, data }) => { if (ok) showMode(data); })
     .finally(() => { modeCheck = null; });
 }
 
 document.getElementById("reset").addEventListener("click", async () => {
-  if (sameTerms(draft, defaults)) return panelSay("These are the defaults.");
-  draft = { ...defaults };
+  // Only the mode's own settings: those for all modes stay as they are.
+  const reset = { ...defaults, ...globalPart(draft) };
+  if (sameTerms(draft, reset)) return panelSay(`These are ${mode.name}'s defaults.`);
+  draft = reset;
   showSettings(draft);
   await save();
   load({ reorder: true });

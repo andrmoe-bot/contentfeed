@@ -10,11 +10,14 @@ import ranking
 import server
 from test_ranking import NOW, item
 
+# These tests use a 30-minute lead time (the default is 0).
+LEAD_30 = dict(ranking.DEFAULT_TERMS, event_lead_minutes=30)
+
 
 class StopFilterTests(unittest.TestCase):
     def test_lead_time_is_a_term_not_a_signed_coefficient(self):
         """The lead time is a duration setting, so it's not in SIGNED (coefficients are signed)."""
-        self.assertEqual(ranking.DEFAULT_TERMS["event_lead_minutes"], 30)
+        self.assertEqual(ranking.DEFAULT_TERMS["event_lead_minutes"], 0)
         self.assertNotIn("event_lead_minutes", ranking.SIGNED)
         ranking.check_terms(ranking.DEFAULT_TERMS)
         ranking.check_terms(dict(ranking.DEFAULT_TERMS, event_lead_minutes=0))
@@ -23,7 +26,7 @@ class StopFilterTests(unittest.TestCase):
 
     def test_no_stop_means_no_filter(self):
         post = dict(item("post", "feed"), estimated_minutes=60)
-        self.assertEqual(ranking.effective_stop([post], NOW, ranking.DEFAULT_TERMS), (None, None))
+        self.assertEqual(ranking.effective_stop([post], NOW, LEAD_30), (None, None))
         self.assertIsNone(ranking.minutes_past_stop(post, NOW, None))
 
     def test_minutes_past_stop_by_estimated_length(self):
@@ -40,21 +43,21 @@ class StopFilterTests(unittest.TestCase):
 
     def test_running_past_the_stop_costs_points_per_minute(self):
         post = dict(item("post", "feed"), estimated_minutes=45, past_stop=15)
-        reasons = dict(ranking.score(post, NOW, ranking.DEFAULT_TERMS))
+        reasons = dict(ranking.score(post, NOW, LEAD_30))
         self.assertEqual(reasons["runs 15 minutes past the stop time"], -300)
-        off = dict(ranking.DEFAULT_TERMS, past_stop_per_minute=0)
+        off = dict(LEAD_30, past_stop_per_minute=0)
         self.assertFalse(any("past the stop" in label for label, _ in ranking.score(post, NOW, off)))
         fits = dict(post, past_stop=None)
-        self.assertFalse(any("past the stop" in label for label, _ in ranking.score(fits, NOW, ranking.DEFAULT_TERMS)))
+        self.assertFalse(any("past the stop" in label for label, _ in ranking.score(fits, NOW, LEAD_30)))
 
     def test_events_act_as_stop_times_with_the_configured_lead(self):
         event = dict(item("event", "cal"), calendar_kind="event",
                      calendar_start=NOW + 2 * 3600, deadline=NOW + 3 * 3600)
-        self.assertEqual(ranking.effective_stop([event], NOW, ranking.DEFAULT_TERMS),
+        self.assertEqual(ranking.effective_stop([event], NOW, LEAD_30),
                          (NOW + 2 * 3600 - 30 * 60, event))
-        terms = dict(ranking.DEFAULT_TERMS, event_lead_minutes=0)
+        terms = dict(LEAD_30, event_lead_minutes=0)
         self.assertEqual(ranking.effective_stop([event], NOW, terms), (NOW + 2 * 3600, event))
-        terms = dict(ranking.DEFAULT_TERMS, event_lead_minutes=90)
+        terms = dict(LEAD_30, event_lead_minutes=90)
         self.assertEqual(ranking.effective_stop([event], NOW, terms), (NOW + 2 * 3600 - 90 * 60, event))
 
     def test_ongoing_event_is_the_one_taking_place_that_ends_first(self):
@@ -73,15 +76,15 @@ class StopFilterTests(unittest.TestCase):
     def test_earliest_stop_wins(self):
         later = dict(item("later", "cal"), calendar_kind="event", calendar_start=NOW + 5 * 3600)
         sooner = dict(item("sooner", "cal"), calendar_kind="event", calendar_start=NOW + 3600)
-        self.assertEqual(ranking.effective_stop([later, sooner], NOW, ranking.DEFAULT_TERMS),
+        self.assertEqual(ranking.effective_stop([later, sooner], NOW, LEAD_30),
                          (NOW + 3600 - 30 * 60, sooner))
 
     def test_ended_events_do_not_stop_watching_but_ongoing_ones_do(self):
         ended = dict(item("old", "cal"), calendar_kind="event", calendar_start=NOW - 7200, deadline=NOW - 3600)
         ongoing = dict(item("now", "cal"), calendar_kind="event", calendar_start=NOW - 600, deadline=NOW + 3600)
-        self.assertEqual(ranking.effective_stop([ended], NOW, ranking.DEFAULT_TERMS), (None, None))
+        self.assertEqual(ranking.effective_stop([ended], NOW, LEAD_30), (None, None))
         # The ongoing event's lead time is already past, so its stop is in the past: stop now.
-        self.assertEqual(ranking.effective_stop([ongoing], NOW, ranking.DEFAULT_TERMS),
+        self.assertEqual(ranking.effective_stop([ongoing], NOW, LEAD_30),
                          (NOW - 600 - 30 * 60, ongoing))
 
     def test_calendar_items_never_run_past_the_stop(self):
@@ -105,34 +108,34 @@ class StoppedUntilTests(unittest.TestCase):
 
     def test_not_stopped_means_nothing(self):
         later = self.event("later", NOW + 3 * 3600, NOW + 4 * 3600)
-        self.assertEqual(ranking.stopped_until([later], NOW, ranking.DEFAULT_TERMS), (None, None))
+        self.assertEqual(ranking.stopped_until([later], NOW, LEAD_30), (None, None))
 
     def test_an_ongoing_event_stops_until_it_ends(self):
         meeting = self.event("meeting", NOW - 600, NOW + 1800)
-        self.assertEqual(ranking.stopped_until([meeting], NOW, ranking.DEFAULT_TERMS), (NOW + 1800, None))
+        self.assertEqual(ranking.stopped_until([meeting], NOW, LEAD_30), (NOW + 1800, None))
 
     def test_in_the_lead_time_the_event_is_next(self):
         dinner = self.event("dinner", NOW + 600, NOW + 4200)
-        self.assertEqual(ranking.stopped_until([dinner], NOW, ranking.DEFAULT_TERMS), (NOW + 4200, dinner))
+        self.assertEqual(ranking.stopped_until([dinner], NOW, LEAD_30), (NOW + 4200, dinner))
 
     def test_events_whose_lead_time_starts_before_the_feed_returns_extend_the_stop(self):
         meeting = self.event("meeting", NOW - 600, NOW + 900)
         lunch = self.event("lunch", NOW + 900, NOW + 2700)  # its lead time begins during the meeting
         walk = self.event("walk", NOW + 2700 + 1700, NOW + 2700 + 3600)  # lead begins 100 s before lunch ends
         dinner = self.event("dinner", NOW + 4 * 3600, NOW + 5 * 3600)  # well after: the feed returns first
-        until, upcoming = ranking.stopped_until([dinner, walk, lunch, meeting], NOW, ranking.DEFAULT_TERMS)
+        until, upcoming = ranking.stopped_until([dinner, walk, lunch, meeting], NOW, LEAD_30)
         self.assertEqual((until, upcoming), (NOW + 2700 + 3600, lunch))
 
     def test_an_event_without_an_end_stops_until_it_starts(self):
         reminder = self.event("reminder", NOW + 600)
-        self.assertEqual(ranking.stopped_until([reminder], NOW, ranking.DEFAULT_TERMS), (NOW + 600, reminder))
+        self.assertEqual(ranking.stopped_until([reminder], NOW, LEAD_30), (NOW + 600, reminder))
 
     def test_free_and_all_day_events_never_stop_watching(self):
         free = self.event("free", NOW - 600, NOW + 1800, free=True)
         birthday = self.event("birthday", NOW - 3600, NOW + 20 * 3600, all_day=True)
         for events in ([free], [birthday]):
-            self.assertEqual(ranking.effective_stop(events, NOW, ranking.DEFAULT_TERMS), (None, None))
-            self.assertEqual(ranking.stopped_until(events, NOW, ranking.DEFAULT_TERMS), (None, None))
+            self.assertEqual(ranking.effective_stop(events, NOW, LEAD_30), (None, None))
+            self.assertEqual(ranking.stopped_until(events, NOW, LEAD_30), (None, None))
             self.assertIsNone(ranking.ongoing_event(events, NOW))
 
 
@@ -149,7 +152,8 @@ class StopServerTests(unittest.TestCase):
             self.stack.enter_context(patch.object(server, name, {}))
         self.stack.enter_context(patch.object(server, "pending", set()))
         self.stack.enter_context(patch.object(server, "state_version", 0))
-        self.stack.enter_context(patch.object(ranking, "TERMS", dict(ranking.DEFAULT_TERMS)))
+        self.stack.enter_context(patch.object(ranking, "TERMS", dict(LEAD_30)))
+        self.stack.enter_context(patch.object(server, "global_terms", ranking.split_terms(LEAD_30)[1]))
         # One mode, on whatever the calendar holds, whose settings are ranking.TERMS.
         self.stack.enter_context(patch.object(server, "modes", [{"name": "Normal", "when": dict.fromkeys(server.SITUATIONS, True),
                                                       "terms": ranking.TERMS}]))
@@ -208,14 +212,14 @@ class StopServerTests(unittest.TestCase):
         self.assertTrue(any("past the stop" in r["label"] for r in cards[other_long["url"]]["reasons"]))
 
     def test_post_limit_cuts_the_feed_but_not_a_subscription_page(self):
-        server.save_settings(dict(ranking.DEFAULT_TERMS, post_limit=1))
+        server.save_settings(dict(LEAD_30, post_limit=1))
         result = server.feed("score")
         self.assertEqual(len(result["items"]), 1)
         self.assertEqual((result["total"], result["post_limit"]), (2, 1))
         self.assertEqual(len(server.feed("score", subscription_url=self.url)["items"]), 2)
-        server.save_settings(dict(ranking.DEFAULT_TERMS, post_limit=0))
+        server.save_settings(dict(LEAD_30, post_limit=0))
         self.assertEqual(server.feed("score")["items"], [])  # an empty feed
-        server.save_settings(dict(ranking.DEFAULT_TERMS))
+        server.save_settings(dict(LEAD_30))
         self.assertIsNone(server.feed("score")["post_limit"])  # no limit
 
     def test_fired_stop_keeps_the_feed_and_marks_it_stopped(self):
@@ -314,7 +318,7 @@ class StopServerTests(unittest.TestCase):
                  "published": start, "calendar_kind": "event", "calendar_start": start,
                  "deadline": start + 3600}
         server.subscriptions[self.url]["events"] = [event]
-        server.save_settings(dict(ranking.DEFAULT_TERMS, event_lead_minutes=90))
+        server.save_settings(dict(LEAD_30, event_lead_minutes=90))
         result = server.feed("score")
         self.assertAlmostEqual(result["stop_at"], start - 90 * 60, places=3)
 

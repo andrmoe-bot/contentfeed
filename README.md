@@ -117,8 +117,8 @@ It can also be a blog or news page without a feed (see Pages without a feed), a 
 or a Jellyfin server (see Jellyfin).
 Incomplete tasks appear as cards; events don't — they take place when scheduled, not whenever the
 feed happens to show them, so they only stop watching (see Stop watching):
-every busy event that hasn't ended acts as a stop time at its start minus the Event lead time setting,
-so posts you couldn't finish before you need to leave for it are pushed down. Events marked free
+every busy event that hasn't ended acts as a stop time when it begins, at its start minus the lead
+time of the mode it turns on (see Modes), so posts you couldn't finish before then are pushed down. Events marked free
 (not busy) and all-day events don't stop watching; events can turn a mode on (see Modes). The score panel
 controls task urgency during the final 30 days before a deadline. Tasks also get the
 similar-posts-above penalty against other tasks in the same calendar, and the fixed Task term
@@ -331,10 +331,11 @@ the one playing in another card.
 
 ## Stop watching
 
-Calendar events stop watching. Every busy event that hasn't ended has a stop time at its start
-minus the **Event lead time** setting (30 minutes by default; 0 stops exactly at the event's
-start), and the earliest one counts. So with dinner at 19:00 and the default lead, the stop time is
-18:30. Events marked free (not busy) don't stop watching, though they can turn a mode on (see
+Calendar events stop watching. Every busy event that hasn't ended has a stop time when it begins:
+at its start minus the **Lead time** of the mode it turns on, the highest mode on during busy events
+(see Modes), or at its start if no mode is (0 minutes by default). The earliest stop counts. So with
+dinner at 19:00 and a Meeting mode on during busy events with a lead time of 30 minutes, Meeting mode
+turns on at 18:30 and the stop time is 18:30. Events marked free (not busy) don't stop watching, though they can turn a mode on (see
 Modes). All-day events, such as birthdays and holidays, don't stop watching either, as they would
 stop the feed for the whole day. Events never appear as feed cards, and ended events don't stop
 watching anymore.
@@ -361,7 +362,7 @@ screen then shows the meeting and, as up next, lunch, and the status line says "
 for “Meeting”, then “Lunch”". The feed itself is still served, so once the event is over the page switches
 straight back to the feed with nothing rebuilt. While a stop time is in effect the page polls every
 10 seconds, and the page checks again just after each change it knows is coming (the stop time,
-the feed returning, a mode's event ending), so these show within a second or so.
+the feed returning, the mode changing), so these show within a second or so.
 
 ## Tags
 
@@ -393,18 +394,32 @@ several modes could be on, such as two ticking the same situation, or one for bu
 for free events while both kinds take place, the one highest in the list wins; move modes up and
 down with the ↑ and ↓ buttons.
 
+Each mode's **Lead time** (under **Lead and stop time**, 0 by default) turns it on that long before
+an event it's on for starts, so you're ready when it does: a Meeting mode with a lead time of 30
+minutes turns on at 09:30 for a 10:00 meeting, and as meetings are busy, watching stops then too. An
+event's lead time is that of the highest mode on during events of its kind, busy or free, and free
+time ends when it begins. Free time itself doesn't use a lead time.
+
+One setting is the same in every mode, under **All modes** in the panel: **Fetch details**. Changing
+it in one mode changes it for all, and it applies when no mode is on. Reset only resets the shown
+mode's own settings.
+
 When no mode is on, the feed is empty and says so, as does the status line ("No mode on"), and the
-panel has no settings to show until you pick a mode. A subscription's page and a post's page still
-list posts then, ranked with the default settings, and the stop time uses the default Event lead
-time.
+panel shows only the settings for all modes until you pick a mode. A subscription's page and a
+post's page still list posts then, ranked with the default settings, and events stop watching with
+their lead times as usual.
 
 The panel always shows and changes the settings of the mode in effect, and the status line names
-it. While the calendar has a mode on, the status line says when that ends ("Work mode until 17:00":
-the event's end, or for free time, the next event's start) and leaves out a stop time that comes
-after that. When the mode changes, such as when a work block starts, the feed is shown again from
-the top. Remove deletes the mode shown and its settings. Modes are saved in `settings.json`.
+it. Following the calendar, the status line says when the mode next changes and to what ("Work
+mode until 17:00, then Busy", or "No mode on until 09:00"), looking a week ahead, and leaves out a
+stop time that comes after that. A change is when the mode in effect becomes another, not just when
+an event starts or ends: back-to-back work blocks count as one, and a meeting starting during a
+work block ends Work then if a mode for busy events is higher in the list. When the mode changes,
+such as when a work block starts, the feed is shown again from the top. Remove deletes the mode
+shown and its settings. Modes are saved in `settings.json`.
 Settings saved before Normal was a mode become the Normal mode, at the bottom of the list, on in
-free time; modes saved with the earlier title patterns are on during free events, unless the
+free time; settings saved before Fetch details was the same in every mode take it from the Normal
+mode, else the first mode, and each mode keeps the lead time it had; modes saved with the earlier title patterns are on during free events, unless the
 pattern was empty.
 
 ## Ranking
@@ -427,7 +442,7 @@ All scoring terms add their configured signed points; negative values subtract p
 - 0 (off) × the **sum** over everything you opened recently of similarity × the fraction of the 24-hour window remaining since opening; each match contributes on its own, not just the strongest (see below)
 - 0 for its media type: video (YouTube, Jellyfin, NRK TV, pages with a video file), image (a link straight to a picture) or
   article (anything else). Each has its own setting, which may be negative, to favor or hold back that type.
-- 0 per **minute away from the target content length** by default. Content length adds `weight × |estimated minutes − target minutes|`. Set a negative weight to favor content near the target, or a positive weight to favor content farther away. The target defaults to 0 minutes, preserving existing scores; both the weight and target are configurable in Settings. Runtime metadata is used where available; text is estimated at 200 words per minute (at least one minute). Feed text may be only an excerpt, and page estimates can include surrounding text. Unknown lengths have no adjustment. When the site loads, the highest-ranked posts with incomplete data can be updated in the background, regardless of score weights; this is off by default. YouTube updates fetch runtime and exact publication time together. Set how many with “Fetch details” in Settings (0–100; 0, the default, turns it off). Routine polling does not start additional batches; unavailable data stays unknown and recent attempts are skipped for six hours.
+- 0 per **minute away from the target content length** by default. Content length adds `weight × |estimated minutes − target minutes|`. Set a negative weight to favor content near the target, or a positive weight to favor content farther away. The target defaults to 0 minutes, preserving existing scores; both the weight and target are configurable in Settings. Runtime metadata is used where available; text is estimated at 200 words per minute (at least one minute). Feed text may be only an excerpt, and page estimates can include surrounding text. Unknown lengths have no adjustment. When the site loads, the highest-ranked posts with incomplete data can be updated in the background, regardless of score weights; this is off by default. YouTube updates fetch runtime and exact publication time together. Set how many with “Fetch details” in Settings, the same in every mode (0–100; 0, the default, turns it off). Routine polling does not start additional batches; unavailable data stays unknown and recent attempts are skipped for six hours.
 - +10 if tagged "show again soon" (green), −50 if "maybe later" (white), −1000 if "don't show again" (red)
 - 0 (off) × the **sum of similarities to posts above it**. At −15, a 100% match contributes −15,
   a 50% match contributes −7.5, and two 50% matches contribute −15 together. It uses the same

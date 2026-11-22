@@ -28,6 +28,7 @@ class PostPageTests(unittest.TestCase):
         stack.enter_context(patch.object(server, 'schedule'))
         stack.enter_context(patch.object(server, 'schedule_subscription'))
         stack.enter_context(patch.object(ranking, 'TERMS', dict(ranking.DEFAULT_TERMS)))
+        stack.enter_context(patch.object(server, "global_terms", ranking.split_terms(ranking.DEFAULT_TERMS)[1]))
         # One mode, on whatever the calendar holds, whose settings are ranking.TERMS.
         stack.enter_context(patch.object(server, "modes", [{"name": "Normal", "when": dict.fromkeys(server.SITUATIONS, True),
                                                       "terms": ranking.TERMS}]))
@@ -226,7 +227,7 @@ class PostPageTests(unittest.TestCase):
             enrich.assert_not_called()
             self.page(enrich=True)
             self.assertEqual(enrich.call_args.args[0][0]['url'], self.url)
-            self.assertEqual(enrich.call_args.args[1], ranking.TERMS['enrich_count'])
+            self.assertEqual(enrich.call_args.args[1], server.global_terms['enrich_count'])
 
     def test_http_routes_validation_and_etag(self):
         httpd = server.ThreadingHTTPServer(('127.0.0.1', 0), server.Handler)

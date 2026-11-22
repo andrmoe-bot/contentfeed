@@ -17,10 +17,11 @@ import server
 
 
 def normal(settings=None):
-    """The Normal mode's settings: in the server, or in settings as saved or served."""
+    """The settings in effect in the Normal mode, its own and the global ones: in the server, or in
+    settings as saved or served."""
     if settings is None:
-        return server.mode_terms('Normal')
-    return next(m['terms'] for m in settings['modes'] if m['name'] == 'Normal')
+        return server.terms_for('Normal')
+    return {**next(m['terms'] for m in settings['modes'] if m['name'] == 'Normal'), **settings['global']}
 
 
 class SimilaritySettingsTests(unittest.TestCase):
@@ -37,6 +38,9 @@ class SimilaritySettingsTests(unittest.TestCase):
         # One mode, on whatever the calendar holds, whose settings are ranking.TERMS.
         patcher = patch.object(server, 'modes', [{'name': 'Normal', 'when': dict.fromkeys(server.SITUATIONS, True),
                                                   'terms': ranking.TERMS}])
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        patcher = patch.object(server, 'global_terms', ranking.split_terms(ranking.DEFAULT_TERMS)[1])
         patcher.start()
         self.addCleanup(patcher.stop)
 
@@ -58,7 +62,6 @@ class SimilaritySettingsTests(unittest.TestCase):
                                similar_length_weight=length)
                 self.assertIsNone(server.save_settings(terms))
                 self.assertEqual(normal(json.loads(self.path.read_text())), terms)
-                normal().update(ranking.DEFAULT_TERMS)
                 server.load_settings()
                 self.assertEqual(normal(server.settings()), terms)
 
@@ -130,7 +133,7 @@ class SimilaritySettingsTests(unittest.TestCase):
                 self.assertEqual(defaults['similar_length_weight'], 0)
                 self.assertNotIn('event_bonus', defaults)  # events aren't feed items, so no event terms
                 self.assertEqual(defaults['task_bonus'], 0)
-                self.assertEqual(defaults['event_lead_minutes'], 30)
+                self.assertEqual(defaults['event_lead_minutes'], 0)
                 self.assertEqual(defaults['task_deadline_bonus'], 200)
                 for key in ('similar_penalty', 'above_similarity_penalty', 'enrich_count', 'task_priority_bonus'):
                     self.assertEqual(defaults[key], 0, key)  # off unless you turn them on
