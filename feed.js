@@ -219,20 +219,16 @@ function card(item) {
   if (media && !item.youtube && !item.jellyfin && !item.video) link.prepend(media);
   else if (media) art.append(media);
   art.append(link);
-  if (item.youtube && item.youtube_playlists?.length) {
-    art.append(el("div", { class: "playlists" }, ...item.youtube_playlists.map((id, i) =>
-      el("a", { href: `https://www.youtube.com/playlist?list=${encodeURIComponent(id)}`,
-        target: "_blank", rel: "noopener noreferrer" },
-        item.youtube_playlists.length === 1 ? "YouTube playlist ↗" : `YouTube playlist ${i + 1} ↗`))));
-  }
-  art.append(el("div", { class: "playlists" }, el("a", {
-    class: "post-link", href: `/post?url=${encodeURIComponent(item.url)}`,
-  }, "Post & related")));
-  if (item.sub) art.append(el("div", { class: "playlists" }, el("a", {
-    href: `/subscription?url=${encodeURIComponent(item.sub)}`,
-  }, `${source} · Subscription`)));
-  if (item.related_percent != null) art.append(el("div", { class: "playlists" }, `${item.related_percent}% similar`));
-  art.append(why(item), el("div", { class: "viewed" }));
+  // The score's details, then one footer row: links to the post's page, its subscription and playlists,
+  // then when it was viewed and its color dots.
+  const playlists = item.youtube ? item.youtube_playlists || [] : [];
+  const links = el("div", { class: "card-links" },
+    el("a", { href: `/post?url=${encodeURIComponent(item.url)}` }, "Post & related"),
+    item.sub ? el("a", { href: `/subscription?url=${encodeURIComponent(item.sub)}` }, `${source} · Subscription`) : null,
+    ...playlists.map((id, i) => el("a", { href: `https://www.youtube.com/playlist?list=${encodeURIComponent(id)}`,
+      target: "_blank", rel: "noopener noreferrer" }, playlists.length === 1 ? "YouTube playlist ↗" : `YouTube playlist ${i + 1} ↗`)),
+    item.related_percent != null ? el("span", {}, `${item.related_percent}% similar`) : null);
+  art.append(why(item), el("div", { class: "card-foot" }, links, el("div", { class: "viewed" })));
   return art;
 }
 

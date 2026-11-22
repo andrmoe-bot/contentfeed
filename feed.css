@@ -8,7 +8,9 @@ iframe.media { border: 0; }
 video.media { background: #000; object-fit: contain; }
 .unplayable { display: grid; place-content: center; gap: 6px; padding: 16px; text-align: center; color: var(--muted); }
 .unplayable a { font-weight: 600; }
-.body { padding: 12px 16px 14px; }
+.body { padding: 14px 16px; }
+.body p { font-size: 14px; }
+article a.link:hover h2 { color: var(--accent); }
 .subscription-stats { max-width: 720px; margin: 0 auto; padding: 0 16px 12px; display: flex; flex-wrap: wrap; gap: 8px 24px; }
 .subscription-stats div { min-width: 100px; }
 .subscription-stats dt { color: var(--muted); font-size: 13px; }
@@ -28,7 +30,6 @@ p { margin: 0; color: var(--muted); display: -webkit-box; -webkit-line-clamp: 3;
 .post-section { display: grid; gap: 16px; }
 .post-section > h2 { margin-top: 20px; font-size: 20px; }
 .post-section .section-note { display: block; overflow: visible; }
-.post-link { color: var(--accent); font-size: 13px; }
 #more:not([hidden]) { display: block; margin: 0 auto 48px; }
 .via { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 .via span { font-size: 13px; padding: 2px 8px; border-radius: 6px; border: 1px solid; }
@@ -40,8 +41,13 @@ p { margin: 0; color: var(--muted); display: -webkit-box; -webkit-line-clamp: 3;
 }
 .tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .tags span { font-size: 12px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); }
-.playlists { display: flex; flex-wrap: wrap; gap: 6px 12px; padding: 0 16px 12px; font-size: 13px; }
-.why { padding: 0 16px 10px; color: var(--muted); font-size: 13px; }
+/* The card's footer: its links on the left, when it was viewed and its color dots on the right */
+.card-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; min-height: 44px;
+  padding: 4px 6px 4px 16px; border-top: 1px solid var(--border); font-size: 13px; color: var(--muted); }
+.card-links { display: flex; flex-wrap: wrap; gap: 4px 20px; }
+.card-links a { color: inherit; text-decoration: none; }
+.card-links a:hover { color: var(--accent); text-decoration: underline; }
+.why { padding: 0 16px 12px; margin-top: -4px; color: var(--muted); font-size: 13px; }
 .why summary { cursor: pointer; width: max-content; }
 .why table { border-collapse: collapse; width: 100%; margin-top: 8px; }
 .why td { padding: 7px 0; vertical-align: top; overflow-wrap: anywhere; }
@@ -62,8 +68,9 @@ p { margin: 0; color: var(--muted); display: -webkit-box; -webkit-line-clamp: 3;
 .match-list > details { margin-top: 8px; }
 .play { position: relative; display: block; width: 100%; padding: 0; border: 0; border-radius: 0; background: #000; }
 .play img { opacity: .9; }
-.viewed { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 0 10px 8px 16px; font-size: 13px; color: var(--muted); }
-.dots { display: flex; gap: 2px; margin-left: auto; }
+.viewed { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin-left: auto; }
+.viewed span:empty { display: none; }
+.dots { display: flex; gap: 2px; }
 /* A 28px-high target around a 14px dot and its points: a ring in its color, filled when it's the item's tag */
 .dot { min-width: 28px; height: 28px; padding: 0 6px; border: 0; border-radius: 14px; background: none; display: flex; align-items: center; gap: 4px;
   color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; cursor: pointer; }
