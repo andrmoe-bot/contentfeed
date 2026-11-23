@@ -231,9 +231,13 @@ function card(item) {
     ? calendarDate ? `${item.calendar_kind === "event" ? "starts" : "due"} ${relative(calendarDate)}` : "no deadline"
     : item.kind === "link" || item.jellyfin ? `added ${ago(item.date)}`
       : item.date_approx ? `about ${ago(item.date)}` : ago(item.date);
+  // The video's runtime or the article's reading time, when it is known.
+  const minutes = item.estimated_minutes > 0 ? Math.max(1, Math.round(item.estimated_minutes)) : null;
+  const length = minutes == null ? null
+    : minutes < 60 ? `${minutes} min` : `${Math.floor(minutes / 60)} h${minutes % 60 ? ` ${minutes % 60} min` : ""}`;
 
   const body = el("div", { class: "body" },
-    el("div", { class: "source" }, icon, `${source} · ${when}`),
+    el("div", { class: "source" }, icon, [source, when, length].filter(Boolean).join(" · ")),
     paperReasons(item),
     el("h2", {}, title),
     item.description ? el("p", {}, item.description) : null,
