@@ -56,6 +56,8 @@ import threading
 from typing import Callable, Iterator
 from urllib.parse import urlparse
 
+import authors
+
 Reasons = list[tuple[str, float]]
 Ranker = Callable[[dict, float, dict], Reasons]
 RANKERS: dict[str, Ranker] = {}
@@ -90,6 +92,8 @@ DEFAULT_TERMS = {
     "article_bonus": 0,
     "length_per_minute": 0,  # signed points per minute away from the target length
     "length_target_minutes": 0,  # target runtime or reading time; 0 preserves the original linear score
+    "middle_author_points": 0,  # for a paper whose authors you follow are all neither first nor last author
+    "middle_author_min_count": 4,  # ...when it has at least this many authors
     "age_per_year": 0,  # signed points per fractional 365-day year since publication (or addition for links)
     "past_mode_change_per_minute": -20,  # signed points per minute a post would run past the next mode change
     "post_limit": 10_000_000,  # most posts the feed shows; the maximum (LIMIT) means no limit, 0 an empty feed
@@ -99,7 +103,7 @@ TERMS = dict(DEFAULT_TERMS)
 SIGNED = {
     "next_up_bonus", "seen_bonus", "new_sub_bonus", "series_penalty", "similar_penalty",
     "above_similarity_penalty", "green_points", "white_points", "red_points", "video_bonus", "image_bonus",
-    "article_bonus", "youtube_shorts_bonus", "length_per_minute", "age_per_year",
+    "article_bonus", "youtube_shorts_bonus", "length_per_minute", "age_per_year", "middle_author_points",
     "task_deadline_bonus", "task_bonus", "task_priority_bonus", "past_mode_change_per_minute",
 }
 LIMIT = 10_000_000
@@ -468,6 +472,17 @@ def media_type(item: dict) -> str:
     return "article"
 
 
+def middle_author(item: dict, min_count: float) -> str | None:
+    """Why a paper counts as a small contribution by the authors you follow, or None: it's in the feed
+    for one or more authors (see server.paper_reason), each of them is in the middle of its author list,
+    and the list has at least min_count authors. An author whose place can't be told doesn't count."""
+    followed = list(dict.fromkeys(r["name"] for r in item.get("via") or [] if r.get("kind") == "author"))
+    places = [(name, authors.middle(item, name)) for name in followed]
+    if not places or any(place is None or place[1] < min_count for _, place in places):
+        return None
+    return "; ".join(f"{name} is author {i} of {n}{'+' if more else ''}" for name, (i, n, more) in places)
+
+
 def ranker(name: str, spread: bool = False):
     """Register a ranker. With spread, the feed is built from the top down and each item gains
     above_similarity_penalty times its summed similarity to posts above it (see rank)."""
@@ -535,7 +550,8 @@ def _tag_reasons(item: dict, terms: dict) -> Reasons:
 @ranker("score", spread=True)
 def score(item: dict, now: float, terms: dict) -> Reasons:
     """Points for next up, opened before, a new subscription, a later part of a series, being like
-    something opened recently, its media type, length, age, running past the next mode change, and its tag. rank() then penalizes similarity to posts above it."""
+    something opened recently, its media type, length, being by an author you follow in the middle of
+    the author list, age, running past the next mode change, and its tag. rank() then penalizes similarity to posts above it."""
     w = terms
     reasons = []
     if item.get("calendar_kind"):
@@ -562,6 +578,8 @@ def score(item: dict, now: float, terms: dict) -> Reasons:
         target = points(w["length_target_minutes"])
         reasons.append((f"estimated {points(minutes)} minutes, {points(distance)} minutes from target {target}",
                         points(distance * w["length_per_minute"])))
+    if w["middle_author_points"] and (label := middle_author(item, w["middle_author_min_count"])):
+        reasons.append((label, w["middle_author_points"]))
     if w["age_per_year"]:
         hours = hours_since(now, item["date"])
         reasons.append((f"age {hours_label(hours)}", points(hours / (24 * 365) * w["age_per_year"])))

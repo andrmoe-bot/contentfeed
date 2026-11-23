@@ -18,6 +18,7 @@ import urllib.error
 from datetime import datetime
 from urllib.parse import parse_qs, urlparse
 
+import authors
 from feeds import FeedError, open_url
 
 SITE = "https://scholar.google.com"
@@ -94,6 +95,7 @@ def dated(papers: list[dict], known: dict[str, float | None], now: float) -> lis
             published = year_date(paper["year"], now)
             published = min(published, previous - 1) if published is not None else None
         previous = published if published is not None else previous
+        names, cut = authors.scholar_names(paper["authors"])
         posts.append({
             "url": paper["url"],
             "title": (paper["title"] or paper["url"])[:300],
@@ -104,6 +106,9 @@ def dated(papers: list[dict], known: dict[str, float | None], now: float) -> lis
             "published": published,
             "date_approx": True,
             "scholar": True,
+            # The profile shows the first few authors, then "..." (see authors.middle)
+            "authors": names,
+            "authors_cut": cut,
         })
     return posts
 

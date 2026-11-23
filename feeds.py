@@ -366,7 +366,7 @@ def parse(body: bytes, base_url: str) -> dict:
             title, description = description[:120], (description if len(description) > 120 else "")
         image = item_image(entry) or inline_image
         video = text_of(entry, "videoId") or youtube_id(link)
-        items.append({
+        post = {
             "url": link,
             "title": (title or link)[:300],
             "description": description[:500],
@@ -377,7 +377,10 @@ def parse(body: bytes, base_url: str) -> dict:
                                            if (d := duration_minutes(el.get("duration"))) is not None), None)
                                   or (reading_minutes(description) if not video else None)),
             "published": parse_date(text_of(entry, "published", "pubDate", "date", "updated", "issued")),
-        })
+        }
+        if link.startswith("https://arxiv.org/abs/"):  # every author, in order, for the Middle author setting
+            post["authors"] = [name for a in entry if local(a.tag) == "author" and (name := text_of(a, "name"))]
+        items.append(post)
     items.sort(key=lambda it: it["published"] or 0, reverse=True)
     title = html_to_text(text_of(channel, "title"))[0]
     if m := ARXIV_QUERY_TITLE.match(text_of(channel, "title")):  # arXiv's API calls its feed "arXiv Query: search_query=au:..."

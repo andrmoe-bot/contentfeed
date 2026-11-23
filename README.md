@@ -412,6 +412,14 @@ All scoring terms add their configured signed points; negative values subtract p
 - 0 for its media type: video (YouTube, Jellyfin, NRK TV, pages with a video file), image (a link straight to a picture) or
   article (anything else). Each has its own setting, which may be negative, to favor or hold back that type.
 - 0 per **minute away from the target content length** by default. Content length adds `weight × |estimated minutes − target minutes|`. Set a negative weight to favor content near the target, or a positive weight to favor content farther away. The target defaults to 0 minutes, preserving existing scores; both the weight and target are configurable in Settings. Runtime metadata is used where available; text is estimated at 200 words per minute (at least one minute). Feed text may be only an excerpt, and page estimates can include surrounding text. Unknown lengths have no adjustment. A post whose length or exact publication time is missing stays out of the main feed until its details have been fetched; the server fetches them in the background as soon as it sees the post, and the status line says how many posts are waiting ("3 posts waiting for details"). If the details turn out to be unavailable, the post enters without them. Posts whose details can't be fetched (tasks, Jellyfin, Google Scholar) enter at once, and a subscription's page lists every post. Fetches wait in a queue per site and run one request at a time per site, so a site with many posts to fetch doesn't hold up others. When the site loads, the posts it shows that are still incomplete are fetched again if they weren't in the last six hours. YouTube updates fetch runtime and exact publication time together. Unavailable data stays unknown and recent attempts are skipped for six hours.
+- 0 (off) for a **middle author** paper: one in the feed for an author you follow (see Authors) who is
+  neither its first nor its last author, when it has at least 4 authors (a second setting). In many fields the
+  first author did most of the work and the last led it, so −1000 drops papers the author only helped on, like
+  the red tag. Where several authors you follow wrote it, each must be in the middle. Names are matched by surname and
+  first initial, ignoring case and accents. arXiv lists every author; Google Scholar's profile page shows only
+  the first few, then "...", so any shown author but the first is in the middle, and an author it leaves out
+  isn't counted. Neither is a paper from before this setting existed, until its feed is checked again, nor a
+  field that lists authors alphabetically, where the place says nothing.
 - +10 if tagged "show again soon" (green), −50 if "maybe later" (white), −1000 if "don't show again" (red)
 - 0 (off) × the **sum of similarities to posts above it**. At −15, a 100% match contributes −15,
   a 50% match contributes −7.5, and two 50% matches contribute −15 together. It uses the same
