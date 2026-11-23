@@ -44,6 +44,9 @@ const SETTINGS = [
   { group: "kind", key: "length_per_minute", label: "Length", after: "points per minute from",
     extra: { key: "length_target_minutes", after: "minutes" },
     hint: "Below 0 favors posts near the target length. Unknown lengths get none." },
+  { group: "kind", key: "middle_author_points", label: "Middle author", after: "points on papers with at least",
+    extra: { key: "middle_author_min_count", after: "authors" },
+    hint: "For a paper from an author you follow who is neither its first nor its last author. −1000 hides such papers like the red tag." },
   { group: "kind", key: "age_per_year", label: "Age", after: "points per year",
     hint: "Below 0 favors newer posts." },
 
