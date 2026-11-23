@@ -118,7 +118,7 @@ or a Jellyfin server (see Jellyfin).
 Incomplete tasks appear as cards; events don't — they take place when scheduled, not whenever the
 feed happens to show them, so they only turn modes on (see Modes), such as a mode with a post limit
 of 0 during busy events to stop watching for meetings. The score panel
-controls task urgency during the final 30 days before a deadline. Tasks also get the
+controls task urgency: its points ramp up over the days before a deadline (30 by default). Tasks also get the
 similar-posts-above penalty against other tasks in the same calendar, and the fixed Task term
 adds points to every task (default 0). The Task priority term gives a task points by its
 calendar priority: all of them at priority 1 (highest), down to a ninth of them at 9 (lowest),

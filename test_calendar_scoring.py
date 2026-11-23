@@ -45,6 +45,15 @@ class CalendarScoringTests(unittest.TestCase):
             reasons = ranking.score(task, NOW, TERMS_ON)
             self.assertEqual(sum(points for _, points in reasons), expected)
 
+    def test_task_deadline_ramp_starts_at_its_setting(self):
+        terms = dict(TERMS_ON, task_deadline_days=10)
+        for deadline, expected in ((NOW + 11 * 86400, 0), (NOW + 10 * 86400, 0),
+                                   (NOW + 5 * 86400, 100), (NOW, 200)):
+            task = dict(item("task"), calendar_kind="task", deadline=deadline)
+            self.assertEqual(sum(points for _, points in ranking.score(task, NOW, terms)), expected)
+        task = dict(item("task"), calendar_kind="task", deadline=NOW)
+        self.assertEqual(ranking.score(task, NOW, dict(terms, task_deadline_days=0)), [])
+
     def test_task_score_applies_recent_task_similarity(self):
         task = dict(item("task", "calendar"), calendar_kind="task")
         opened = dict(item("opened", "calendar", age=1), calendar_kind="task")

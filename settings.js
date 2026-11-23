@@ -52,8 +52,9 @@ const SETTINGS = [
   { group: "modes", key: "past_mode_change_per_minute", label: "Past the mode change", after: "points per minute",
     hint: "For each minute a post would run past when the calendar next changes the mode. The post you're viewing is exempt." },
 
-  { group: "tasks", key: "task_deadline_bonus", label: "Deadline", after: "points when due",
-    hint: "Ramps up over the last 30 days before a task's deadline." },
+  { group: "tasks", key: "task_deadline_bonus", label: "Deadline", after: "points when due, ramping up over",
+    extra: { key: "task_deadline_days", after: "days" },
+    hint: "From 0 at the start of the ramp to the full points at the deadline." },
   { group: "tasks", key: "task_priority_bonus", label: "Priority", after: "points at priority 1",
     hint: "A ninth less per level, down to priority 9." },
   { group: "tasks", key: "task_bonus", label: "Every task", after: "points" },
