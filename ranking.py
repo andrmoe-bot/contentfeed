@@ -78,6 +78,7 @@ DEFAULT_TERMS = {
     "above_similarity_penalty": 0,  # added per 100% similarity to each post above it
     "event_lead_minutes": 0,  # a mode turns on this many minutes before an event it's on for
     "task_deadline_bonus": 200,  # maximum points for a task due now
+    "task_deadline_days": 30,  # the deadline points ramp up from 0 this many days before the deadline
     "task_bonus": 0,  # fixed points added to every task
     "task_priority_bonus": 0,  # points for a priority-1 task, scaled down to 1/9 of them at priority 9
     "green_points": 10,  # the tags on each card (see TAGS)
@@ -509,8 +510,8 @@ def _task_score(item: dict, now: float, terms: dict) -> Reasons:
     reasons = []
     if due is not None:
         hours = max(0, int((due - now) // 3600))
-        horizon = 30 * 24
-        if hours <= horizon:
+        horizon = terms["task_deadline_days"] * 24
+        if horizon and hours <= horizon:
             urgency = points(terms["task_deadline_bonus"] * (1 - hours / horizon))
             if urgency:
                 reasons.append((f"task deadline in {hours_label(hours)}", urgency))
