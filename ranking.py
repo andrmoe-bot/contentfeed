@@ -528,7 +528,11 @@ def _task_score(item: dict, now: float, terms: dict) -> Reasons:
         horizon = terms["task_deadline_days"] * 24
         if horizon and hours <= horizon:
             urgency = points(terms["task_deadline_bonus"] * (1 - hours / horizon))
-            if urgency:
+            if urgency and due <= now:
+                # Past the deadline the points stay at the full amount until the task is done or cancelled.
+                late = hours_label(int((now - due) // 3600))
+                reasons.append((f"task overdue by {late}, full deadline points until done", urgency))
+            elif urgency:
                 reasons.append((f"task deadline in {hours_label(hours)}", urgency))
     priority = item.get("priority")
     if priority and terms["task_priority_bonus"]:

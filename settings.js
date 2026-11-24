@@ -57,7 +57,7 @@ const SETTINGS = [
 
   { group: "tasks", key: "task_deadline_bonus", label: "Deadline", after: "points when due, ramping up over",
     extra: { key: "task_deadline_days", after: "days" },
-    hint: "From 0 at the start of the ramp to the full points at the deadline." },
+    hint: "From 0 at the start of the ramp to the full points at the deadline. Overdue tasks keep the full points until they're completed or cancelled in the calendar." },
   { group: "tasks", key: "task_priority_bonus", label: "Priority", after: "points at priority 1",
     hint: "A ninth less per level, down to priority 9." },
   { group: "tasks", key: "task_bonus", label: "Every task", after: "points" },
