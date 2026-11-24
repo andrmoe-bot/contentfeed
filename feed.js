@@ -227,7 +227,9 @@ function card(item) {
     return unix > Date.now() / 1000 ? `in ${amount} ${name}${amount === 1 ? "" : "s"}` : `${amount} ${name}${amount === 1 ? "" : "s"} ago`;
   };
   const calendarDate = item.calendar_kind === "event" ? item.calendar_start : item.deadline;
-  const when = item.calendar_kind
+  const overdue = item.calendar_kind === "task" && calendarDate && calendarDate <= Date.now() / 1000;
+  const when = overdue ? `overdue by ${relative(calendarDate).replace(/ ago$/, "")}`
+    : item.calendar_kind
     ? calendarDate ? `${item.calendar_kind === "event" ? "starts" : "due"} ${relative(calendarDate)}` : "no deadline"
     : item.kind === "link" || item.jellyfin ? `added ${ago(item.date)}`
       : item.date_approx ? `about ${ago(item.date)}` : ago(item.date);

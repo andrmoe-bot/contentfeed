@@ -45,6 +45,13 @@ class CalendarScoringTests(unittest.TestCase):
             reasons = ranking.score(task, NOW, TERMS_ON)
             self.assertEqual(sum(points for _, points in reasons), expected)
 
+    def test_overdue_task_says_so_and_keeps_the_full_points(self):
+        task = dict(item("task"), calendar_kind="task", deadline=NOW - 2 * 86400 - 5 * 3600)
+        self.assertEqual(ranking.score(task, NOW, TERMS_ON),
+                         [("task overdue by 2 days 5 hours, full deadline points until done", 200)])
+        due_soon = dict(item("task"), calendar_kind="task", deadline=NOW + 3 * 3600)
+        self.assertEqual(ranking.score(due_soon, NOW, TERMS_ON)[0][0], "task deadline in 3 hours")
+
     def test_task_deadline_ramp_starts_at_its_setting(self):
         terms = dict(TERMS_ON, task_deadline_days=10)
         for deadline, expected in ((NOW + 11 * 86400, 0), (NOW + 10 * 86400, 0),
