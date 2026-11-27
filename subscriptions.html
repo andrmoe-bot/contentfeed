@@ -14,8 +14,10 @@
     <nav><a href="/">← Back to feed</a></nav>
   </div>
   <form class="bar" id="add">
-    <input id="url" type="text" autocomplete="off" placeholder="Feed, CalDAV calendar, .ics link, YouTube channel, blog, Jellyfin…" required>
-    <button class="primary" type="submit">Subscribe</button>
+    <input id="url" type="text" autocomplete="off" placeholder="Paste a link or feed, optionally followed by tags" required>
+    <button class="primary" type="submit" value="subscribe" title="Follow a feed, CalDAV calendar, .ics link, YouTube channel, blog, NRK TV series, Jellyfin server… (feeds.txt)">Subscribe</button>
+    <button type="submit" value="link" title="Add this page to links.txt">Add link</button>
+    <button type="button" id="refresh" title="Re-fetch every link and check every subscription now">Refresh all</button>
     <p class="subscription-hint">For Radicale, paste the URL of each calendar you want here, one at a time.</p>
     <p id="message" role="status"></p>
   </form>

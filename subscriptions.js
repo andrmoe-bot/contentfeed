@@ -135,16 +135,27 @@ document.getElementById("add").addEventListener("submit", async (e) => {
   e.preventDefault();
   const input = document.getElementById("url");
   const button = e.submitter;
-  button.disabled = true;
-  say("Checking subscription…");
-  const { ok, data } = await api("/api/subscriptions", { url: input.value });
-  button.disabled = false;
+  const subscribing = button?.value !== "link";
+  if (button) button.disabled = true;
+  say(subscribing ? "Checking subscription…" : "Adding link…");
+  const { ok, data } = await api(subscribing ? "/api/subscriptions" : "/api/links", { url: input.value });
+  if (button) button.disabled = false;
   if (ok) {
     input.value = "";
-    say("Subscribed.");
+    say(subscribing ? "Subscribed." : "Added to links.txt.");
   } else {
-    say(`Couldn't subscribe: ${data.error || "unknown error"}`, true);
+    say(subscribing ? `Couldn't subscribe: ${data.error || "unknown error"}`
+      : "Couldn't add that link (invalid or already in the feed).", true);
   }
+  if (subscribing) load();
+});
+
+document.getElementById("refresh").addEventListener("click", async (e) => {
+  e.target.disabled = true;
+  const { ok, data } = await api("/api/refresh", {});
+  e.target.disabled = false;
+  say(ok ? "Checking every link and subscription in the background; new posts show up as they arrive."
+    : `Couldn't refresh: ${data.error || "unknown error"}`, !ok);
   load();
 });
 
