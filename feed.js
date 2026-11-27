@@ -631,18 +631,53 @@ function appendNew(list, fresh) {
   return [...list, ...fresh.filter((it) => !urls.has(it.url))];
 }
 
-// The status line: calendars that didn't answer, the mode (or that none is on), with when the calendar
-// next changes it and to what, then text, then how many fetches are under way and how many posts wait
-// for their details before they enter the feed (see server.awaiting_details).
+// The status line: calendars that didn't answer, the mode (or that none is on), with the event that
+// turned it on and when the calendar next changes it and to what, then text, then how many fetches are
+// under way and how many posts wait for their details before they enter the feed (see
+// server.awaiting_details). With an event behind the mode, the mode is a button that shows that event
+// below (see triggerCard), open or closed across reloads, in this browser.
 function showStatus(data, text) {
   const unreachable = (data.calendars_unreachable || []).map((c) =>
     `Calendar “${c.title}” isn't answering; using its events from ${c.fetched ? clock(c.fetched) : "before"}`);
   const mode = data.mode?.name ? data.mode : null;
   const change = data.mode?.until ? ` until ${when(data.mode.until)}${mode ? `, then ${data.mode.next ?? "no mode"}` : ""}` : "";
-  const modeNote = mode ? `${mode.name} mode${change}` : data.mode ? `No mode on${change}` : "";
-  statusEl.textContent = [...unreachable, modeNote, text, data.pending ? `fetching ${data.pending}…` : "",
-    data.waiting ? `${data.waiting} post${data.waiting === 1 ? "" : "s"} waiting for details` : ""]
-    .filter(Boolean).join(" · ");
+  const trigger = mode?.source === "calendar" ? mode.trigger : null;
+  const cause = !mode?.situation ? "" : mode.situation === "free_time" ? " in free time"
+    : ` for “${mode.event || "an event"}”`;
+  let modeNote = mode ? `${mode.name} mode${cause}${change}` : data.mode ? `No mode on${change}` : "";
+  if (trigger) {
+    const open = triggerOpen();
+    modeNote = el("button", { type: "button", class: "mode-note", "aria-expanded": String(open), "aria-controls": "mode-trigger",
+                              title: open ? "Hide the event" : "The event that turned it on" }, `${modeNote} ${open ? "▴" : "▾"}`);
+    modeNote.addEventListener("click", () => { triggerOpen(!triggerOpen()); showStatus(data, text); });
+  }
+  const parts = [...unreachable, modeNote, text, data.pending ? `fetching ${data.pending}…` : "",
+    data.waiting ? `${data.waiting} post${data.waiting === 1 ? "" : "s"} waiting for details` : ""].filter(Boolean);
+  statusEl.replaceChildren(...parts.flatMap((part, i) => i ? [" · ", part] : [part]));
+  const card = trigger && triggerOpen() ? triggerCard(mode) : null;
+  const old = document.getElementById("mode-trigger");
+  if (card) old ? old.replaceWith(card) : statusEl.after(card);
+  else old?.remove();
+}
+
+function triggerOpen(open) {
+  try {
+    if (open !== undefined) localStorage.setItem("modeTrigger", open ? "open" : "closed");
+    return localStorage.getItem("modeTrigger") === "open";
+  } catch { return !!open; }
+}
+
+// The event that turned the calendar's mode on, compactly: its title and link, then "Now" (or in free
+// time "Next", the event that ends it), its calendar and times, then its description.
+function triggerCard({ situation, trigger: event }) {
+  const freeTime = situation === "free_time";
+  const link = /^https?:/.test(event.url || "")
+    ? el("a", { href: event.url, target: "_blank", rel: "noopener noreferrer" }, "Open ↗") : null;
+  return el("section", { id: "mode-trigger", "aria-label": freeTime ? "Event ending the free time" : "Event that turned the mode on" },
+    el("div", { class: "head" }, el("span", { class: "title" }, event.title || "Untitled event"), link),
+    el("div", { class: "meta" }, [freeTime ? "Next" : "Now", event.calendar,
+                                  `${when(event.calendar_start)} – ${when(event.deadline)}`].filter(Boolean).join(" · ")),
+    event.description ? el("p", { class: "description" }, event.description) : null);
 }
 
 // How many items are shown and how they're ranked, with "Show more" when there are more.

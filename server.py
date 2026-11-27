@@ -916,16 +916,42 @@ def calendar_situations(events: list[dict], now: float) -> dict:
     An event takes place from when it begins (see begins, with_leads) until its end. For an event, until
     is its end (of several, the one ending first); for free time, when the next event begins, or None if
     there's none. Only timed events count (see is_timed)."""
-    timed = [e for e in events if is_timed(e)]
-    ongoing = [e for e in timed if begins(e) <= now < e["deadline"]]
     out = {}
-    for situation, free in (("busy", False), ("not_busy", True)):
-        matching = [e for e in ongoing if bool(e.get("free")) == free]
-        event = min(matching, key=lambda e: e["deadline"]) if matching else None
+    for situation in ("busy", "not_busy"):
+        event = situation_event(events, now, situation)
         out[situation] = (event.get("title"), event["deadline"]) if event else None
-    later = [begins(e) for e in timed if begins(e) > now]
-    out["free_time"] = None if ongoing else (None, min(later) if later else None)
+    if any(begins(e) <= now < e["deadline"] for e in events if is_timed(e)):
+        out["free_time"] = None
+    else:
+        following = situation_event(events, now, "free_time")
+        out["free_time"] = (None, begins(following) if following else None)
     return out
+
+
+def situation_event(events: list[dict], now: float, situation: str) -> dict | None:
+    """The event behind a situation at now: for busy or not_busy, the event of that kind taking place
+    (of several, the one ending first); for free_time, the next event to begin, which ends it. None if
+    there's no such event. Only timed events count (see is_timed)."""
+    timed = [e for e in events if is_timed(e)]
+    if situation == "free_time":
+        later = [e for e in timed if begins(e) > now]
+        return min(later, key=begins) if later else None
+    free = situation == "not_busy"
+    ongoing = [e for e in timed if begins(e) <= now < e["deadline"] and bool(e.get("free")) == free]
+    return min(ongoing, key=lambda e: e["deadline"]) if ongoing else None
+
+
+def mode_trigger(events: list[dict], now: float, situation: str | None) -> dict | None:
+    """What turned the calendar's mode on, for the status line to show: the event behind the situation
+    (see situation_event) with its calendar's name, title, start, end, description and link; for free
+    time, the event that ends it, or None. Call with lock held."""
+    event = situation_event(events, now, situation) if situation else None
+    if event is None:
+        return None
+    calendar = next((sub.get("title") or url for url, sub in subscriptions.items()
+                     if any(e.get("url") == event.get("url") for e in sub.get("events", []))), None)
+    return {**{k: event.get(k) for k in ("url", "title", "description", "calendar_start", "deadline")},
+            "calendar": calendar}
 
 
 def calendar_mode(events: list[dict], now: float) -> tuple[dict | None, str | None, tuple | None]:
@@ -957,21 +983,24 @@ def next_mode_change(events: list[dict], now: float, name: str | None) -> tuple[
 
 
 def active_mode(events: list[dict], now: float) -> dict:
-    """The mode in effect: {"name", "source", "situation", "event", "until", "next"}. The mode you chose
-    in the panel, if any ("source": "chosen"); else the mode the calendar turns on (see calendar_mode;
-    "calendar", with the situation and the event's title, if any); else none ("name": None, "source":
+    """The mode in effect: {"name", "source", "situation", "event", "trigger", "until", "next"}. The mode
+    you chose in the panel, if any ("source": "chosen"); else the mode the calendar turns on (see
+    calendar_mode; "calendar", with the situation, the event's title, if any, and the event in full as
+    trigger, see mode_trigger); else none ("name": None, "source":
     "none"), and the feed is empty. Following the calendar, until is when the mode next changes and
     next the mode then (see next_mode_change); a chosen mode stays until you choose another. Events begin their lead time early (see with_leads). Call with
     lock held."""
     chosen = mode_choice.get("name")
     if chosen and find_mode(chosen):
-        return {"name": chosen, "source": "chosen", "situation": None, "event": None, "until": None, "next": None}
+        return {"name": chosen, "source": "chosen", "situation": None, "event": None, "trigger": None,
+                "until": None, "next": None}
     events = with_leads(events)
     mode, situation, on = calendar_mode(events, now)
     name = mode["name"] if mode else None
     until, following = next_mode_change(events, now, name)
     return {"name": name, "source": "calendar" if mode else "none", "situation": situation,
-            "event": on[0] if on else None, "until": until, "next": following}
+            "event": on[0] if on else None, "trigger": mode_trigger(events, now, situation),
+            "until": until, "next": following}
 
 
 def write_settings():
