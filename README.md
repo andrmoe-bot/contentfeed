@@ -380,8 +380,11 @@ panel shows no settings until you pick a mode. A subscription's page and a
 post's page still list posts then, ranked with the default settings.
 
 The panel always shows and changes the settings of the mode in effect, and the status line names
-it. Following the calendar, the status line says when the mode next changes and to what ("Work
-mode until 17:00, then Busy", or "No mode on until 09:00"), looking a week ahead; the page checks again just after then. A change is when the mode in effect becomes another, not just when
+it. Following the calendar, the status line says when the mode next changes and to what ("Meeting
+mode for “Standup” until 17:00, then Work", "Normal mode in free time until 09:00, then Work", or "No
+mode on until 09:00"), looking a week ahead; the page checks again just after then. Click the mode
+there to see the event that turned it on below: its title, link, calendar, times and description. In
+free time, it's the next event, which ends it. A change is when the mode in effect becomes another, not just when
 an event starts or ends: back-to-back work blocks count as one, and a meeting starting during a
 work block ends Work then if a mode for busy events is higher in the list. When the mode changes,
 such as when a work block starts, the feed is shown again from the top, any video or other media

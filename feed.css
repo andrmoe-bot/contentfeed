@@ -172,3 +172,16 @@ nav button[aria-expanded="true"] { font-weight: 600; }
 .mode-when { gap: 6px; }
 .mode-when label { display: flex; align-items: center; gap: 10px; cursor: pointer; }
 .mode-when .hint { margin-top: 2px; }
+
+/* The status line's mode, when an event turned it on: a button that shows the event below. */
+#status .mode-note { padding: 0; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; }
+#status .mode-note:hover { color: var(--text); text-decoration: underline; }
+#mode-trigger { flex-basis: 100%; min-width: 0; padding: 6px 10px; font-size: 13px; line-height: 1.4;
+  background: var(--card); border: 1px solid var(--border); border-radius: 8px; }
+#mode-trigger .head { display: flex; gap: 8px; align-items: baseline; }
+#mode-trigger .title { flex: 1; min-width: 0; font-weight: 600; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#mode-trigger a { flex: none; color: var(--accent); text-decoration: none; }
+#mode-trigger a:hover { text-decoration: underline; }
+#mode-trigger .meta { color: var(--muted); font-variant-numeric: tabular-nums; }
+#mode-trigger .description { margin: 2px 0 0; color: var(--muted); overflow: hidden; display: -webkit-box;
+  -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow-wrap: anywhere; }

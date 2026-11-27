@@ -93,8 +93,10 @@ class ModeTests(ServerTestCase):
         self.set_events(event("work", now - 60, now + 3600, free=True, title="Work block"))
         self.assertEqual(server.feed("score")["mode"]["name"], None)
         self.assertIsNone(server.set_mode_when("work", {"not_busy": True}))
-        self.assertEqual(server.feed("score")["mode"], {"name": "Work", "source": "calendar", "situation": "not_busy",
-                                                        "event": "Work block", "until": now + 3600, "next": None})
+        result = server.feed("score")["mode"]
+        self.assertEqual({k: v for k, v in result.items() if k != "trigger"},
+                         {"name": "Work", "source": "calendar", "situation": "not_busy",
+                          "event": "Work block", "until": now + 3600, "next": None})
         self.assertEqual(server.set_mode_when("Work", {"later": True}), "there's no situation called later")
         self.assertEqual(server.set_mode_when("Work", {"busy": 1}), "each situation must be on (true) or off (false)")
         self.assertEqual(server.set_mode_when("Work", {}), "expected the situations to turn on or off")
@@ -114,8 +116,9 @@ class ModeTests(ServerTestCase):
         now = time.time()
         mode = lambda: server.feed("score")["mode"]
         self.set_events(event("dinner", now + 600, now + 3600))
-        self.assertEqual(mode(), {"name": "Idle", "source": "calendar", "situation": "free_time", "event": None,
-                                  "until": now + 600, "next": "Busy"})
+        self.assertEqual({k: v for k, v in mode().items() if k != "trigger"},
+                         {"name": "Idle", "source": "calendar", "situation": "free_time", "event": None,
+                          "until": now + 600, "next": "Busy"})
         self.set_events(event("dinner", now - 60, now + 3600, title="Dinner"))
         self.assertEqual((mode()["name"], mode()["event"]), ("Busy", "Dinner"))
         self.set_events(event("work", now - 60, now + 3600, free=True))
@@ -126,6 +129,29 @@ class ModeTests(ServerTestCase):
         self.assertIsNone(server.move_mode("free", 0))
         self.assertEqual([m["name"] for m in server.modes], ["Free", "Busy", "Idle"])
         self.assertEqual(mode()["name"], "Free")
+
+    def test_the_trigger_is_the_event_that_turned_the_mode_on(self):
+        self.assertIsNone(server.add_mode("Busy"))
+        self.assertIsNone(server.add_mode("Idle"))
+        server.set_mode_when("Busy", {"busy": True})
+        server.set_mode_when("Idle", {"free_time": True})
+        server.find_mode("Busy")["terms"]["event_lead_minutes"] = 10
+        self.assertIsNone(server.choose_mode(None))
+        now = time.time()
+        dinner = dict(event("dinner", now + 300, now + 3600, title="Dinner"), description="At home")
+        self.set_events(dinner)
+        # In the lead time, the event turns Busy on before it starts.
+        trigger = server.feed("score")["mode"]["trigger"]
+        self.assertEqual(trigger, {"url": dinner["url"], "title": "Dinner", "description": "At home",
+                                   "calendar_start": now + 300, "deadline": now + 3600, "calendar": "Calendar"})
+        # In free time, the trigger is the event that ends it.
+        self.set_events(dict(dinner, calendar_start=now + 7200, deadline=now + 9000))
+        mode = server.feed("score")["mode"]
+        self.assertEqual((mode["name"], mode["trigger"]["title"], mode["until"]), ("Idle", "Dinner", now + 6600))
+        self.set_events()
+        self.assertEqual(server.feed("score")["mode"]["trigger"], None)
+        self.assertIsNone(server.choose_mode("Busy"))
+        self.assertEqual(server.feed("score")["mode"]["trigger"], None)
 
     def test_moving_modes(self):
         for name in ("A", "B", "C"):
@@ -149,10 +175,10 @@ class ModeTests(ServerTestCase):
 
     def test_with_no_mode_on_the_feed_is_empty(self):
         result = server.feed("score")
-        self.assertEqual((result["mode"], result["items"], result["post_limit"], result["total"]), ({"name": None, "source": "none", "situation": None, "event": None, "until": None, "next": None}, [], 0, 1))
+        self.assertEqual((result["mode"], result["items"], result["post_limit"], result["total"]), ({"name": None, "source": "none", "situation": None, "event": None, "trigger": None, "until": None, "next": None}, [], 0, 1))
         # A subscription's page still lists its posts, ranked with the default settings.
         self.assertEqual(len(server.feed("score", subscription_url=self.feed_url)["items"]), 1)
-        self.assertEqual(server.settings()["mode"], {"name": None, "source": "none", "situation": None, "event": None, "until": None, "next": None})
+        self.assertEqual(server.settings()["mode"], {"name": None, "source": "none", "situation": None, "event": None, "trigger": None, "until": None, "next": None})
 
     def test_each_mode_ranks_with_its_own_settings(self):
         self.assertIsNone(server.add_mode("Work"))
@@ -179,7 +205,7 @@ class ModeTests(ServerTestCase):
                                                          "terms": dict(OWN, video_bonus=5)})
         self.assertEqual(server.mode_terms("Fresh"), OWN)
         self.assertEqual(server.settings()["mode"], {"name": "Fresh", "source": "chosen", "situation": None,
-                                                     "event": None, "until": None, "next": None})
+                                                     "event": None, "trigger": None, "until": None, "next": None})
         server.set_mode_when("Work", {"not_busy": True})
         now = time.time()
         self.set_events(event("work", now - 60, now + 3600, free=True, title="Work"))
