@@ -175,9 +175,9 @@ count as 30 days and years as 365. Posts you've already tagged keep their tag, a
 date are left alone. It can't be undone in one step: click the red dot on a post in the feed to remove
 its tag.
 
-You can also add links and subscriptions (with tags) from the box at the top of the feed; they
-are appended to the files. To remove a link, edit `links.txt`. Changes to either file show up
-within about 30 seconds.
+You can also add links and subscriptions (with tags) from the box at the top of the Subscriptions
+page; they are appended to the files. To remove a link, edit `links.txt`. Changes to either file
+show up within about 30 seconds.
 
 Page details for links are fetched once; subscription posts are kept between checks. "Refresh all"
 re-fetches links and checks every subscription now.

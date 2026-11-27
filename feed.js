@@ -746,27 +746,6 @@ document.getElementById("more").addEventListener("click", (e) => {
   load({ more: true }).finally(() => { e.target.disabled = false; });
 });
 
-document.getElementById("add").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const input = document.getElementById("url");
-  const subscribing = e.submitter?.value === "subscribe";
-  say(subscribing ? "Looking for a feed…" : "");
-  const { ok, data } = await api(subscribing ? "/api/subscriptions" : "/api/links", { url: input.value });
-  if (ok) {
-    input.value = "";
-    say(subscribing ? "Subscribed." : "");
-  } else {
-    say(subscribing ? `Couldn't subscribe: ${data.error || "unknown error"}` : "Couldn't add that link (invalid or already in the feed).", true);
-  }
-  if (subscribing) loadSubscriptionCount();
-  load();
-});
-
-document.getElementById("refresh").addEventListener("click", async () => {
-  await api("/api/refresh", {});
-  load();
-});
-
 async function loadSubscriptionCount() {
   const { ok, data } = await api("/api/subscriptions");
   if (ok) document.getElementById("subs-link").textContent = `Subscriptions (${data.subscriptions.length})`;
@@ -815,7 +794,6 @@ function updateSubViewButtons(count = 0) {
 
 if (subscriptionPage) {
   document.querySelector("h1").replaceChildren(el("a", { href: "/" }, "← Content Feed"));
-  document.getElementById("add").hidden = true;
   searchEl.placeholder = "Search posts and next up";
   searchEl.setAttribute("aria-label", "Search posts and next up");
   const viewNav = el("div", { class: "bar subscription-views", id: "subscription-views" },
@@ -832,7 +810,6 @@ if (subscriptionPage) {
 
 if (postPage) {
   document.querySelector("h1").replaceChildren(el("a", { href: "/", class: "post-link" }, "← Content Feed"));
-  document.getElementById("add").hidden = true;
   searchEl.placeholder = "Search series and similar posts";
   searchEl.setAttribute("aria-label", "Search series and similar posts");
   document.querySelector("#panel > .hint").textContent = "Series are in episode or playlist order. Similar posts are ordered by similarity using the settings below. Cards show scores before the main feed's adjustments for posts above them.";
